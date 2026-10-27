@@ -1,0 +1,89 @@
+name: immich
+displayName: Immich
+description: Photo and video library, with sharing and mobile apps.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/immich
+  version: 0.1.9
+  versions:
+    - version: 0.1.9
+      appVersion: 3.3.5
+      channel: stable
+
+namespace: immich
+
+route:
+  mode: site
+  host: "immich.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: immich-server
+  servicePort: 2283
+  # Shared albums and public links carry their own key. The page must load its
+  # Svelte assets and use Immich's own shared-link/API auth before Authelia can
+  # decide whether to challenge; otherwise the browser only sees redirects to
+  # the portal and the share page stays blank.
+  publicPaths:
+    - "^/share/"
+    - "^/_app/"
+    - "^/custom.css$"
+    - "^/favicon"
+    - "^/apple-icon"
+    - "^/manifest.json$"
+    - "^/service-worker.js$"
+    - "^/feature-panel.png$"
+    # Immich enforces the share key/password on these endpoints itself. Keep
+    # the bypass to the share surface instead of opening all of /api/assets,
+    # /api/shared-links, /api/server, etc.
+    - "^/api/public/config(/defaults)?([?].*)?$"
+    - "^/api/server/config([?].*)?$"
+    - "^/api/server/features([?].*)?$"
+    - "^/api/server/media-types([?].*)?$"
+    - "^/api/shared-links/me([?].*)?$"
+    - "^/api/shared-links/login([?].*)?$"
+    - "^/api/timeline/buckets([?].*)?$"
+    - "^/api/timeline/bucket([?].*)?$"
+    - "^/api/download/info([?].*)?$"
+    - "^/api/download/archive([?].*)?$"
+    - "^/api/assets/[0-9a-fA-F-]{36}([?].*)?$"
+    - "^/api/assets/[0-9a-fA-F-]{36}/(thumbnail|original)([?].*)?$"
+    - "^/api/assets/[0-9a-fA-F-]{36}/video/playback([?].*)?$"
+    - "^/api/assets/[0-9a-fA-F-]{36}/video/stream/"
+    - "^/api/albums/[0-9a-fA-F-]{36}/map-markers([?].*)?$"
+    - "^/api/map/reverse-geocode([?].*)?$"
+
+auth:
+  # OIDC rather than forward-auth: Immich maps the Authelia identity onto its
+  # own users, and its mobile app talks to the API with Immich's own token.
+  kind: oidc
+
+oidc:
+  clientId: immich
+  redirectUris:
+    - "https://{{ .host }}/auth/login"
+    - "https://{{ .host }}/user-settings"
+    - "app.immich:///oauth-callback"
+
+values:
+  immich:
+    externalUrl: "https://{{ .host }}"
+    persistence:
+      data:
+        storageClass: "{{ .storage.mediaClass }}"
+    # The chart builds the OIDC CA bundle itself: the image's public roots plus
+    # the optional platform CA. This works with a private CA (lab) and with a
+    # public Let's Encrypt certificate (no /etc/ssl/umkim-thin/ca.crt is
+    # required).
+  postgres:
+    persistence:
+      storageClass: "{{ .storage.configClass }}"
+
+verify:
+  playwright: tests/playwright/journeys/immich.spec.ts
+  checks:
+    - route_reachable
+    - oidc_login_redirects_to_provider
+    - oidc_login_completes
+    - public_share_exempt

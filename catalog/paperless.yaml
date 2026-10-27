@@ -1,0 +1,65 @@
+name: paperless
+displayName: Paperless-ngx
+description: Document archive with OCR, tags and full-text search.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/paperless
+  version: 0.1.11
+  versions:
+    - version: 0.1.11
+      appVersion: 3.3.0
+      channel: stable
+
+namespace: paperless
+
+route:
+  mode: site
+  host: "paperless.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: paperless-web
+  servicePort: 8000
+
+auth:
+  # OIDC, so documents belong to real users rather than to one shared session.
+  kind: oidc
+
+oidc:
+  clientId: paperless
+  redirectUris:
+    - "https://{{ .host }}/accounts/oidc/authelia/login/callback/"
+  # django-allauth does not send a PKCE challenge.
+  requirePkce: false
+
+values:
+  externalUrl: "https://{{ .host }}"
+  # The search index belongs on the block-backed config class; documents and
+  # the import/export directories are media and should use the shared media
+  # class (external NFS on HA). Without these overrides the chart falls back to
+  # the cluster default, which is Longhorn RWO on HA.
+  persistence:
+    data:
+      storageClass: "{{ .storage.configClass }}"
+    media:
+      storageClass: "{{ .storage.mediaClass }}"
+    consume:
+      storageClass: "{{ .storage.mediaClass }}"
+    export:
+      storageClass: "{{ .storage.mediaClass }}"
+  postgres:
+    persistence:
+      storageClass: "{{ .storage.configClass }}"
+  # The chart builds the OIDC CA bundle itself: the image's public roots plus
+  # the optional platform CA. This works with a private CA (lab) and with a
+  # public Let's Encrypt certificate (no /etc/ssl/umkim-thin/ca.crt is
+  # required).
+
+verify:
+  playwright: tests/playwright/journeys/paperless.spec.ts
+  checks:
+    - route_reachable
+    - oidc_login_redirects_to_provider
+    - oidc_login_completes
+    - document_list_reachable

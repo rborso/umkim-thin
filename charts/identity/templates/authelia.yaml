@@ -1,0 +1,180 @@
+{{- if .Values.enabled }}
+{{- include "identity.validate" . }}
+{{- $ldapPass := .Values.authelia.ldapPassword | default .Values.lldap.adminPassword }}
+# The configuration contains the session, storage-encryption, LDAP, reset and
+# OIDC secrets. It must be a Secret, not a ConfigMap: ConfigMaps are not covered
+# by etcd encryption and are commonly readable by broader roles.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: authelia-config
+  namespace: {{ include "identity.namespace" . }}
+type: Opaque
+stringData:
+  configuration.yml: |
+{{ include "identity.autheliaConfig" . | indent 4 }}
+{{- if not .Values.lldap.deploy }}
+  # The external directory's bind password for the wait init container. When
+  # LLDAP is deployed in-cluster, the init container uses lldap-credentials.
+  ldap-password: {{ $ldapPass | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: authelia-data
+  namespace: {{ include "identity.namespace" . }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+{{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authelia
+  namespace: {{ include "identity.namespace" . }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: authelia
+  template:
+    metadata:
+      labels:
+        app: authelia
+      annotations:
+        # Roll Authelia when its rendered config changes (access rules/domains,
+        # LDAP bind, secrets); it reads configuration.yml only at startup.
+        checksum/authelia-config: {{ include "identity.autheliaConfig" . | sha256sum }}
+    spec:
+      enableServiceLinks: false
+{{- if or .Values.valkey.enabled .Values.lldap.deploy .Values.lldap.externalUrl }}
+      initContainers:
+{{- if .Values.valkey.enabled }}
+        - name: wait-valkey
+          image: {{ .Values.valkey.image | quote }}
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: valkey-auth
+                  key: password
+          command:
+            - sh
+            - -ec
+            - |
+              if [ -n "$VALKEY_PASSWORD" ]; then export REDISCLI_AUTH="$VALKEY_PASSWORD"; fi
+              for i in $(seq 1 60); do
+                if valkey-cli -h valkey ping | grep -q PONG; then exit 0; fi
+                sleep 2
+              done
+              echo "valkey not ready" >&2
+              exit 1
+{{- end }}
+{{- if .Values.lldap.deploy }}
+        - name: wait-lldap-ldap
+          image: alpine:3.20.10
+          env:
+            - name: LLDAP_BIND_DN
+              value: {{ .Values.authelia.ldapUser | default (printf "uid=admin,ou=people,%s" .Values.lldap.baseDN) | quote }}
+            - name: LLDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lldap-credentials
+                  key: LLDAP_LDAP_USER_PASS
+          command:
+            - sh
+            - -ec
+            - |
+              apk add --no-cache openldap-clients >/dev/null
+              for i in $(seq 1 60); do
+                if ldapwhoami -H ldap://lldap:{{ .Values.lldap.ldapPort }} -x \
+                  -D "$LLDAP_BIND_DN" -w "$LLDAP_BIND_PASSWORD" >/dev/null 2>&1; then
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "lldap LDAP bind not ready" >&2
+              exit 1
+{{- else if .Values.lldap.externalUrl }}
+        - name: wait-external-lldap
+          image: alpine:3.20.10
+          env:
+            - name: LLDAP_BIND_DN
+              value: {{ .Values.authelia.ldapUser | default (printf "uid=admin,ou=people,%s" .Values.lldap.baseDN) | quote }}
+            - name: LLDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authelia-config
+                  key: ldap-password
+            - name: LLDAP_URL
+              value: {{ .Values.lldap.externalUrl | quote }}
+          command:
+            - sh
+            - -ec
+            - |
+              apk add --no-cache openldap-clients >/dev/null
+              for i in $(seq 1 60); do
+                if ldapwhoami -H "$LLDAP_URL" -x \
+                  -D "$LLDAP_BIND_DN" -w "$LLDAP_BIND_PASSWORD" >/dev/null 2>&1; then
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "external LLDAP bind not ready" >&2
+              exit 1
+{{- end }}
+{{- end }}
+      containers:
+        - name: authelia
+          image: {{ .Values.authelia.image | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.authelia.port }}
+          volumeMounts:
+            - name: config
+              mountPath: /config/configuration.yml
+              subPath: configuration.yml
+              readOnly: true
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: config
+          secret:
+            secretName: authelia-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: authelia-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: authelia
+  namespace: {{ include "identity.namespace" . }}
+spec:
+  selector:
+    app: authelia
+  ports:
+    - name: http
+      port: {{ .Values.authelia.port }}
+      targetPort: http
+{{- end }}

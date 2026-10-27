@@ -1,0 +1,9 @@
+.git
+local
+deploy/ansible/artifacts
+deploy/ansible/collections
+tests
+docs
+*.md
+images/servarr-bootstrap/node_modules
+images/servarr-bootstrap/dist

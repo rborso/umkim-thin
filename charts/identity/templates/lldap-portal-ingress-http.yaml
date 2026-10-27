@@ -1,0 +1,28 @@
+{{- /* Only publish LLDAP over plain HTTP when the portal itself is on the web
+       entrypoint (a cluster behind an external TLS-terminating proxy). When
+       Traefik terminates TLS and runs ACME, this HTTP router shadows the
+       /.well-known/acme-challenge/ path and the lldap certificate fails with a
+       404. */ -}}
+{{- if and .Values.enabled .Values.traefik.deployMiddleware .Values.lldap.exposeWebUI .Values.lldap.webUIHost (eq (.Values.traefik.portalEntrypoint | default "websecure") "web") }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lldap-portal-http
+  namespace: {{ include "identity.namespace" . }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%s@file" (.Values.traefik.redirectMiddlewareName | default "identity-redirect-https") | quote }}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: {{ .Values.lldap.webUIHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lldap
+                port:
+                  number: {{ .Values.lldap.httpPort }}
+{{- end }}

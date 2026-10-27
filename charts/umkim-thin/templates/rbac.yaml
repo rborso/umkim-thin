@@ -1,0 +1,100 @@
+{{- if .Values.rbac.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+---
+# The console drives Helm, so it needs CRUD over the resources charts create
+# (workloads, services, ingresses, secrets, jobs, PVCs, RBAC, CRDs) plus reads
+# of nodes/storage. This is a dedicated identity rather than the node's
+# cluster-admin kubeconfig; it is intentionally broad because Helm installs
+# arbitrary charts.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: umkim-thin-console
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, secrets, configmaps, services, serviceaccounts, endpoints, persistentvolumeclaims, persistentvolumes, pods, pods/log, events]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Some charts publish Traefik CRs directly (Gitea's SSH IngressRouteTCP;
+  # middleware/TLS options). Helm needs to read and write them.
+  - apiGroups: ["traefik.io"]
+    resources: [ingressroutes, ingressroutetcps, ingressrouteudps, middlewares, middlewaretcps, traefikservices, tlsoptions, tlsstores, serverstransports]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: [endpointslices]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: [customresourcedefinitions]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["storage.k8s.io"]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  # The console installs nfs-subdir-external-provisioner for an external NFS
+  # export; Helm needs to create/update/delete the StorageClass it owns.
+  - apiGroups: ["storage.k8s.io"]
+    resources: [storageclasses]
+    verbs: [create, update, patch, delete]
+  # The console provisions directory users by running lldap_set_password inside
+  # the LLDAP pod (invite redemption). That permission is scoped by a Role in the
+  # identity namespace (below), not granted cluster-wide.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: ["helm.cattle.io"]
+    resources: [helmcharts, helmchartconfigs]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: umkim-thin-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: umkim-thin-console
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+---
+# Invite redemption execs into the LLDAP pod to set the new user's password.
+# Keep that capability in the identity namespace instead of cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: umkim-thin-console-identity
+  namespace: {{ .Values.identityNamespace | default "identity" }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: umkim-thin-console-identity
+  namespace: {{ .Values.identityNamespace | default "identity" }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: umkim-thin-console-identity
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

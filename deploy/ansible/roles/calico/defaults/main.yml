@@ -1,0 +1,8 @@
+---
+calico_version: v3.31.3
+calico_manifest_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml"
+calico_kubeconfig: /etc/rancher/k3s/k3s.yaml
+calico_rollout_timeout: 600
+# k3s >= 1.32 installs a multus-shim default CNI that deadlocks a bare Calico
+# bootstrap; moving it aside lets Calico become the primary CNI.
+calico_disable_k3s_multus_shim: true

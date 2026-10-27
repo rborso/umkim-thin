@@ -1,0 +1,108 @@
+---
+# Shared (ReadWriteMany) storage.
+#
+# Default: an NFS server on the k3s node itself, exported to the lab subnet and
+# the pod network, plus nfs-subdir-external-provisioner to hand out per-PVC
+# subdirectories. Set nfs_mode=external to point at an existing server instead
+# (in which case nfs_server and nfs_export must be set).
+
+- name: state directory
+  ansible.builtin.file:
+    path: "{{ state_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: install nfs packages
+  ansible.builtin.dnf:
+    name: nfs-utils
+    state: present
+
+- name: local NFS server on the node
+  when: nfs_mode == 'host'
+  block:
+    - name: export directory
+      ansible.builtin.file:
+        path: "{{ nfs_export }}"
+        state: directory
+        mode: '0777'
+
+    - name: export to the lab subnet and the pod network
+      ansible.builtin.blockinfile:
+        path: /etc/exports
+        create: true
+        marker: "# {mark} umkim-thin shared storage"
+        block: |
+          {{ nfs_export }} {{ lab_cidr }}(rw,sync,no_subtree_check,no_root_squash)
+          {{ nfs_export }} {{ pod_cidr }}(rw,sync,no_subtree_check,no_root_squash)
+
+    - name: nfs-server enabled and running
+      ansible.builtin.systemd_service:
+        name: nfs-server
+        enabled: true
+        state: started
+
+    - name: apply the exports
+      ansible.builtin.command: exportfs -rav
+      changed_when: false
+
+    - name: allow NFS from the cluster networks
+      ansible.posix.firewalld:
+        zone: trusted
+        service: nfs
+        permanent: true
+        immediate: true
+        state: enabled
+      when: groups['server'] | length <= 1
+
+- name: nfs provisioner values
+  ansible.builtin.template:
+    src: nfs-provisioner-values.yaml.j2
+    dest: "{{ state_dir }}/nfs-provisioner-values.yaml"
+    mode: '0644'
+
+- name: add the provisioner chart repository
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/helm repo add nfs-subdir-external-provisioner
+      https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+  register: nfs_repo
+  changed_when: "'has been added' in nfs_repo.stdout"
+  failed_when: "'already exists' not in nfs_repo.stderr and nfs_repo.rc != 0"
+
+- name: update chart repositories
+  ansible.builtin.command: /usr/local/bin/helm repo update
+  changed_when: false
+
+- name: install or upgrade the NFS provisioner
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/helm upgrade --install nfs-provisioner
+      nfs-subdir-external-provisioner/nfs-subdir-external-provisioner
+      --namespace nfs-provisioner --create-namespace
+      --kubeconfig /etc/rancher/k3s/k3s.yaml
+      -f {{ state_dir }}/nfs-provisioner-values.yaml
+      --wait --timeout 5m
+
+- name: storage classes
+  ansible.builtin.command: /usr/local/bin/kubectl get storageclass
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: storage_classes
+  changed_when: false
+
+- name: show storage classes
+  ansible.builtin.debug:
+    var: storage_classes.stdout_lines
+
+- name: take the default class for shared storage
+  when: storage_backend | default('') == 'nfs'
+  ansible.builtin.shell: |
+    set -u
+    K=/usr/local/bin/kubectl
+    $K patch storageclass local-path \
+      -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
+    $K patch storageclass {{ nfs_storage_class }} \
+      -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false

@@ -1,0 +1,120 @@
+UMKIM-Thin — single-cluster self-hosted app platform
+Copyright 2026 Robert Borso
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+================================================================================
+Provenance
+================================================================================
+
+Portions of this product were developed as part of the UMKIM fleet project
+(https://github.com/rborso/umkim), licensed under the Apache License 2.0.
+
+================================================================================
+Vendored source
+================================================================================
+
+  charts/apps/{gitea,immich,nextcloud,paperless,servarr}/
+                     Apache License 2.0
+                     The author's own app charts, vendored at the versions the
+                     catalog pins. See charts/apps/README.md.
+
+  images/servarr-bootstrap/
+                     Apache License 2.0
+                     Vendored from the author's servarr-helm project at a
+                     pinned commit. Part of this work; see
+                     images/servarr-bootstrap/SOURCE.md.
+
+================================================================================
+Bundled Go dependencies
+================================================================================
+
+  gopkg.in/yaml.v3   Apache License 2.0 / MIT License
+  github.com/skip2/go-qrcode
+                     MIT License
+
+================================================================================
+Build-time components
+================================================================================
+
+  Playwright (Microsoft)
+                     Apache License 2.0
+                     Base image for the optional servarr bootstrap build,
+                     pinned by digest. Not redistributed as source.
+
+================================================================================
+Deployed platform components
+================================================================================
+
+umkim-thin *deploys* the components below; it does not link or modify them.
+Each remains under its own license, and each is obtained from its own upstream
+image or chart. LLDAP is a separate work: umkim-thin renders Kubernetes objects
+that run the upstream image, and ships no LLDAP code.
+
+  LLDAP              GNU General Public License v3.0
+                     https://github.com/lldap/lldap
+                     Deployed as a separate container. Source for the deployed
+                     version is available from upstream; no modifications are
+                     made or distributed by this project.
+
+  Authelia           Apache License 2.0
+                     https://github.com/authelia/authelia
+
+  Traefik            MIT License
+                     https://github.com/traefik/traefik
+
+  Valkey             BSD-3-Clause
+                     https://github.com/valkey-io/valkey
+                     Session store for Authelia.
+
+  nginx              BSD-2-Clause
+                     https://nginx.org/ (the invite sign-up page)
+
+  k3s                Apache License 2.0
+                     https://github.com/k3s-io/k3s
+
+  Kubernetes         Apache License 2.0
+                     https://github.com/kubernetes/kubernetes
+
+  Helm               Apache License 2.0
+                     https://github.com/helm/helm
+
+  Calico             Apache License 2.0
+                     https://github.com/projectcalico/calico
+
+  Longhorn           Apache License 2.0
+                     https://github.com/longhorn/longhorn
+
+  nfs-subdir-external-provisioner
+                     Apache License 2.0
+                     https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner
+                     Optional NFS StorageClass provisioner for local and external exports.
+
+  nfs-utils          GNU General Public License v2.0
+                     https://linux-nfs.org/
+                     Alpine package in the console image; provides showmount for
+                     external-NFS validation.
+
+  WireGuard          GNU General Public License v2.0
+                     https://www.wireguard.com/
+
+================================================================================
+Catalog applications
+================================================================================
+
+Applications installed from the catalog are third-party software under their
+own licenses. The repository ships Apache-2.0 charts and Kubernetes templates,
+not upstream application source. The current official catalog includes:
+
+  Gitea              MIT
+  Nextcloud          AGPL-3.0
+  Immich             AGPL-3.0
+  Paperless-ngx      GPL-3.0
+  Servarr stack      MIT (Seerr, FlareSolverr, Jellyfin LDAP plugin),
+                     GPL-2.0 (Jellyfin), GPL-3.0 (Sonarr, Radarr, Prowlarr),
+                     GPL-2.0+ source / GPL-3.0+ binary (qBittorrent)
+
+See docs/licenses.md for the complete component/source matrix, including
+PostgreSQL, Valkey, Collabora and VectorChord. Custom catalog entries are the
+operator's responsibility; keep the upstream license with any chart or image
+you redistribute.

@@ -1,0 +1,194 @@
+---
+# k3s: one server, or an HA control plane (embedded etcd) when the `server`
+# group has more than one host. The first initialises the cluster; the rest join
+# using k3s's own node-token, through a kube-vip VIP when one is set.
+- name: is k3s already installed?
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_bin
+
+- name: cluster shape and addresses
+  ansible.builtin.set_fact:
+    k3s_multi: "{{ groups['server'] | length > 1 }}"
+    k3s_primary: "{{ (groups['primary'] | default(groups['server']))[0] }}"
+    k3s_vip: "{{ k3s_control_plane_vip | default('') }}"
+
+- name: effective join target and TLS SANs
+  ansible.builtin.set_fact:
+    k3s_join_target: "{{ k3s_vip if (k3s_vip | length > 0) else hostvars[k3s_primary].ansible_default_ipv4.address }}"
+    k3s_effective_tls_san: >-
+      {{ ([ansible_default_ipv4.address]
+          + (groups['server'] | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | list)
+          + ([k3s_vip] if k3s_vip | length > 0 else [])
+          + (k3s_tls_san | default([]))) | unique }}
+
+- name: kube-vip before cluster-init (first server)
+  ansible.builtin.import_role:
+    name: kube_vip
+  when: k3s_multi and inventory_hostname == k3s_primary
+
+- name: k3s config directory
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: '0755'
+
+# --- first server (or single node) -----------------------------------------
+- name: init | k3s config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: '0600'
+  register: k3s_config_init
+  when: not k3s_multi or inventory_hostname == k3s_primary
+
+- name: init | install k3s
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -sfL https://get.k3s.io |
+      INSTALL_K3S_CHANNEL={{ k3s_channel | quote }} {% if k3s_version %}INSTALL_K3S_VERSION={{ k3s_version | quote }} {% endif %}sh -s - server
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/k3s
+  # The installer returns non-zero when systemd's initial start is slow; the
+  # explicit service task below waits for the same unit and reports the real
+  # failure (if any).
+  failed_when: false
+  when: not k3s_multi or inventory_hostname == k3s_primary
+
+- name: init | k3s enabled and running
+  ansible.builtin.systemd_service:
+    name: k3s
+    enabled: true
+    state: started
+    daemon_reload: true
+  register: k3s_service_init
+  until: not k3s_service_init.failed
+  retries: 24
+  delay: 5
+  when: not k3s_multi or inventory_hostname == k3s_primary
+
+- name: init | wait for the API
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl get --raw /readyz
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: k3s_readyz
+  until: k3s_readyz.rc == 0
+  retries: 36
+  delay: 10
+  changed_when: false
+  when: not k3s_multi or inventory_hostname == k3s_primary
+
+- name: init | read the node token
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: k3s_node_token
+  when: k3s_multi and inventory_hostname == k3s_primary
+
+- name: init | publish the join token for the other servers
+  ansible.builtin.set_fact:
+    k3s_cluster_token: "{{ k3s_node_token.content | b64decode | trim }}"
+    cacheable: true
+  when: k3s_multi and inventory_hostname == k3s_primary
+
+# --- additional servers -----------------------------------------------------
+- name: join | wait for the init node's token
+  ansible.builtin.assert:
+    that:
+      - hostvars[k3s_primary].k3s_cluster_token | default('') | length > 0
+    fail_msg: "Join token not available from {{ k3s_primary }} yet."
+  register: k3s_token_wait
+  until: k3s_token_wait is succeeded
+  retries: 60
+  delay: 5
+  when: k3s_multi and inventory_hostname != k3s_primary
+
+- name: join | use the init node's token
+  ansible.builtin.set_fact:
+    k3s_effective_token: "{{ hostvars[k3s_primary].k3s_cluster_token }}"
+  when: k3s_multi and inventory_hostname != k3s_primary
+
+- name: join | k3s config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: '0600'
+  register: k3s_config_join
+  when: k3s_multi and inventory_hostname != k3s_primary
+
+- name: join | install k3s
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -sfL https://get.k3s.io |
+      INSTALL_K3S_CHANNEL={{ k3s_channel | quote }} {% if k3s_version %}INSTALL_K3S_VERSION={{ k3s_version | quote }} {% endif %}sh -s - server
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/k3s
+  failed_when: false
+  when: k3s_multi and inventory_hostname != k3s_primary
+
+- name: join | k3s enabled and running
+  ansible.builtin.systemd_service:
+    name: k3s
+    enabled: true
+    state: started
+    daemon_reload: true
+  register: k3s_service_join
+  until: not k3s_service_join.failed
+  retries: 24
+  delay: 5
+  when: k3s_multi and inventory_hostname != k3s_primary
+
+# --- common -----------------------------------------------------------------
+- name: restart k3s when its config changed (existing install)
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: restarted
+  when:
+    - k3s_bin.stat.exists
+    - (k3s_config_init.changed | default(false)) or (k3s_config_join.changed | default(false))
+
+- name: kubectl shim
+  ansible.builtin.file:
+    src: /usr/local/bin/k3s
+    dest: /usr/local/bin/kubectl
+    state: link
+    force: true
+
+# sudo on Rocky/RHEL uses a secure PATH that does not include /usr/local/bin.
+# Keep the k3s symlink where it is and expose it through /usr/bin as well, so
+# `sudo kubectl` (the common admin command) works without the full path.
+- name: kubectl shim for sudo's secure PATH
+  ansible.builtin.file:
+    src: /usr/local/bin/kubectl
+    dest: /usr/bin/kubectl
+    state: link
+    force: true
+
+- name: helm present?
+  ansible.builtin.stat:
+    path: /usr/local/bin/helm
+  register: helm_bin
+
+- name: install helm
+  when: not helm_bin.stat.exists
+  block:
+    - name: download helm
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: /tmp/helm.tgz
+        mode: '0644'
+    - name: unpack helm
+      ansible.builtin.unarchive:
+        src: /tmp/helm.tgz
+        dest: /tmp
+        remote_src: true
+    - name: install helm binary
+      ansible.builtin.copy:
+        src: /tmp/linux-amd64/helm
+        dest: /usr/local/bin/helm
+        remote_src: true
+        mode: '0755'
+# Node readiness is checked by the calico role, once the CNI is installed.
+

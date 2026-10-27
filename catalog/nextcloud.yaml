@@ -1,0 +1,111 @@
+name: nextcloud
+displayName: Nextcloud
+description: Files, shares and collaboration. Ships Collabora for document editing.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/nextcloud
+  version: 0.1.18
+  versions:
+    - version: 0.1.18
+      appVersion: 35.0.1
+      channel: stable
+
+namespace: nextcloud
+
+routes:
+  - key: site
+    mode: site
+    host: "nextcloud.{{ .zone }}"
+    requireAuth: true
+    exposure:
+      default: authelia
+      allowed: [public, authelia, vpn]
+    serviceName: nextcloud
+    servicePort: 80
+    # Share links are token-authenticated by Nextcloud itself. Forward-auth must
+    # not intercept them, and the browser must not be redirected to the portal.
+    # The client endpoints (status, WebDAV, OCS, discovery) are also exempt: the
+    # desktop/mobile clients authenticate with Nextcloud directly and cannot use
+    # the portal session.
+    publicPaths:
+      - "^/s/"
+      - "^/index\\.php/s/"
+      # Public-share pages are a full Nextcloud web UI: their CSS/JS/font
+      # assets and a few app AJAX endpoints must load before Nextcloud can
+      # decide whether the share token/password is valid.
+      - "^/core/(css|js|img|fonts|l10n)/"
+      - "^/core/preview"
+      - "^/dist/"
+      - "^/apps/[^/]+/(css|js|img|fonts|l10n)/"
+      - "^/apps/theming/"
+      - "^/custom_apps/[^/]+/(css|js|img|fonts|l10n)/"
+      - "^/apps/files_sharing/publicpreview/"
+      - "^/apps/richdocuments/token"
+      - "^/avatar/guest/"
+      - "^/public\\.php"
+      - "^/status\\.php$"
+      - "^/remote\\.php/"
+      - "^/ocs/"
+      - "^/\\.well-known/"
+      # The share-link password form itself (Nextcloud authenticates it), as
+      # opposed to /s/<token>/download which the share token covers.
+      - "^/s/[^/]+/authenticate(/|$)"
+      # Public calendar/contact shares (a token, like a share link).
+      - "^/public\\.php/calendars/"
+      - "^/public\\.php/contacts/"
+      # Collabora's WOPI requests carry a per-file token, not a browser
+      # session. Forward-auth would answer them with a 401/portal redirect,
+      # which the editor reports as "Unauthorized WOPI host".
+      - "^/index\\.php/apps/richdocuments/wopi/"
+      - "^/apps/richdocuments/wopi/"
+  # Collabora Online gets its own route: the browser loads the editor from it, so
+  # it must be a real hostname (the in-cluster Service is not reachable from a
+  # browser). Collabora authenticates its own WOPI traffic with per-document
+  # tokens, so the route is not behind the forward-auth.
+  - key: collabora
+    mode: site
+    host: "collabora.{{ .zone }}"
+    requireAuth: false
+    exposure:
+      default: public
+      allowed: [public, authelia, vpn]
+    serviceName: nextcloud-collabora
+    servicePort: 9980
+
+auth:
+  # Forward-auth for the web UI. Nextcloud also reads the directory directly
+  # (LDAP), so group membership maps onto its own accounts. The chart carries an
+  # optional user_oidc mode, but the Nextcloud 35 app route/discovery needs more
+  # work before it can replace LDAP (see docs/console.md).
+  kind: forward_auth
+  ldap: true
+
+values:
+  nextcloud:
+    externalUrl: "https://{{ .host }}"
+    persistence:
+      data:
+        storageClass: "{{ .storage.mediaClass }}"
+    # The chart always appends the public host. The readiness probe is a TCP
+    # check, so it no longer needs a wildcard trusted domain for the pod IP.
+    trustedDomains: []
+  collabora:
+    enabled: true
+    # The browser loads the editor from this public host; the server-side WOPI
+    # discovery stays on the in-cluster Service.
+    publicUrl: "https://collabora.{{ .zone }}"
+    # Collabora fetches documents from Nextcloud by its public URL, so that
+    # hostname has to resolve inside the cluster too.
+    aliasGroup: "https://{{ .host }}"
+  postgres:
+    persistence:
+      storageClass: "{{ .storage.configClass }}"
+
+verify:
+  playwright: tests/playwright/journeys/nextcloud.spec.ts
+  checks:
+    - route_reachable
+    - auth_challenge
+    - authenticated_request_reaches_app
+    - public_path_exempt        # /s/<token> answers without a session
+    - in_cluster_self_resolution # the site's own hostname resolves in-cluster

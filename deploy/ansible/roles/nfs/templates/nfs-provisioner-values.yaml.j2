@@ -1,0 +1,12 @@
+nfs:
+  server: {{ nfs_server }}
+  path: {{ nfs_export }}
+  mountOptions:
+    - nfsvers=4.2
+    - rw
+    - nolock
+storageClass:
+  name: {{ nfs_storage_class }}
+  defaultClass: false
+  accessModes: ReadWriteMany
+  reclaimPolicy: Retain

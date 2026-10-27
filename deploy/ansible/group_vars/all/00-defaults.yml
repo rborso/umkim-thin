@@ -1,0 +1,128 @@
+---
+# Generic defaults. Environment-specific values are rendered by
+# deploy/provision.sh into group_vars/all/99-local.yml (gitignored) and win.
+zone: example.com
+portal_host: "auth.{{ zone }}"
+console_host: "console.{{ zone }}"
+base_dn: dc=example,dc=com
+admin_email: "admin@{{ zone }}"
+acme_email: "{{ admin_email }}"
+
+# published (external NAT) -> internal (host)
+pub_web: 80
+pub_tls: 443
+pub_wg: 51820
+web_nodeport: 30080
+tls_nodeport: 30443
+wg_port: 51820
+
+# The pod CIDR. Calico's IP pool is pinned to this (see the calico role); it
+# must not overlap the node/management network or the service CIDR. It feeds the
+# firewall trust, the NFS export and the WireGuard allowed IPs, so they all
+# follow it.
+pod_cidr: 10.244.0.0/16
+service_cidr: 10.43.0.0/16
+dns_service_ip: 10.43.0.10
+# Replace with your node/management network.
+lab_cidr: 192.0.2.0/24
+
+k3s_channel: stable
+k3s_version: ""
+helm_version: v3.16.3
+
+# WireGuard gateway
+wg_endpoint: ""                     # public host:port clients dial (no port)
+wg_subnet: 192.168.168.0/24
+wg_server_ip: 192.168.168.1
+
+# NetworkPolicy: default-deny ingress for the app namespaces, with allowances.
+enable_network_policies: true
+netpol_app_namespaces:
+  - gitea
+  - immich
+  - nextcloud
+  - paperless
+  - servarr
+netpol_identity_namespace: identity
+netpol_wg_namespace: wireguard
+
+# The console always runs cluster-style (PVC + ServiceAccount + ConfigMap/Secret
+# seed). Only the storage class, the optional host storage-agent socket and the
+# topology differ between single and HA.
+console_persistence_class: "{{ storage_class_config }}"
+console_state_size: 2Gi
+# The single-node storage agent is a host service; HA uses Longhorn/external
+# NFS. Derive the default from the inventory so a one-node target gets the
+# socket and an HA target does not.
+storage_agent: "{{ (groups['server'] | default([]) | length) <= 1 }}"
+storage_socket: "{{ '/run/umkim-thin' if (storage_agent | bool) else '' }}"
+# The lab hosts are SELinux-enforcing and the single-node console reads the
+# host storage socket. The novice path leaves this empty.
+console_selinux_type: "{{ 'spc_t' if (storage_agent | bool) else '' }}"
+# HA uses NFS/Longhorn (RWX). A single-node local-path site can set RWO.
+storage_media_access_mode: ReadWriteMany
+
+# Extra SANs for the API server certificate (VIP, DNS names) — set for HA.
+k3s_tls_san: []
+# Optional lab pin for the single Traefik replica (empty = unconstrained).
+traefik_node: ""
+
+# Use the Let's Encrypt staging directory instead of production. Set in CI so
+# repeated runs never consume the production 50 certs / 7 days limit.
+acme_staging: false
+
+# HA control-plane VIP, provided by kube-vip (a floating address shared by the
+# servers). Empty disables it. Set it to an address in the nodes' subnet.
+k3s_control_plane_vip: ""
+
+# Storage backend. Empty keeps the explicit classes below (local-path for
+# config, the provisioned NFS class for shared/media); 'local', 'nfs' or
+# 'longhorn' pick both. HA needs a shared backend (nfs or longhorn).
+storage_backend: ""
+# The StorageClass created by the nfs role. Keep this name descriptive and
+# distinct from the console's external-NFS classes (`nfs-<name>`); the old
+# name was the generic `nfs`. Existing clusters can pin `nfs_storage_class=nfs`
+# in their environment to keep the class their PVCs are bound to.
+nfs_storage_class: umkim-thin-nfs
+_backend_classes:
+  local:    {config: local-path, media: local-path}
+  nfs:      {config: "{{ nfs_storage_class }}", media: "{{ nfs_storage_class }}"}
+  # Config is ReadWriteOnce; media is shared ReadWriteMany, which Longhorn
+  # serves through its share-manager (NFSv4) — hence a dedicated RWX class.
+  # Names differ from the chart's own `longhorn` class (which the manager always
+  # creates with Immediate binding and which we leave unused).
+  longhorn: {config: longhorn-rwo, media: longhorn-rwx}
+storage_class_config: "{{ _backend_classes[storage_backend].config if storage_backend | length > 0 else 'local-path' }}"
+storage_class_media: "{{ _backend_classes[storage_backend].media if storage_backend | length > 0 else nfs_storage_class }}"
+
+# NFS (a local server on the node, or an external one)
+nfs_mode: host                       # host | external
+nfs_export: /srv/nfs/umkim-thin
+nfs_server: "{{ ansible_default_ipv4.address }}"
+
+# Longhorn (optional shared backend; replicated, HA-capable)
+longhorn_chart_version: "1.6.2"
+longhorn_storage_class: longhorn-rwo
+longhorn_rwx_storage_class: longhorn-rwx
+longhorn_data_path: /var/lib/longhorn
+# Replicas per volume. The default is 3 (one per HA server); set this to 2
+# explicitly on a small lab or a two-node-capacity cluster. A 2-replica volume
+# still survives one node loss but has less rebuild headroom.
+longhorn_replica_count: 3
+# Longhorn volumes are thin-provisioned: Storage Scheduled is nominal capacity,
+# not bytes written. This percentage caps how much nominal capacity the
+# scheduler may hand out relative to the usable disk. Keep 100 on a shared root
+# disk; a dedicated lab disk can be raised (for example to 200) to fit sparse
+# volumes, but actual free space remains the hard limit.
+longhorn_storage_over_provisioning_percentage: 100
+# Refuse new replicas below this share of the disk. Longhorn's default is 25.
+longhorn_storage_minimal_available_percentage: 25
+# Bytes reserved on each Longhorn disk for the host. Longhorn defaults to 30% of
+# the disk; on the lab's 120G disks that is ~36G per node, which is not enough
+# for the apps once every volume keeps 2 replicas (a 50Gi RWX media volume then
+# cannot be scheduled). The disks are dedicated to Longhorn, so cap it at ~6Gi.
+longhorn_disk_storage_reserved: 6442450944
+longhorn_disk_storage_reserved_percent: 5
+
+remote_dir: /opt/umkim-thin
+state_dir: /etc/umkim-thin

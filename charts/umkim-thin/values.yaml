@@ -1,0 +1,42 @@
+# The console binary, its helm/kubectl, and the catalog are baked into the image.
+# The installer builds the console image locally and imports it into the node;
+# point this at your own registry if you publish images yourself.
+image: localhost/umkim-thin:dev
+imagePullPolicy: Never
+
+# A dedicated ServiceAccount (not the node's admin kubeconfig) drives Helm.
+rbac:
+  create: true
+
+# The console runs as a non-root, read-only-rootfs container. On a
+# SELinux-enforcing host that must read a hostPath (the single-node storage
+# socket), an operator can opt into a type (the lab used spc_t); leave it empty
+# for a portable install.
+podSecurity:
+  seLinuxType: ""
+serviceAccountName: umkim-thin-console
+# Namespace that holds LLDAP; the console gets pods/exec only there.
+identityNamespace: identity
+
+# Where the app is published (Authelia gates it, then the console's own login).
+# Required: no default, so an install cannot accidentally claim a real hostname.
+consoleHost: ""
+forwardAuthMiddleware: identity-authelia@file
+
+# The console always runs cluster-style: state and the chart mirror live on a
+# PVC at /data, the config is a ConfigMap, the secrets/seed are a Secret, and
+# the pod uses its ServiceAccount kubeconfig. The PVC makes it portable (single
+# node or HA); the single-node host storage agent is reached only through the
+# optional socket below.
+# Host storage agent socket directory (single-node only). Empty disables the
+# console Storage section; HA uses Longhorn/external NFS instead.
+storageSocket: ""
+
+# State/config storage. The chart always creates the PVC; the installer selects
+# the class: local-path for single, longhorn-rwo for HA.
+persistence:
+  storageClass: ""
+  size: 2Gi
+configMapName: umkim-thin-config
+seedSecretName: umkim-thin-secrets
+mirrorConfigMap: umkim-thin-mirror

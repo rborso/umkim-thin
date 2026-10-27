@@ -1,0 +1,2186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>umkim-thin</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --ink: #172033;
+    --muted: #667085;
+    --line: #e4e7ec;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --ok-bg: #e9f8ef;
+    --ok-ink: #17663a;
+    --warn-bg: #fff7e6;
+    --warn-ink: #7a5300;
+    --err-bg: #fff0ee;
+    --err-ink: #9f241a;
+  }
+  * { box-sizing: border-box }
+  [hidden] { display: none !important }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 74rem;
+    margin: 0 auto;
+    padding: 0 1.25rem 3rem;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.45;
+  }
+  a { color: var(--accent); text-underline-offset: .18em }
+  h1, h2, h3, p { margin-top: 0 }
+  h2 { font-size: 1.15rem; letter-spacing: -.015em; margin-bottom: .25rem }
+  h3 { font-size: 1rem; margin-bottom: .5rem }
+  p.sub { color: var(--muted); margin-bottom: 0 }
+  .eyebrow { color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase }
+  .muted { color: var(--muted) }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.4rem 0 1rem }
+  .brand { display: flex; align-items: center; gap: .8rem; min-width: 0 }
+  .brand-mark { width: 2.35rem; height: 2.35rem; border-radius: .7rem; display: grid; place-items: center; background: var(--accent); color: #fff; font-weight: 800; letter-spacing: -.06em; box-shadow: 0 4px 12px rgba(37,99,235,.25) }
+  .brand-name { font-weight: 800; font-size: 1.1rem; letter-spacing: -.02em }
+  .brand-sub { color: var(--muted); font-size: .84rem }
+  .top-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end }
+  .platform-links { color: var(--muted); font-size: .82rem; max-width: 38rem; text-align: right }
+  .platform-links a { color: var(--muted); margin-left: .2rem }
+  .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: .25rem; overflow-x: auto; background: rgba(244,246,250,.94); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); margin: 0 -1.25rem; padding: .35rem 1.25rem 0 }
+  .tab { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: .75rem .85rem; font-weight: 650; border-radius: .5rem .5rem 0 0; cursor: pointer }
+  .tab:hover { color: var(--ink); background: var(--accent-soft) }
+  .tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); background: var(--accent-soft) }
+  .layout { padding: 1.35rem 0 }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: .9rem; padding: 1.2rem; box-shadow: 0 1px 2px rgba(16,24,40,.03) }
+  .card + .card { margin-top: 1rem }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: .9rem }
+  .card-head .sub { max-width: 45rem }
+  .hint { color: var(--muted); font-size: .86rem; margin-top: .7rem }
+  .checklist { list-style: none; padding: 0; margin: .9rem 0 0; display: grid; gap: .55rem }
+  .checklist li { padding: .65rem .75rem; border: 1px solid var(--line); border-radius: .55rem; background: #fbfcfe }
+  .checklist li.done { color: var(--ok-ink); background: var(--ok-bg); border-color: #c9ecd7 }
+  .checklist li.done::before { content: "✓"; font-weight: 800; margin-right: .45rem }
+  .checklist a { margin-left: .35rem; font-weight: 600 }
+  .table-wrap { width: 100%; overflow-x: auto }
+  table { border-collapse: collapse; width: 100%; min-width: 36rem }
+  th, td { text-align: left; padding: .65rem .55rem; border-bottom: 1px solid var(--line); vertical-align: top }
+  th { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 700 }
+  tbody tr:hover { background: #fbfcfe }
+  tbody tr:last-child td { border-bottom: 0 }
+  code { background: #f2f4f7; padding: .12rem .35rem; border-radius: .3rem; font-size: .88em }
+  button, .button { font: inherit; font-weight: 600; padding: .46rem .8rem; border: 1px solid #cfd6e2; background: #fff; color: var(--ink); border-radius: .5rem; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: .35rem }
+  button:hover, .button:hover { background: #f8faff; border-color: #b9c6dc }
+  button:disabled { opacity: .55; cursor: default }
+  button.primary, .button.primary { background: var(--accent); border-color: var(--accent); color: #fff }
+  button.primary:hover, .button.primary:hover { background: #1d4ed8; border-color: #1d4ed8 }
+  button.danger { color: var(--err-ink); border-color: #f0c2bb; background: #fff8f6 }
+  input, select { font: inherit; padding: .5rem .58rem; border: 1px solid #cfd6e2; border-radius: .5rem; background: #fff; color: var(--ink); min-width: 9rem }
+  input:focus, select:focus { outline: 2px solid #bfd3ff; border-color: var(--accent) }
+  input:disabled { background: #f5f6f8; color: #98a2b3 }
+  label { font-weight: 600; font-size: .85rem }
+  .row, #invite-form, #wg-form, #cert-form { display: flex; gap: .55rem; flex-wrap: wrap; align-items: center }
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .8rem; align-items: end }
+  .field-grid label { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase }
+  .field-grid label > input, .field-grid label > select { display: block; width: 100%; margin-top: .3rem; color: var(--ink); font-weight: 400; letter-spacing: normal; text-transform: none }
+  .field-label { color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; margin-bottom: .3rem }
+  .form-actions { display: flex; gap: .5rem; align-items: center; margin-top: .9rem }
+  #install-panel { display: none; margin-top: 1rem; padding: 1rem; border: 1px solid #cddcff; border-radius: .7rem; background: #f7faff }
+  #install-panel h3 { margin: 0 0 .75rem }
+  #install-panel label { display: block; margin: .55rem 0 .2rem }
+  #install-panel .row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start }
+  #install-panel .row > div { flex: 1 1 13rem }
+  #servarr-panel { display: none; margin-top: 1rem; padding: 1rem; border: 1px solid #cddcff; border-radius: .7rem; background: #f7faff }
+  #servarr-panel h3 { margin: 0 0 .5rem }
+  #servarr-panel label { display: block; margin: .55rem 0 .2rem }
+  #servarr-panel input { width: 20rem; max-width: 100% }
+  #servarr-panel .warn { color: var(--warn-ink); margin-top: .5rem }
+  .chip { display: inline-block; padding: .15rem .55rem; border-radius: 1rem; font-size: .78rem; font-weight: 650 }
+  .chip.ok { background: var(--ok-bg); color: var(--ok-ink) }
+  .chip.err { background: var(--err-bg); color: var(--err-ink) }
+  .chip.warn { background: var(--warn-bg); color: var(--warn-ink) }
+  #apps-updated { font-size: .82rem; margin-left: .5rem }
+  .job-progress { overflow-wrap: anywhere; }
+  #app-detail { display: none; margin-top: 1rem }
+  #storage-format { margin-top: .85rem; padding: .8rem .9rem; border: 1px solid #efb9b1; background: var(--err-bg); border-radius: .6rem }
+  #storage-format strong { color: var(--err-ink) }
+  #storage-format input { margin-top: .45rem }
+  #storage-plan-out:empty, #external-plan-out:empty { display: none }
+  #storage-plan-out, #external-plan-out { white-space: pre-wrap; margin: .75rem 0 0; padding: .75rem; background: #f8fafc; border: 1px solid var(--line); border-radius: .55rem; min-height: 1.5rem; color: var(--muted); font-size: .86rem }
+  #wg-result { display: none; margin-top: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: .7rem; background: #fbfcfe }
+  #wg-config { white-space: pre-wrap; overflow-wrap: anywhere; background: #101828; color: #e4e7ec; padding: .8rem; border-radius: .5rem }
+  #msg { position: fixed; right: 1rem; bottom: 1rem; z-index: 20; max-width: min(36rem, calc(100vw - 2rem)); max-height: 45vh; overflow: auto; padding: .8rem 1rem; border-radius: .65rem; border: 1px solid var(--line); background: #fff; box-shadow: 0 12px 32px rgba(16,24,40,.16); white-space: pre-wrap; display: none }
+  #msg:not(:empty) { display: block }
+  #msg.ok { background: var(--ok-bg); color: var(--ok-ink); border-color: #c9ecd7 }
+  #msg.err { background: var(--err-bg); color: var(--err-ink); border-color: #efb9b1 }
+  #msg:not(.ok):not(.err) { color: var(--ink) }
+  .segmented { display: inline-flex; gap: .2rem; padding: .2rem; border: 1px solid #cfd6e2; border-radius: .65rem; background: #f8fafc; flex-wrap: wrap }
+  .segmented button { border: 0; background: transparent; color: var(--muted); padding: .42rem .7rem; border-radius: .45rem }
+  .segmented button[aria-pressed="true"] { background: #fff; color: var(--accent); box-shadow: 0 1px 2px rgba(16,24,40,.12) }
+  .segmented button:disabled { opacity: .4 }
+  dialog.modal { width: min(40rem, calc(100vw - 2rem)); padding: 0; border: 1px solid var(--line); border-radius: .9rem; background: #fff; color: var(--ink); box-shadow: 0 24px 80px rgba(16,24,40,.28) }
+  dialog.modal::backdrop { background: rgba(16,24,40,.48) }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.2rem; border-bottom: 1px solid var(--line) }
+  .modal-head h3 { margin: 0 }
+  .modal-body { padding: 1.2rem }
+  .modal-body p { color: var(--muted); margin-bottom: .7rem }
+  .copy-row { display: flex; gap: .5rem; align-items: stretch; flex-wrap: wrap }
+  .copy-row input { flex: 1 1 18rem; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .84rem }
+  .modal-actions { display: flex; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; margin-top: 1rem }
+  #invite-copy-status { min-height: 1.2em; margin: .5rem 0 0; font-size: .84rem }
+  #indexer-dialog .modal-body { max-height: 72vh; overflow: auto }
+  .indexer-results { display: grid; gap: .45rem; margin-top: .8rem }
+  .indexer-result { text-align: left; display: block; width: 100%; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: .55rem; background: #fbfcfe; cursor: pointer }
+  .indexer-result:hover { border-color: var(--accent); background: var(--accent-soft) }
+  .indexer-result strong { display: block }
+  .indexer-fields { margin-top: .7rem; display: grid; gap: .65rem }
+  .indexer-field { display: block }
+  .indexer-field > input, .indexer-field > select { display: block; width: 100%; margin-top: .25rem }
+  .indexer-field .hint { margin: .2rem 0 0; font-size: .8rem }
+  .indexer-fields details { border: 1px solid var(--line); border-radius: .55rem; padding: .55rem .65rem; background: #fbfcfe }
+  .indexer-fields details > summary { cursor: pointer; font-weight: 650; color: var(--muted) }
+  .indexer-fields details .indexer-field { margin-top: .55rem }
+  .checkline { display: flex; align-items: center; gap: .45rem; margin: .75rem 0 0; font-weight: 600; font-size: .85rem }
+  @media (max-width: 620px) {
+    body { padding: 0 .8rem 2rem }
+    .topbar { align-items: flex-start; flex-direction: column; padding-top: 1rem }
+    .top-actions { width: 100%; justify-content: space-between }
+    .platform-links { text-align: left; max-width: none }
+    .tabs { margin: 0 -.8rem; padding: .35rem .8rem 0 }
+    .card { padding: 1rem; border-radius: .7rem }
+    .card-head { flex-direction: column; align-items: stretch }
+    .field-grid { grid-template-columns: 1fr }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">ut</div>
+    <div>
+      <div class="brand-name">umkim-thin</div>
+      <div class="brand-sub">Self-hosted app platform</div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="platform-links" class="platform-links"></span>
+    <a class="button" href="/logout">Sign out</a>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Console sections">
+  <button class="tab" id="tab-overview-label" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview">Overview</button>
+  <button class="tab" id="tab-catalog-label" data-tab="catalog" role="tab" aria-selected="false" aria-controls="tab-catalog">Catalog</button>
+  <button class="tab" id="tab-access-label" data-tab="access" role="tab" aria-selected="false" aria-controls="tab-access">Access</button>
+  <button class="tab" id="tab-storage-label" data-tab="storage" role="tab" aria-selected="false" aria-controls="tab-storage">Storage</button>
+  <button class="tab" id="tab-certificates-label" data-tab="certificates" role="tab" aria-selected="false" aria-controls="tab-certificates">Certificates</button>
+</nav>
+
+<main class="layout">
+  <section id="tab-overview" class="tab-panel" role="tabpanel" aria-labelledby="tab-overview-label">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Start here</span>
+          <h2>Welcome back</h2>
+          <p class="sub">Install an app, invite someone, or connect a device. The console keeps the operational surfaces separate so the next action is easy to find.</p>
+        </div>
+      </div>
+      <ul id="checklist" class="checklist">
+        <li id="step-app">Install your first app from the <strong>Catalog</strong>. <a href="#catalog">Open catalog</a></li>
+        <li id="step-invite">Invite someone from <strong>Access</strong>. <a href="#access">Open access</a></li>
+        <li id="step-wg">Optional: connect a device with <strong>WireGuard</strong>. <a href="#access">Open access</a></li>
+        <li id="step-backup">Back up from the host: <code>sudo ./install.sh --backup</code>.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Operations</span>
+          <h2>Applications</h2>
+          <p class="sub">Health, links and setup actions for installed apps, plus installs and upgrades in progress.</p>
+        </div>
+        <div><button id="apps-refresh">Refresh</button> <span id="apps-updated" class="muted"></span></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>App</th><th>Status</th><th>Version</th><th>Links</th><th>Setup</th></tr></thead>
+          <tbody id="applications"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div id="servarr-note" class="hint">
+        The media stack setup wires qBittorrent, Jellyfin, Seerr and the *arr apps. Use <strong>Indexers</strong> on the media-stack row to add trackers to that installed stack.
+      </div>
+    </div>
+
+  </section>
+
+  <section id="tab-catalog" class="tab-panel" role="tabpanel" aria-labelledby="tab-catalog-label" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">One-click installs</span>
+          <h2>Catalog</h2>
+          <p class="sub">Charts are pinned and verified. Choose an app, then review its hostname, exposure and certificate before installing.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>App</th><th>Auth</th><th>Chart</th><th></th></tr></thead>
+          <tbody id="catalog"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div id="install-panel"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Inventory</span>
+          <h2>Installed apps</h2>
+          <p class="sub">Inspect, upgrade or remove releases. <strong>Purge</strong> also deletes the namespace, PVCs and bind Secret.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>App</th><th>Namespace</th><th>Chart</th><th></th></tr></thead>
+          <tbody id="installed"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div id="app-detail"></div>
+    </div>
+  </section>
+
+  <section id="tab-access" class="tab-panel" role="tabpanel" aria-labelledby="tab-access-label" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">People</span>
+          <h2>Invitations</h2>
+          <p class="sub">Create a single-use link for a new directory account. The invitee chooses their own password.</p>
+        </div>
+      </div>
+      <form id="invite-form">
+        <input id="invite-name" placeholder="Label (optional)">
+        <select id="invite-group"></select>
+        <button type="submit" class="primary">Create invite</button>
+      </form>
+      <div class="table-wrap" style="margin-top:1rem">
+        <table>
+          <thead><tr><th>Label</th><th>Group</th><th>Status</th><th>Token</th><th></th></tr></thead>
+          <tbody id="invites"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Connectivity</span>
+          <h2>WireGuard clients</h2>
+          <p class="sub">Create a peer and download its config. Optional; use it when you want a private path to the apps.</p>
+        </div>
+      </div>
+      <form id="wg-form">
+        <input id="wg-name" placeholder="client name" required>
+        <button type="submit" class="primary">Create client</button>
+      </form>
+      <div id="wg-result">
+        <img id="wg-qr" alt="WireGuard config QR" style="width:220px; image-rendering:pixelated; border:1px solid var(--line); border-radius:.5rem">
+        <pre id="wg-config"></pre>
+        <button id="wg-download">Download .conf</button>
+      </div>
+      <div class="table-wrap" style="margin-top:1rem">
+        <table>
+          <thead><tr><th>Name</th><th>Address</th><th>Public key</th><th></th></tr></thead>
+          <tbody id="wg-list"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-storage" class="tab-panel" role="tabpanel" aria-labelledby="tab-storage-label" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Local and external</span>
+          <h2>Storage</h2>
+          <p class="sub">Add an NFS-backed StorageClass from disks or directories on this node, or connect an existing NFS server. Plan first; only local disk imports can format anything.</p>
+        </div>
+        <div class="segmented" role="group" aria-label="Storage source">
+          <button type="button" id="storage-mode-local" aria-pressed="true">Local host</button>
+          <button type="button" id="storage-mode-external" aria-pressed="false">External NFS</button>
+        </div>
+      </div>
+      <div id="storage-unavailable" class="chip err" style="display:none">Local storage agent is not installed on this node. External NFS is still available.</div>
+
+      <div id="storage-local">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Disk</th><th>ID</th><th>Size</th><th>Type</th><th>Status</th></tr></thead>
+            <tbody id="storage-disks"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+          </table>
+        </div>
+        <form id="storage-form" style="margin-top:1rem">
+          <div class="field-grid">
+            <label>Export name
+              <input id="storage-name" placeholder="media" required>
+            </label>
+            <label>Source
+              <select id="storage-kind"><option value="disk">blank disks / RAID</option><option value="directory">existing directory</option></select>
+            </label>
+            <label>RAID
+              <select id="storage-raid"><option value="none">no RAID</option><option value="1">RAID1</option><option value="5">RAID5</option><option value="0">RAID0 (no redundancy)</option></select>
+            </label>
+            <label>Mountpoint
+              <input id="storage-mount" placeholder="/srv/nfs/media">
+            </label>
+            <label>Existing directory
+              <input id="storage-dir" placeholder="/srv/existing" disabled>
+            </label>
+          </div>
+          <div style="margin-top:.9rem">
+            <div class="field-label">Disks to import</div>
+            <div id="storage-picker"></div>
+          </div>
+          <div class="field-grid" style="margin-top:.9rem">
+            <label>NFS clients
+              <input id="storage-clients" placeholder="default: LAN, pod, VPN">
+            </label>
+            <label>NFS options
+              <input id="storage-options" placeholder="default: rw,sync,no_subtree_check,no_root_squash">
+            </label>
+            <label>StorageClass
+              <input id="storage-class" placeholder="default: nfs-<name>">
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="storage-plan">Plan</button>
+            <button type="submit" class="primary">Apply</button>
+          </div>
+          <div id="storage-format">
+            <strong>Formatting the selected disks erases them.</strong>
+            <label for="storage-confirm" style="display:block;margin-top:.4rem">Type <code>FORMAT</code> here to enable Apply for a new disk/RAID export.</label>
+            <input id="storage-confirm" placeholder="FORMAT" autocomplete="off" spellcheck="false">
+          </div>
+        </form>
+        <pre id="storage-plan-out"></pre>
+        <h3 style="margin-top:1.2rem">Local host exports</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Export</th><th>Kind</th><th>StorageClass</th><th>Mount</th><th>Device</th><th></th></tr></thead>
+            <tbody id="storage-list"><tr><td colspan="6" class="muted">loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="storage-external" hidden>
+        <form id="external-storage-form">
+          <div class="field-grid">
+            <label>Storage name
+              <input id="external-name" placeholder="nas-media" required>
+            </label>
+            <label>NFS server
+              <input id="external-server" placeholder="192.168.1.20 or nas.lan" required>
+            </label>
+            <label>Export path
+              <input id="external-export" placeholder="/volume1/media" required>
+            </label>
+            <label>StorageClass
+              <input id="external-class" placeholder="default: nfs-<name>">
+            </label>
+            <label>Mount options
+              <input id="external-mount-options" placeholder="default: nfsvers=4.2,rw,nolock">
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="external-plan">Plan</button>
+            <button type="submit" class="primary">Add external NFS</button>
+          </div>
+          <p class="hint">This creates a ReadWriteMany StorageClass with a Retain policy. The console does not mount, format or manage the remote export.</p>
+        </form>
+        <pre id="external-plan-out"></pre>
+        <h3 style="margin-top:1.2rem">External NFS exports</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>StorageClass</th><th>Server</th><th>Export</th><th>Mount options</th><th></th></tr></thead>
+            <tbody id="external-storage-list"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-certificates" class="tab-panel" role="tabpanel" aria-labelledby="tab-certificates-label" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">TLS</span>
+          <h2>Certificates</h2>
+          <p class="sub">Upload a manual certificate for an app namespace, or set the default wildcard in Traefik's namespace.</p>
+        </div>
+      </div>
+      <form id="cert-form">
+        <input id="cert-name" placeholder="certificate name" required>
+        <input id="cert-ns" placeholder="namespace (default kube-system)">
+        <input type="file" id="cert-crt" accept=".pem,.crt" required>
+        <input type="file" id="cert-key" accept=".pem,.key" required>
+        <input id="cert-hosts" placeholder="DNS names, comma-separated">
+        <label><input type="checkbox" id="cert-default"> default wildcard</label>
+        <button type="submit" class="primary">Add certificate</button>
+      </form>
+      <div class="table-wrap" style="margin-top:1rem">
+        <table>
+          <thead><tr><th>Name</th><th>Namespace</th><th>Hosts</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="certs"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="msg" class="msg" role="status" aria-live="polite"></div>
+
+<dialog id="invite-dialog" class="modal" aria-labelledby="invite-dialog-title">
+  <form method="dialog" class="modal-head">
+    <h3 id="invite-dialog-title">Invitation link</h3>
+    <button value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="modal-body">
+    <p>Send this single-use link to the person you are inviting. They will choose their own password.</p>
+    <div class="copy-row">
+      <input id="invite-link" readonly aria-label="Invitation link">
+      <button type="button" id="invite-copy" class="primary">Copy link</button>
+    </div>
+    <p id="invite-copy-status" class="muted" role="status" aria-live="polite"></p>
+    <div class="modal-actions">
+      <a id="invite-open" class="button" href="#" target="_blank" rel="noopener">Open link</a>
+      <button type="button" id="invite-close">Done</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="indexer-dialog" class="modal" aria-labelledby="indexer-dialog-title">
+  <form method="dialog" class="modal-head">
+    <h3 id="indexer-dialog-title">Indexers</h3>
+    <button value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="modal-body" id="indexer-dialog-body">
+    <div class="card-head" style="margin-bottom:.7rem">
+      <div>
+        <span class="eyebrow">Installed app</span>
+        <h4 id="indexer-app-label" style="margin:.1rem 0 0"></h4>
+      </div>
+      <button type="button" id="indexer-add" class="primary">Add indexer</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Indexer</th><th>Implementation</th><th>Protocol</th><th>Status</th></tr></thead>
+        <tbody id="indexer-list"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="hint">Credentials go to this app's Prowlarr and are not stored in the console.</p>
+    <div id="indexer-search-panel" hidden>
+      <label for="indexer-search">Search Prowlarr's indexer definitions</label>
+      <div class="row" style="margin-top:.4rem">
+        <input id="indexer-search" placeholder="nCore, tracker name, language…" style="flex:1 1 18rem">
+        <button type="button" id="indexer-search-button" class="primary">Search</button>
+        <button type="button" id="indexer-search-cancel">Cancel</button>
+      </div>
+      <div id="indexer-results" class="indexer-results"></div>
+    </div>
+    <div id="indexer-form" hidden>
+      <div class="card-head" style="margin-bottom:.7rem">
+        <div>
+          <span class="eyebrow">Prowlarr definition</span>
+          <h3 id="indexer-definition-title"></h3>
+          <p id="indexer-definition-description" class="sub"></p>
+        </div>
+      </div>
+      <label for="indexer-name">Indexer name</label>
+      <input id="indexer-name" style="width:100%" autocomplete="off">
+      <div id="indexer-fields" class="indexer-fields"></div>
+      <label class="checkline"><input type="checkbox" id="indexer-flaresolverr"> Use the FlareSolverr proxy/tag for this indexer</label>
+      <p id="indexer-status" class="hint" role="status" aria-live="polite"></p>
+      <div class="modal-actions">
+        <button type="button" id="indexer-back">Back</button>
+        <button type="button" id="indexer-submit" class="primary">Test and add</button>
+      </div>
+      <p class="hint">The credentials are sent directly to Prowlarr and are not saved in the console. The 2FA code, if required, is one-time.</p>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="upgrade-dialog" class="modal" aria-labelledby="upgrade-dialog-title">
+  <form method="dialog" class="modal-head">
+    <h3 id="upgrade-dialog-title">Upgrade app</h3>
+    <button value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="modal-body">
+    <p id="upgrade-summary" class="muted"></p>
+    <label for="upgrade-version">Target chart version
+      <select id="upgrade-version"></select>
+    </label>
+    <p id="upgrade-target-app" class="hint"></p>
+    <label class="check-row">
+      <input type="checkbox" id="upgrade-backup">
+      I have taken a backup or VM snapshot of this app's data.
+    </label>
+    <p class="hint">The upgrade uses Helm's atomic mode. A database migration still requires the backup as the real rollback.</p>
+    <p id="upgrade-status" class="hint" role="status" aria-live="polite"></p>
+    <div class="modal-actions">
+      <button type="button" id="upgrade-cancel">Cancel</button>
+      <button type="button" id="upgrade-start" class="primary">Upgrade</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="profiles-dialog" class="modal" aria-labelledby="profiles-dialog-title">
+  <form method="dialog" class="modal-head">
+    <h3 id="profiles-dialog-title">Media profiles</h3>
+    <button value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="modal-body">
+    <div class="card-head" style="margin-bottom:.7rem">
+      <div>
+        <span class="eyebrow">Installed app</span>
+        <h4 id="profile-app-label" style="margin:.1rem 0 0"></h4>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Profile</th><th>Language</th><th>Resolution</th><th>Role</th><th></th></tr></thead>
+        <tbody id="profile-list"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:.8rem">
+      <select id="profile-quality" style="min-width:11rem"></select>
+      <select id="profile-language" style="min-width:11rem"></select>
+      <button type="button" id="profile-add" class="primary">Add profile</button>
+    </div>
+    <p id="profile-status" class="hint" role="status" aria-live="polite"></p>
+    <p class="hint">Additional profiles can choose any resolution/language combination. The current default is unchanged; users can pick another profile in Seerr's Advanced request view. Additional profiles can be deleted only when no library item or active Seerr request uses them; the default and built-in profiles cannot be deleted.</p>
+  </div>
+</dialog>
+
+<script>
+const CFG = { zone: '', portalHost: '', configClass: 'local-path', mediaClass: 'umkim-thin-nfs', storageClasses: [], storageClassInfo: [] };
+const ENTRIES = {};
+
+const TAB_NAMES = ['overview', 'catalog', 'access', 'storage', 'certificates'];
+
+function activateTab(name, updateHash = true) {
+  if (!TAB_NAMES.includes(name)) name = 'overview';
+  for (const n of TAB_NAMES) {
+    const panel = document.getElementById('tab-' + n);
+    const button = document.querySelector('.tab[data-tab="' + n + '"]');
+    const selected = n === name;
+    if (panel) panel.hidden = !selected;
+    if (button) button.setAttribute('aria-selected', String(selected));
+  }
+  if (updateHash) {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  }
+}
+
+document.querySelectorAll('.tab').forEach(button => {
+  button.addEventListener('click', () => activateTab(button.dataset.tab));
+});
+document.addEventListener('click', event => {
+  const link = event.target.closest('a[href^="#"]');
+  if (!link) return;
+  const name = link.getAttribute('href').slice(1);
+  if (!TAB_NAMES.includes(name)) return;
+  event.preventDefault();
+  activateTab(name);
+});
+window.addEventListener('hashchange', () => activateTab(location.hash.slice(1), false));
+
+// Any value that reaches innerHTML goes through this. Names, hosts, invites and
+// WireGuard labels are user-controlled in the API, even when the console
+// created them.
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function note(text, cls) {
+  const el = document.getElementById('msg');
+  el.className = 'msg ' + (cls || '');
+  el.textContent = text;
+}
+
+function routesOf(e) {
+  if (e.Routes && e.Routes.length) return e.Routes;
+  if (e.Route) return [e.Route];
+  return [];
+}
+function defaultHost(route) {
+  return (route.Host || '').replace('{{ .zone }}', CFG.zone);
+}
+function optionList(select, values, chosen) {
+  select.innerHTML = '';
+  for (const v of values) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v;
+    if (v === chosen) o.selected = true;
+    select.appendChild(o);
+  }
+}
+
+const MEDIA_LANGUAGE_OPTIONS = [
+  { value: 'hu', label: 'Hungarian' },
+  { value: 'en', label: 'English' },
+  { value: 'de', label: 'German' },
+  { value: 'fr', label: 'French' },
+  { value: 'es', label: 'Spanish' },
+  { value: 'it', label: 'Italian' },
+  { value: 'pt', label: 'Portuguese' },
+  { value: 'pl', label: 'Polish' },
+  { value: 'cs', label: 'Czech' },
+  { value: 'sk', label: 'Slovak' },
+  { value: 'ro', label: 'Romanian' },
+  { value: 'ru', label: 'Russian' },
+  { value: 'uk', label: 'Ukrainian' },
+  { value: 'nl', label: 'Dutch' },
+  { value: 'sv', label: 'Swedish' },
+  { value: 'da', label: 'Danish' },
+  { value: 'fi', label: 'Finnish' },
+  { value: 'no', label: 'Norwegian' },
+  { value: 'tr', label: 'Turkish' },
+  { value: 'el', label: 'Greek' },
+  { value: 'ja', label: 'Japanese' },
+  { value: 'ko', label: 'Korean' },
+  { value: 'zh', label: 'Chinese' },
+  { value: 'ar', label: 'Arabic' },
+  { value: 'he', label: 'Hebrew' },
+];
+const MEDIA_QUALITY_OPTIONS = [
+  { value: '480p', label: '480p (SD)' },
+  { value: '720p', label: '720p (HD)' },
+  { value: '1080p', label: '1080p (Full HD)' },
+  { value: '2160p', label: '2160p (4K)' },
+];
+
+
+function optionMarkup(options, chosen) {
+  return options.map(option =>
+    `<option value="${esc(option.value)}"${option.value === chosen ? ' selected' : ''}>${esc(option.label)}</option>`
+  ).join('');
+}
+
+// Storage classes come from the cluster. Kubernetes does not record access
+// modes on a class, so the API adds observed/known modes and marks "unknown"
+// explicitly: the media picker warns instead of hiding the risk.
+function classOptions(select, chosen) {
+  const info = (CFG.storageClassInfo && CFG.storageClassInfo.length)
+    ? CFG.storageClassInfo
+    : CFG.storageClasses.map(name => ({ name }));
+  select.innerHTML = '';
+  for (const c of info) {
+    const o = document.createElement('option');
+    o.value = c.name;
+    const modes = (c.accessModes || []).join(',');
+    o.textContent = c.name + (modes ? ' (' + modes + ')' : '') + (c.default ? ' — default' : '');
+    o.dataset.modes = modes;
+    if (c.name === chosen) o.selected = true;
+    select.appendChild(o);
+  }
+}
+
+function mediaWarning() {
+  const sel = document.getElementById('med-class');
+  const el = document.getElementById('media-warn');
+  if (!sel || !el) return;
+  const modes = sel.selectedOptions[0]?.dataset.modes || '';
+  if (!modes) {
+    el.textContent = 'Access modes for this class are unknown. A single node can use ReadWriteOnce; an HA cluster needs ReadWriteMany.';
+  } else if (!modes.split(',').includes('RWX')) {
+    el.textContent = 'This class advertises ' + modes + ', not RWX. That is fine on a single node; an HA cluster needs a shared class.';
+  } else {
+    el.textContent = '';
+  }
+}
+
+async function loadConfig() {
+  try {
+    Object.assign(CFG, await (await fetch('/api/config')).json());
+  } catch (_) {}
+  const links = [];
+  if (CFG.portalHost) links.push(`<a href="https://${esc(CFG.portalHost)}" target="_blank" rel="noopener">portal</a>`);
+  links.push(`<a href="${esc(location.origin)}" target="_blank" rel="noopener">console</a>`);
+  const el = document.getElementById('platform-links');
+  if (el) el.innerHTML = 'Platform: ' + links.join(' · ');
+}
+
+async function loadCatalog() {
+  const rows = document.getElementById('catalog');
+  try {
+    const entries = await (await fetch('/api/catalog')).json();
+    rows.innerHTML = '';
+    for (const e of entries) {
+      ENTRIES[e.Name] = e;
+      const tr = document.createElement('tr');
+      const auth = e.Auth.Kind + (e.Auth.LDAP ? ' + ldap' : '');
+      tr.innerHTML = `<td>${esc(e.DisplayName || e.Name)}</td><td>${esc(auth)}</td><td><code>${esc(e.Chart.Version)}</code></td>`;
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.textContent = 'Install';
+      btn.onclick = () => openInstall(e);
+      td.appendChild(btn);
+      tr.appendChild(td);
+      rows.appendChild(tr);
+    }
+  } catch (_) {
+    rows.innerHTML = '<tr><td colspan="4">catalog unavailable</td></tr>';
+  }
+}
+
+function openInstall(e) {
+  const panel = document.getElementById('install-panel');
+  const sites = routesOf(e).filter(r => (r.Mode || 'site') === 'site');
+  let hostFields = '';
+  for (const r of sites) {
+    const key = r.Key || '';
+    const exp = r.Exposure || {};
+    const allowed = exp.Allowed || (r.RequireAuth ? ['authelia', 'vpn'] : ['public', 'authelia', 'vpn']);
+    const def = exp.Default || (r.RequireAuth ? 'authelia' : 'public');
+    const cert = r.Certificate || {};
+    const certAllowed = cert.Allowed || ['acme', 'default', 'secret'];
+    hostFields += `<div><label>${esc(key ? key + ' ' : '')}hostname</label>` +
+      `<input data-host-key="${esc(key)}" value="${esc(defaultHost(r))}" style="width:100%">` +
+      `<label>Exposure</label><select data-exposure-key="${esc(key)}">` +
+      allowed.map(v => `<option value="${esc(v)}"${v === def ? ' selected' : ''}>${esc(v)}</option>`).join('') +
+      `</select>` +
+      `<label>Certificate</label><select data-certificate-key="${esc(key)}">` +
+      certAllowed.map(v => `<option value="${esc(v)}"${v === (cert.Default || 'acme') ? ' selected' : ''}>${esc(v)}</option>`).join('') +
+      `</select>` +
+      `<input data-cert-secret-key="${esc(key)}" placeholder="TLS Secret name for manual" style="width:100%">` +
+      `<label><input type="checkbox" data-local-key="${esc(key)}"> also allow the local LAN</label>` +
+      `</div>`;
+  }
+  const chart = e.Chart || {};
+  const versions = chart.Versions && chart.Versions.length ? chart.Versions : [{ Version: chart.Version, Channel: 'stable', AppVersion: '' }];
+  const versionField = `<div><label>Chart version (no implicit latest)</label><select id="install-version">` +
+    versions.map(v => `<option value="${esc(v.Version)}"${v.Version === chart.Version ? ' selected' : ''}>` +
+      `${esc(v.Version)}${v.AppVersion ? ' · app ' + esc(v.AppVersion) : ''} · ${esc(v.Channel || 'stable')}</option>`).join('') +
+    `</select></div>`;
+  const mediaFields = e.Name === 'servarr'
+    ? `<div><label>Default media language</label><select id="install-media-language">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, 'hu')}</select></div>` +
+      `<div><label>Target resolution</label><select id="install-media-quality">${optionMarkup(MEDIA_QUALITY_OPTIONS, '720p')}</select></div>` +
+      `<div><label>Additional languages (optional, same target)</label>` +
+      `<select id="install-extra-languages" multiple size="5">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, '')}</select>` +
+      `<span class="hint">Ctrl/Cmd-click to offer additional language profiles. The default stays the default.</span></div>`
+    : '';
+  panel.innerHTML =
+    `<h3>Install ${esc(e.DisplayName || e.Name)}</h3>` +
+    `<div class="row">${versionField}${mediaFields}${hostFields}</div>` +
+    `<div class="row">` +
+      `<div><label>Config storage class (RWO)</label><select id="cfg-class"></select></div>` +
+      `<div><label>Media storage class (RWX on HA)</label><select id="med-class"></select></div>` +
+    `</div>` +
+    `<div id="media-warn" class="muted"></div>` +
+    `<div style="margin-top:1rem"><button id="do-install">Install</button> <button id="cancel-install">Cancel</button></div>`;
+  panel.style.display = 'block';
+  activateTab('catalog');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const syncLocal = () => {
+    for (const sel of panel.querySelectorAll('select[data-exposure-key]')) {
+      const key = sel.dataset.exposureKey;
+      const box = panel.querySelector(`input[data-local-key="${CSS.escape(key)}"]`);
+      if (box) {
+        box.disabled = sel.value !== 'vpn';
+        if (box.disabled) box.checked = false;
+      }
+    }
+    for (const sel of panel.querySelectorAll('select[data-certificate-key]')) {
+      const key = sel.dataset.certificateKey;
+      const input = panel.querySelector(`input[data-cert-secret-key="${CSS.escape(key)}"]`);
+      if (input) {
+        input.disabled = sel.value !== 'secret';
+        if (input.disabled) input.value = '';
+      }
+    }
+  };
+  for (const sel of panel.querySelectorAll('select[data-exposure-key], select[data-certificate-key]')) sel.onchange = syncLocal;
+  syncLocal();
+  classOptions(document.getElementById('cfg-class'), CFG.configClass);
+  classOptions(document.getElementById('med-class'), CFG.mediaClass);
+  document.getElementById('med-class').onchange = mediaWarning;
+  mediaWarning();
+  document.getElementById('cancel-install').onclick = () => { panel.style.display = 'none'; };
+  document.getElementById('do-install').onclick = () => doInstall(e, panel);
+}
+
+async function doInstall(e, panel) {
+  const btn = document.getElementById('do-install');
+  btn.disabled = true; btn.textContent = 'Installing…';
+  const hosts = {}, exposure = {}, certificate = {}, allowLocal = {};
+  for (const input of panel.querySelectorAll('input[data-host-key]')) hosts[input.dataset.hostKey] = input.value.trim();
+  for (const sel of panel.querySelectorAll('select[data-exposure-key]')) exposure[sel.dataset.exposureKey] = sel.value;
+  for (const sel of panel.querySelectorAll('select[data-certificate-key]')) {
+    let value = sel.value;
+    if (value === 'secret') {
+      const input = panel.querySelector(`input[data-cert-secret-key="${CSS.escape(sel.dataset.certificateKey)}"]`);
+      value = 'secret:' + (input ? input.value.trim() : '');
+    }
+    certificate[sel.dataset.certificateKey] = value;
+  }
+  for (const box of panel.querySelectorAll('input[data-local-key]')) {
+    if (box.checked) allowLocal[box.dataset.localKey] = true;
+  }
+  if (Object.values(exposure).includes('public') &&
+      !confirm('PUBLIC exposure makes this app reachable without the portal.\n\nContinue only if the app has its own authentication or is intentionally public.')) {
+    btn.disabled = false; btn.textContent = 'Install';
+    return;
+  }
+  const body = {
+    name: e.Name,
+    version: document.getElementById('install-version').value,
+    hosts, exposure, certificate, allowLocal,
+    configClass: document.getElementById('cfg-class').value,
+    mediaClass: document.getElementById('med-class').value,
+  };
+  if (e.Name === 'servarr') {
+    body.mediaLanguage = document.getElementById('install-media-language').value;
+    body.qualityCutoff = document.getElementById('install-media-quality').value;
+    body.extraLanguages = Array.from(document.getElementById('install-extra-languages').selectedOptions)
+      .map(option => option.value);
+  }
+  note(`installing ${e.Name}…`);
+  try {
+    const res = await fetch('/api/apps', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const job = JSON.parse(text);
+    panel.style.display = 'none';
+    loadApplications();
+    const out = await pollJob(job.id, 'installing');
+    if (out.status === 'error') throw new Error(out.error || 'install failed');
+    note(`installed ${out.result.Name} in ${out.result.Namespace}` +
+      (out.result.Routes && out.result.Routes.length ? '\n' + out.result.Routes.map(h => 'https://' + h).join('\n') : ''), 'ok');
+  } catch (err) {
+    note(String(err.message || err), 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Install';
+    loadInstalled();
+    loadApplications();
+  }
+}
+
+async function pollJob(id, label) {
+  let transient = 0;
+  for (;;) {
+    let res;
+    try {
+      res = await fetch('/api/jobs/' + encodeURIComponent(id));
+    } catch (err) {
+      if (transient++ >= 40) throw err;
+      note(`${label || 'working'}… reconnecting to the console`, '');
+      await new Promise(r => setTimeout(r, 1500));
+      continue;
+    }
+
+    // During an app install the identity chart can roll Authelia. The console
+    // route is behind forward-auth, so a poll can briefly get an empty 5xx even
+    // though the server-side Helm job is still running. Retry those instead of
+    // failing with "Unexpected end of JSON input".
+    const text = await res.text();
+    if (!res.ok || !text.trim()) {
+      if ((res.status >= 500 || !text.trim()) && transient++ < 40) {
+        note(`${label || 'working'}… waiting for the console`, '');
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      throw new Error(`job status HTTP ${res.status}${text.trim() ? ': ' + text.trim() : ''}`);
+    }
+
+    let j;
+    try {
+      j = JSON.parse(text);
+    } catch (_) {
+      // A 200 HTML body is usually the portal/login page after a session
+      // expires; retrying would loop on that page.
+      throw new Error('job status response was not JSON (session expired? reload and sign in)');
+    }
+    transient = 0;
+    const tail = (j.log || []).slice(-3).join('\n');
+    if (j.status === 'running') {
+      note(`${label || 'working'} ${j.name}…\n${tail}`, '');
+      if (Date.now() - lastApplicationRefresh > 5000) {
+        lastApplicationRefresh = Date.now();
+        loadApplications();
+      }
+      await new Promise(r => setTimeout(r, 1500));
+      continue;
+    }
+    loadApplications();
+    return j;
+  }
+}
+
+async function showStatus(name) {
+  const el = document.getElementById('app-detail');
+  el.className = 'msg';
+  el.textContent = 'loading…';
+  try {
+    const st = await (await fetch('/api/apps/' + encodeURIComponent(name))).json();
+    const lines = [`${st.name} (${st.namespace}) — helm ${st.helmStatus}, ${st.ready ? 'ready' : 'not ready'}`];
+    for (const c of st.components || []) lines.push(`  ${c.kind} ${c.name}  ${c.ready || ''} ${c.status}`);
+    for (const h of st.routes || []) lines.push(`  route  https://${h}`);
+    el.className = 'msg ' + (st.ready ? 'ok' : '');
+    el.textContent = lines.join('\n');
+    el.style.display = 'block';
+  } catch (err) {
+    el.className = 'msg err';
+    el.textContent = String(err.message || err);
+    el.style.display = 'block';
+  }
+}
+
+async function loadInstalled() {
+  const rows = document.getElementById('installed');
+  try {
+    const apps = await (await fetch('/api/apps')).json();
+    rows.innerHTML = '';
+    if (!apps.length) { rows.innerHTML = '<tr><td colspan="4" class="muted">nothing installed yet</td></tr>'; return; }
+    for (const a of apps) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(a.name)}</td><td>${esc(a.namespace)}</td><td><code>${esc(a.chart)}</code></td>`;
+      const td = document.createElement('td');
+      const st = document.createElement('button');
+      st.textContent = 'Status'; st.onclick = () => showStatus(a.name);
+      const un = document.createElement('button');
+      un.textContent = 'Uninstall'; un.onclick = () => uninstall(a.name, false);
+      const pg = document.createElement('button');
+      pg.textContent = 'Purge'; pg.title = 'also delete the namespace, PVCs and bind Secret'; pg.onclick = () => uninstall(a.name, true);
+      td.append(st, document.createTextNode(' '), un, document.createTextNode(' '), pg);
+      tr.appendChild(td); rows.appendChild(tr);
+    }
+  } catch (_) { rows.innerHTML = '<tr><td colspan="4">apps unavailable</td></tr>'; }
+}
+
+async function uninstall(name, purge) {
+  if (!confirm(`Uninstall ${name}${purge ? ' and delete its data' : ''}?`)) return;
+  note(`uninstalling ${name}…`);
+  try {
+    const res = await fetch('/api/apps/' + encodeURIComponent(name) + (purge ? '?purge=true' : ''), { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    note(`uninstalled ${name}${purge ? ' (purged)' : ''}`, 'ok');
+  } catch (err) { note(String(err.message || err), 'err'); }
+  finally { loadInstalled(); loadApplications(); }
+}
+
+// Applications: installed apps plus any in-flight install/upgrade/setup job.
+// /api/status is cached server-side; /api/jobs is in-memory and cheap.
+function jobLabel(j) {
+  if (j.kind === 'install') {
+    if (j.status === 'error') return 'install failed';
+    return j.status === 'done' ? 'installed' : 'installing';
+  }
+  if (j.kind === 'upgrade') {
+    if (j.status === 'error') return 'upgrade failed';
+    return j.status === 'done' ? 'upgraded' : 'upgrading';
+  }
+  if (j.kind === 'setup') {
+    if (j.status === 'error') return 'setup failed';
+    return j.status === 'done' ? 'set up' : 'setting up';
+  }
+  return j.kind || 'working';
+}
+
+function jobProgress(j) {
+  if (j.status === 'done') return 'Helm release ready';
+  const tail = (j.log || []).slice(-1)[0];
+  if (tail) return tail;
+  return j.status === 'error' ? (j.error || 'failed') : 'starting…';
+}
+
+let lastApplicationRefresh = 0;
+
+async function loadApplications() {
+  const rows = document.getElementById('applications');
+  try {
+    const [appsRes, jobsRes] = await Promise.all([
+      fetch('/api/status'),
+      fetch('/api/jobs').catch(() => null),
+    ]);
+    const apps = await appsRes.json();
+    const jobs = jobsRes && jobsRes.ok ? await jobsRes.json() : [];
+    const running = new Map();
+    for (const j of jobs) {
+      if (j.status === 'running') running.set(j.name, j);
+    }
+    const appNames = new Set(apps.map(a => a.name));
+    const synthetic = [];
+    const syntheticNames = new Set();
+    for (const j of running.values()) {
+      if (!appNames.has(j.name) && !syntheticNames.has(j.name)) {
+        synthetic.push(j);
+        syntheticNames.add(j.name);
+      }
+    }
+    // If the status cache is still older than the completed install, keep a
+    // short "installed" row while the app transitions into the health list.
+    const doneCutoff = Date.now() - 60 * 1000;
+    for (const j of jobs) {
+      if (j.status === 'done' && j.kind === 'install' && !appNames.has(j.name) &&
+          !syntheticNames.has(j.name) && j.finished && Date.parse(j.finished) >= doneCutoff) {
+        synthetic.push(j);
+        syntheticNames.add(j.name);
+      }
+    }
+    // A failed install has no Helm release to display. Keep the failure visible
+    // for a short while so the user can see why the app never appeared.
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const j of jobs) {
+      if (j.status === 'error' && j.kind === 'install' && !appNames.has(j.name) &&
+          !syntheticNames.has(j.name) && j.finished && Date.parse(j.finished) >= cutoff) {
+        synthetic.push(j);
+        syntheticNames.add(j.name);
+      }
+    }
+
+    rows.innerHTML = '';
+    if (!apps.length && !synthetic.length) {
+      rows.innerHTML = '<tr><td colspan="5" class="muted">nothing installed yet</td></tr>';
+      return;
+    }
+    for (const j of synthetic) {
+      const failed = j.status === 'error';
+      const chip = failed ? 'err' : (j.status === 'done' ? 'ok' : 'warn');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(j.name)}<br><span class="muted">new app</span></td>` +
+        `<td><span class="chip ${chip}">${esc(jobLabel(j))}</span><br>` +
+        `<span class="muted job-progress">${esc(jobProgress(j))}</span></td>` +
+        '<td><span class="muted">—</span></td>' +
+        '<td><span class="muted">—</span></td><td><span class="muted">—</span></td>';
+      rows.appendChild(tr);
+    }
+    for (const a of apps) {
+      const job = running.get(a.name);
+      const configuring = (a.helmStatus || '').startsWith('pending-');
+      let state = a.ready ? 'ready' : (configuring ? 'configuring' : 'not ready');
+      let chip = a.ready ? 'ok' : (configuring ? 'warn' : 'err');
+      let detail = `helm ${esc(a.helmStatus || '?')}`;
+      if (job) {
+        state = jobLabel(job);
+        chip = 'warn';
+        detail = esc(jobProgress(job));
+      }
+      const links = (a.routes || []).map(h =>
+        `<a href="https://${esc(h)}" target="_blank" rel="noopener">${esc(h)}</a>`).join('<br>') ||
+        '<span class="muted">—</span>';
+      let version = '';
+      if (a.chart) {
+        version = `<span class="muted">current</span> ${esc(a.chart)}` +
+          (a.appVersion ? ` <span class="muted">· app ${esc(a.appVersion)}</span>` : '');
+      }
+      if (a.latestChart) {
+        if (a.updateAvailable) {
+          version += `<br><span class="chip warn">new ${esc(a.latestChart)}</span>` +
+            (a.latestAppVersion ? ` <span class="muted">· app ${esc(a.latestAppVersion)}</span>` : '');
+        } else {
+          version += `<br><span class="muted">latest ${esc(a.latestChart)}</span>`;
+        }
+      }
+      if (!version) version = '<span class="muted">—</span>';
+      const upgradeLabel = a.updateAvailable ? `Upgrade to ${esc(a.latestChart)}` : 'Versions…';
+      let setup = '';
+      if (a.name === 'servarr') {
+        setup = `<span class="muted">${esc(a.bootstrap || 'pending')}</span><br>` +
+          '<button data-setup>Run setup</button> ' +
+          `<button data-indexers data-app="${esc(a.name)}" data-namespace="${esc(a.namespace)}">Indexers</button> ` +
+          `<button data-profiles data-app="${esc(a.name)}" data-namespace="${esc(a.namespace)}">Profiles</button>`;
+      }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(a.name)}<br><span class="muted">${esc(a.namespace)}</span></td>` +
+        `<td><span class="chip ${chip}">${esc(state)}</span><br><span class="muted job-progress">${detail}</span></td>` +
+        `<td>${version}</td>` +
+        `<td>${links}</td><td>${setup}<br><button data-upgrade="${esc(a.name)}">${upgradeLabel}</button></td>`;
+      for (const b of tr.querySelectorAll('[data-setup]')) b.onclick = runSetup;
+      for (const b of tr.querySelectorAll('[data-indexers]')) {
+        b.onclick = () => openIndexerDialog(b.dataset.app, b.dataset.namespace);
+      }
+      for (const b of tr.querySelectorAll('[data-profiles]')) {
+        b.onclick = () => openProfilesDialog(b.dataset.app, b.dataset.namespace);
+      }
+      for (const b of tr.querySelectorAll('[data-upgrade]')) b.onclick = () => upgradeApp(b.dataset.upgrade);
+      rows.appendChild(tr);
+    }
+    document.getElementById('apps-updated').textContent = 'checked ' + new Date().toLocaleTimeString();
+  } catch (_) {
+    rows.innerHTML = '<tr><td colspan="5">status unavailable</td></tr>';
+  }
+}
+
+let currentIndexerApp = null;
+let currentIndexerDefinition = null;
+
+
+function appIndexerURL(path, params = {}) {
+  if (!currentIndexerApp) throw new Error('no servarr app selected');
+  const url = new URL('/api/apps/' + encodeURIComponent(currentIndexerApp.name) + path, location.origin);
+  url.searchParams.set('namespace', currentIndexerApp.namespace);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) url.searchParams.set(key, value);
+  }
+  return url.pathname + url.search;
+}
+
+async function loadIndexerList() {
+  const rows = document.getElementById('indexer-list');
+  if (!currentIndexerApp) {
+    rows.innerHTML = '<tr><td colspan="4" class="muted">no servarr app selected</td></tr>';
+    return;
+  }
+  rows.innerHTML = '<tr><td colspan="4" class="muted">loading…</td></tr>';
+  try {
+    const res = await fetch(appIndexerURL('/indexers'));
+    if (!res.ok) throw new Error(await res.text() || ('HTTP ' + res.status));
+    const indexers = await res.json();
+    if (!Array.isArray(indexers) || !indexers.length) {
+      rows.innerHTML = '<tr><td colspan="4" class="muted">no indexers configured</td></tr>';
+      return;
+    }
+    rows.innerHTML = '';
+    for (const indexer of indexers) {
+      const tr = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = indexer.name || '(unnamed)';
+      const impl = document.createElement('td');
+      impl.textContent = indexer.implementation || '—';
+      const protocol = document.createElement('td');
+      protocol.textContent = indexer.protocol || '—';
+      const status = document.createElement('td');
+      const chip = document.createElement('span');
+      chip.className = 'chip ' + (indexer.enable ? 'ok' : 'warn');
+      chip.textContent = indexer.enable ? 'enabled' : 'disabled';
+      status.appendChild(chip);
+      tr.append(name, impl, protocol, status);
+      rows.appendChild(tr);
+    }
+  } catch (err) {
+    rows.innerHTML = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'muted';
+    td.textContent = 'indexers unavailable: ' + String(err.message || err);
+    tr.appendChild(td);
+    rows.appendChild(tr);
+  }
+}
+
+function openIndexerDialog(name, namespace) {
+  const dialog = document.getElementById('indexer-dialog');
+  currentIndexerApp = { name, namespace };
+  currentIndexerDefinition = null;
+  document.getElementById('indexer-app-label').textContent = `${name} · ${namespace}`;
+  document.getElementById('indexer-search-panel').hidden = true;
+  document.getElementById('indexer-form').hidden = true;
+  document.getElementById('indexer-results').textContent = '';
+  document.getElementById('indexer-status').textContent = '';
+  if (!dialog.open) dialog.showModal();
+  loadIndexerList();
+}
+
+function openIndexerSearch() {
+  if (!currentIndexerApp) return;
+  document.getElementById('indexer-search-panel').hidden = false;
+  document.getElementById('indexer-form').hidden = true;
+  document.getElementById('indexer-results').textContent = '';
+  document.getElementById('indexer-status').textContent = '';
+  const search = document.getElementById('indexer-search');
+  search.value = '';
+  searchIndexerDefinitions();
+  search.focus();
+}
+
+async function searchIndexerDefinitions() {
+  const q = document.getElementById('indexer-search').value.trim();
+  const results = document.getElementById('indexer-results');
+  results.textContent = 'Searching…';
+  try {
+    const res = await fetch(appIndexerURL('/indexer-definitions', { q }));
+    if (!res.ok) throw new Error(await res.text() || ('HTTP ' + res.status));
+    const defs = await res.json();
+    results.innerHTML = '';
+    if (!Array.isArray(defs) || !defs.length) {
+      results.textContent = 'No matching Prowlarr definitions.';
+      return;
+    }
+    for (const def of defs) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'indexer-result';
+      const strong = document.createElement('strong');
+      strong.textContent = def.name || def.definitionName;
+      const detail = document.createElement('span');
+      detail.className = 'muted';
+      detail.textContent = [def.implementationName || def.implementation, def.language, def.privacy]
+        .filter(Boolean).join(' · ');
+      btn.append(strong, detail);
+      btn.onclick = () => chooseIndexerDefinition(def.definitionName);
+      results.appendChild(btn);
+    }
+  } catch (err) {
+    results.textContent = 'Could not load definitions: ' + String(err.message || err);
+  }
+}
+
+async function chooseIndexerDefinition(definitionName) {
+  const status = document.getElementById('indexer-status');
+  status.textContent = 'Loading definition…';
+  try {
+    const res = await fetch(appIndexerURL('/indexer-definition', { definition: definitionName }));
+    if (!res.ok) throw new Error(await res.text() || ('HTTP ' + res.status));
+    const def = await res.json();
+    currentIndexerDefinition = def;
+    document.getElementById('indexer-search-panel').hidden = true;
+    document.getElementById('indexer-form').hidden = false;
+    document.getElementById('indexer-definition-title').textContent = def.name || def.definitionName;
+    document.getElementById('indexer-definition-description').textContent = def.description || '';
+    document.getElementById('indexer-name').value = def.name || def.definitionName;
+    document.getElementById('indexer-flaresolverr').checked = false;
+    const submit = document.getElementById('indexer-submit');
+    submit.textContent = 'Test and add';
+    submit.disabled = false;
+    submit.onclick = submitIndexer;
+    renderIndexerFields(def);
+    status.textContent = '';
+    document.getElementById('indexer-fields').scrollIntoView({ block: 'nearest' });
+  } catch (err) {
+    status.textContent = 'Could not load the definition: ' + String(err.message || err);
+  }
+}
+
+function renderIndexerFields(def) {
+  const host = document.getElementById('indexer-fields');
+  host.innerHTML = '';
+  const advanced = document.createElement('details');
+  const advancedSummary = document.createElement('summary');
+  advancedSummary.textContent = 'Advanced options';
+  advanced.appendChild(advancedSummary);
+  let advancedCount = 0;
+
+  const addField = (container, field) => {
+    if (!field || !field.name) return;
+    if (field.type === 'info') {
+      const info = document.createElement('p');
+      info.className = 'hint';
+      info.textContent = field.value || field.label || '';
+      container.appendChild(info);
+      return;
+    }
+    const label = document.createElement('label');
+    label.className = 'indexer-field';
+    const text = document.createElement('span');
+    text.textContent = field.label || field.name;
+    label.appendChild(text);
+
+    let input;
+    if (field.type === 'select') {
+      input = document.createElement('select');
+      const options = [];
+      if (field.selectOptionsProviderAction === 'getUrls' && Array.isArray(def.indexerUrls)) {
+        for (const url of def.indexerUrls) options.push({ value: url, label: url });
+      } else if (Array.isArray(field.options)) {
+        for (const option of field.options) options.push({ value: option.value, label: option.name || option.label || option.value });
+      }
+      if (!options.length) {
+        input = document.createElement('input');
+        input.type = 'text';
+      } else {
+        for (const option of options) {
+          const opt = document.createElement('option');
+          opt.value = String(option.value);
+          opt.textContent = option.label;
+          if (String(field.value ?? '') === String(option.value)) opt.selected = true;
+          input.appendChild(opt);
+        }
+      }
+    } else if (field.type === 'checkbox') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = field.value === true;
+    } else if (field.type === 'number') {
+      input = document.createElement('input');
+      input.type = 'number';
+      input.step = 'any';
+      if (field.value !== undefined && field.value !== null) input.value = String(field.value);
+    } else {
+      input = document.createElement('input');
+      input.type = field.type === 'password' ? 'password' : 'text';
+      input.autocomplete = field.type === 'password' ? 'new-password' : 'off';
+      if (field.value !== undefined && field.value !== null) input.value = String(field.value);
+    }
+    input.dataset.indexerField = field.name;
+    input.dataset.indexerType = field.type || 'textbox';
+    label.appendChild(input);
+    if (field.helpText) {
+      const hint = document.createElement('span');
+      hint.className = 'hint';
+      hint.textContent = field.helpText;
+      label.appendChild(hint);
+    }
+    container.appendChild(label);
+  };
+
+  for (const field of def.fields || []) {
+    if (field.advanced) {
+      addField(advanced, field);
+      advancedCount++;
+    } else {
+      addField(host, field);
+    }
+  }
+  if (advancedCount) host.appendChild(advanced);
+}
+
+async function submitIndexer() {
+  if (!currentIndexerDefinition) return;
+  const btn = document.getElementById('indexer-submit');
+  const status = document.getElementById('indexer-status');
+  const fields = {};
+  for (const input of document.querySelectorAll('#indexer-fields [data-indexer-field]')) {
+    const name = input.dataset.indexerField;
+    if (input.dataset.indexerType === 'checkbox') {
+      fields[name] = input.checked;
+    } else if (input.value !== '') {
+      fields[name] = input.value;
+    }
+  }
+  const body = {
+    definitionName: currentIndexerDefinition.definitionName,
+    name: document.getElementById('indexer-name').value.trim(),
+    fields,
+    flaresolverr: document.getElementById('indexer-flaresolverr').checked,
+  };
+  let added = false;
+  btn.disabled = true; btn.textContent = 'Testing…';
+  status.textContent = 'Testing the indexer with Prowlarr…';
+  try {
+    const res = await fetch(appIndexerURL('/indexers'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const indexer = JSON.parse(text);
+    added = true;
+    status.textContent = `Added ${indexer.name || body.name}. Use Back to search for another indexer.`;
+    note(`indexer ${indexer.name || body.name} added`, 'ok');
+    await loadIndexerList();
+    btn.textContent = 'Added';
+  } catch (err) {
+    status.textContent = 'Could not add the indexer: ' + String(err.message || err);
+    note(String(err.message || err), 'err');
+    btn.textContent = 'Test and add';
+  } finally {
+    btn.disabled = added;
+  }
+}
+
+let currentProfileApp = null;
+
+function profileURL(path) {
+  if (!currentProfileApp) throw new Error('no servarr app selected');
+  const url = new URL('/api/apps/' + encodeURIComponent(currentProfileApp.name) + path, location.origin);
+  url.searchParams.set('namespace', currentProfileApp.namespace);
+  return url.pathname + url.search;
+}
+
+function openProfilesDialog(name, namespace) {
+  const dialog = document.getElementById('profiles-dialog');
+  currentProfileApp = { name, namespace };
+  document.getElementById('profile-app-label').textContent = `${name} · ${namespace}`;
+  document.getElementById('profile-status').textContent = '';
+  const quality = document.getElementById('profile-quality');
+  quality.innerHTML = '';
+  for (const option of MEDIA_QUALITY_OPTIONS) {
+    const o = document.createElement('option');
+    o.value = option.value;
+    o.textContent = option.label;
+    quality.appendChild(o);
+  }
+  const select = document.getElementById('profile-language');
+  select.innerHTML = '';
+  for (const option of MEDIA_LANGUAGE_OPTIONS) {
+    const o = document.createElement('option');
+    o.value = option.value;
+    o.textContent = option.label;
+    select.appendChild(o);
+  }
+  if (!dialog.open) dialog.showModal();
+  loadProfiles();
+}
+
+async function loadProfiles() {
+  const rows = document.getElementById('profile-list');
+  if (!currentProfileApp) return;
+  rows.innerHTML = '<tr><td colspan="5" class="muted">loading…</td></tr>';
+  try {
+    const res = await fetch(profileURL('/profiles'));
+    if (!res.ok) throw new Error(await res.text() || ('HTTP ' + res.status));
+    const profiles = await res.json();
+    rows.innerHTML = '';
+    if (!Array.isArray(profiles) || !profiles.length) {
+      rows.innerHTML = '<tr><td colspan="5" class="muted">no media profiles</td></tr>';
+      return;
+    }
+    for (const profile of profiles) {
+      const tr = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = profile.name || '—';
+      const language = document.createElement('td');
+      language.textContent = profile.language || profile.languageCode || '—';
+      const quality = document.createElement('td');
+      quality.textContent = profile.quality || '—';
+      const role = document.createElement('td');
+      const chip = document.createElement('span');
+      chip.className = 'chip ' + (profile.default ? 'ok' : 'warn');
+      chip.textContent = profile.default ? 'default' : 'additional';
+      role.appendChild(chip);
+      const action = document.createElement('td');
+      if (!profile.default) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'danger';
+        del.textContent = 'Delete';
+        del.onclick = () => deleteProfile(profile.name);
+        action.appendChild(del);
+      }
+      tr.append(name, language, quality, role, action);
+      rows.appendChild(tr);
+    }
+  } catch (err) {
+    rows.innerHTML = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 5;
+    td.className = 'muted';
+    td.textContent = 'profiles unavailable: ' + String(err.message || err);
+    tr.appendChild(td);
+    rows.appendChild(tr);
+  }
+}
+
+async function deleteProfile(name) {
+  if (!currentProfileApp) return;
+  if (!confirm(`Delete profile "${name}" from Sonarr and Radarr?`)) return;
+  const status = document.getElementById('profile-status');
+  status.textContent = 'Deleting…';
+  try {
+    const url = profileURL('/profiles') + '&profile=' + encodeURIComponent(name);
+    const res = await fetch(url, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await res.text() || ('HTTP ' + res.status));
+    status.textContent = 'Profile deleted; the default was not changed.';
+    note('media profile deleted', 'ok');
+    await loadProfiles();
+  } catch (err) {
+    status.textContent = 'Could not delete the profile: ' + String(err.message || err);
+    note(String(err.message || err), 'err');
+  }
+}
+
+async function addProfile() {
+  if (!currentProfileApp) return;
+  const btn = document.getElementById('profile-add');
+  const status = document.getElementById('profile-status');
+  const language = document.getElementById('profile-language').value;
+  const qualityCutoff = document.getElementById('profile-quality').value;
+  btn.disabled = true; btn.textContent = 'Adding…';
+  status.textContent = 'Creating the profile in Sonarr and Radarr…';
+  try {
+    const res = await fetch(profileURL('/profiles'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language, qualityCutoff }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    status.textContent = 'Profile added; the default was not changed.';
+    note('media profile added', 'ok');
+    await loadProfiles();
+  } catch (err) {
+    status.textContent = 'Could not add the profile: ' + String(err.message || err);
+    note(String(err.message || err), 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add profile';
+  }
+}
+
+let upgradeAppName = null;
+let upgradeChoices = [];
+
+function syncUpgradeTarget() {
+  const select = document.getElementById('upgrade-version');
+  const choice = upgradeChoices.find(v => v.Version === select.value);
+  document.getElementById('upgrade-target-app').textContent = choice && choice.AppVersion
+    ? `Application version: ${choice.AppVersion} · channel ${choice.Channel || 'stable'}`
+    : '';
+}
+
+async function upgradeApp(name) {
+  try {
+    const vi = await (await fetch('/api/apps/' + encodeURIComponent(name) + '/versions')).json();
+    const choices = (vi.versions || []).filter(v => v.Version !== vi.installed);
+    if (!choices.length) {
+      note(`${name} is already on the catalogued version ${vi.installed || 'unknown'}`, 'ok');
+      return;
+    }
+    upgradeAppName = name;
+    upgradeChoices = choices;
+    document.getElementById('upgrade-summary').textContent = `${name}: installed ${vi.installed || 'unknown'}`;
+    const select = document.getElementById('upgrade-version');
+    select.innerHTML = choices.map(v =>
+      `<option value="${esc(v.Version)}">${esc(v.Version)}${v.Channel ? ' · ' + esc(v.Channel) : ''}</option>`).join('');
+    document.getElementById('upgrade-backup').checked = false;
+    document.getElementById('upgrade-status').textContent = '';
+    syncUpgradeTarget();
+    select.onchange = syncUpgradeTarget;
+    const dialog = document.getElementById('upgrade-dialog');
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  } catch (err) { note(String(err.message || err), 'err'); }
+}
+
+async function startUpgrade() {
+  if (!upgradeAppName) return;
+  const name = upgradeAppName;
+  const target = document.getElementById('upgrade-version').value;
+  const status = document.getElementById('upgrade-status');
+  const btn = document.getElementById('upgrade-start');
+  if (!document.getElementById('upgrade-backup').checked) {
+    status.textContent = 'Confirm the backup first.';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Upgrading…';
+  status.textContent = `Starting ${name} → ${target}…`;
+  try {
+    const res = await fetch('/api/apps/' + encodeURIComponent(name) + '/upgrade', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: target, confirmBackup: true }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const job = JSON.parse(text);
+    document.getElementById('upgrade-dialog').close();
+    loadApplications();
+    const out = await pollJob(job.id, 'upgrading');
+    if (out.status === 'error') throw new Error(out.error || 'upgrade failed');
+    note(`upgraded ${name} to chart ${out.result.Chart}`, 'ok');
+    loadApplications(); loadInstalled();
+  } catch (err) {
+    status.textContent = 'Upgrade failed: ' + String(err.message || err);
+    note(String(err.message || err), 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Upgrade';
+  }
+}
+
+async function runSetup() {
+  try {
+    const res = await fetch('/api/apps/servarr/setup', { method: 'POST' });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const job = JSON.parse(text);
+    loadApplications();
+    const out = await pollJob(job.id, 'setting up');
+    if (out.status === 'error') throw new Error(out.error || 'setup failed');
+    note(`media stack setup ${out.result?.bootstrap || 'finished'}`, 'ok');
+    loadApplications();
+  } catch (err) { note(String(err.message || err), 'err'); }
+}
+
+function inviteLink(token) {
+  const host = CFG.portalHost || location.host;
+  return `https://${host}/invite?token=${encodeURIComponent(token)}`;
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.top = '-1000px';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  try {
+    if (!document.execCommand('copy')) throw new Error('copy failed');
+  } finally {
+    area.remove();
+  }
+}
+
+function showInviteLink(link) {
+  const dialog = document.getElementById('invite-dialog');
+  const input = document.getElementById('invite-link');
+  input.value = link;
+  document.getElementById('invite-open').href = link;
+  document.getElementById('invite-copy-status').textContent = '';
+  if (typeof dialog.showModal === 'function') {
+    dialog.showModal();
+    input.focus();
+    input.select();
+  } else {
+    window.prompt('Invitation link', link);
+  }
+}
+
+async function copyInviteLink(token) {
+  try {
+    await copyText(inviteLink(token));
+    note('invitation link copied', 'ok');
+  } catch (err) {
+    note(String(err.message || err), 'err');
+  }
+}
+
+document.getElementById('invite-copy').addEventListener('click', async () => {
+  const input = document.getElementById('invite-link');
+  const status = document.getElementById('invite-copy-status');
+  status.textContent = 'Copying…';
+  try {
+    await copyText(input.value);
+    status.textContent = 'Copied to the clipboard.';
+  } catch (_) {
+    input.focus();
+    input.select();
+    status.textContent = 'Select the link and copy it manually.';
+  }
+});
+document.getElementById('invite-close').addEventListener('click', () => {
+  document.getElementById('invite-dialog').close();
+});
+
+function inviteStatus(i) {
+  if (i.used) return 'used';
+  if (new Date(i.expires) < new Date()) return 'expired';
+  return 'expires ' + new Date(i.expires).toLocaleDateString();
+}
+
+async function loadGroups() {
+  const sel = document.getElementById('invite-group');
+  try {
+    const groups = await (await fetch('/api/directory/groups')).json();
+    sel.innerHTML = '';
+    for (const g of groups) {
+      const o = document.createElement('option');
+      o.value = g; o.textContent = g;
+      sel.appendChild(o);
+    }
+  } catch (_) {}
+}
+
+async function loadInvites() {
+  const rows = document.getElementById('invites');
+  try {
+    const invites = await (await fetch('/api/invites')).json();
+    rows.innerHTML = '';
+    if (!invites.length) { rows.innerHTML = '<tr><td colspan="5" class="muted">no invitations yet</td></tr>'; return; }
+    for (const i of invites) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(i.displayName || i.email || '—')}</td><td>${esc(i.group)}</td><td>${esc(inviteStatus(i))}</td>` +
+        `<td><code>${esc(i.token.slice(0, 8))}…</code></td>`;
+      const td = document.createElement('td');
+      const active = !i.used && new Date(i.expires) >= new Date();
+      if (active) {
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy link'; copy.onclick = () => copyInviteLink(i.token);
+        td.appendChild(copy); td.appendChild(document.createTextNode(' '));
+      }
+      const btn = document.createElement('button');
+      btn.textContent = 'Revoke'; btn.onclick = () => revokeInvite(i.token);
+      td.appendChild(btn); tr.appendChild(td); rows.appendChild(tr);
+    }
+  } catch (_) { rows.innerHTML = '<tr><td colspan="5">invites unavailable</td></tr>'; }
+}
+
+async function revokeInvite(token) {
+  if (!confirm('Revoke this invitation?')) return;
+  try {
+    const res = await fetch('/api/invites/' + encodeURIComponent(token), { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    note('invitation revoked', 'ok');
+  } catch (err) { note(String(err.message || err), 'err'); }
+  finally { loadInvites(); }
+}
+
+document.getElementById('invite-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const displayName = document.getElementById('invite-name').value.trim();
+  const group = document.getElementById('invite-group').value;
+  note('creating an invite…');
+  try {
+    const res = await fetch('/api/invites', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName, group }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const out = JSON.parse(text);
+    showInviteLink(out.link || inviteLink(out.invite?.token || ''));
+    note('invitation created', 'ok');
+    document.getElementById('invite-name').value = '';
+  } catch (err) { note(String(err.message || err), 'err'); }
+  finally { loadInvites(); }
+});
+
+async function loadWg() {
+  const rows = document.getElementById('wg-list');
+  try {
+    const peers = await (await fetch('/api/wg/clients')).json();
+    rows.innerHTML = '';
+    if (!peers.length) { rows.innerHTML = '<tr><td colspan="4" class="muted">no clients yet</td></tr>'; return; }
+    for (const p of peers) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(p.name)}</td><td>${esc(p.address)}</td><td><code>${esc(p.publicKey.slice(0, 20))}…</code></td>`;
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.textContent = 'Revoke'; btn.onclick = () => revokeWg(p.name);
+      td.appendChild(btn); tr.appendChild(td); rows.appendChild(tr);
+    }
+  } catch (_) { rows.innerHTML = '<tr><td colspan="4">WireGuard unavailable</td></tr>'; }
+}
+
+async function revokeWg(name) {
+  if (!confirm(`Revoke WireGuard client ${name}?`)) return;
+  try {
+    const res = await fetch('/api/wg/clients/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    note(`revoked ${name}`, 'ok');
+  } catch (err) { note(String(err.message || err), 'err'); }
+  finally { loadWg(); }
+}
+
+document.getElementById('wg-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const name = document.getElementById('wg-name').value.trim();
+  if (!name) return;
+  try {
+    const res = await fetch('/api/wg/clients', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const out = JSON.parse(text);
+    document.getElementById('wg-config').textContent = out.config;
+    const qr = document.getElementById('wg-qr');
+    if (out.qr) { qr.src = out.qr; qr.style.display = 'inline-block'; } else { qr.style.display = 'none'; }
+    document.getElementById('wg-download').onclick = () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([out.config], { type: 'text/plain' }));
+      a.download = out.name + '.conf'; a.click(); URL.revokeObjectURL(a.href);
+    };
+    document.getElementById('wg-result').style.display = 'block';
+    document.getElementById('wg-name').value = '';
+  } catch (err) { note(String(err.message || err), 'err'); }
+  finally { loadWg(); }
+});
+
+let STORAGE_DISKS = [];
+let STORAGE_MODE = 'local';
+let STORAGE_LOCAL_AVAILABLE = true;
+
+function setStorageMode(mode) {
+  if (mode === 'local' && !STORAGE_LOCAL_AVAILABLE) mode = 'external';
+  STORAGE_MODE = mode;
+  document.getElementById('storage-local').hidden = mode !== 'local';
+  document.getElementById('storage-external').hidden = mode !== 'external';
+  document.getElementById('storage-mode-local').setAttribute('aria-pressed', String(mode === 'local'));
+  document.getElementById('storage-mode-external').setAttribute('aria-pressed', String(mode === 'external'));
+}
+
+function renderLocalStorage(exports) {
+  const list = document.getElementById('storage-list');
+  list.innerHTML = '';
+  if (!exports.length) {
+    list.innerHTML = '<tr><td colspan="6" class="muted">no local exports yet</td></tr>';
+    return;
+  }
+  for (const e of exports) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(e.name)}</td><td>${esc(e.kind)}</td><td>${esc(e.storageClass)}</td>` +
+      `<td>${esc(e.mountpoint)}</td><td>${esc(e.device || '—')}</td>`;
+    const td = document.createElement('td');
+    const b = document.createElement('button'); b.textContent = 'Remove';
+    b.onclick = () => removeStorage(e.name);
+    td.appendChild(b); tr.appendChild(td); list.appendChild(tr);
+  }
+}
+
+function renderExternalStorage(exports) {
+  const list = document.getElementById('external-storage-list');
+  list.innerHTML = '';
+  if (!exports.length) {
+    list.innerHTML = '<tr><td colspan="5" class="muted">no external NFS exports yet</td></tr>';
+    return;
+  }
+  for (const e of exports) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(e.storageClass)}</td><td>${esc(e.server || '—')}</td>` +
+      `<td><code>${esc(e.export)}</code></td><td>${esc(e.mountOptions || '—')}</td>`;
+    const td = document.createElement('td');
+    const b = document.createElement('button'); b.textContent = 'Remove';
+    b.onclick = () => removeStorage(e.name);
+    td.appendChild(b); tr.appendChild(td); list.appendChild(tr);
+  }
+}
+
+async function loadStorage() {
+  const unavailable = document.getElementById('storage-unavailable');
+  let records = [];
+  let exportsOK = true;
+  try {
+    const res = await fetch('/api/storage');
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    records = await res.json();
+  } catch (_) { exportsOK = false; }
+
+  let localAvailable = true;
+  try {
+    const res = await fetch('/api/storage/disks');
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    STORAGE_DISKS = await res.json();
+  } catch (_) {
+    localAvailable = false;
+    STORAGE_DISKS = [];
+  }
+  STORAGE_LOCAL_AVAILABLE = localAvailable;
+  document.getElementById('storage-mode-local').disabled = !localAvailable;
+  unavailable.style.display = localAvailable ? 'none' : 'block';
+
+  if (!localAvailable) {
+    document.getElementById('storage-disks').innerHTML = '<tr><td colspan="5" class="muted">local storage agent unavailable</td></tr>';
+    document.getElementById('storage-picker').innerHTML = '<span class="muted">local storage agent unavailable</span>';
+  } else {
+    const disks = document.getElementById('storage-disks');
+    disks.innerHTML = '';
+    for (const d of STORAGE_DISKS) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(d.path)}</td><td>${esc((d.byID || '').split('/').pop())}</td>` +
+        `<td>${esc(humanBytes(d.size))}</td><td>${d.rotational ? 'HDD' : 'SSD/NVMe'}</td>` +
+        `<td>${d.eligible ? '<span class="chip ok">blank</span>' : esc(d.reason || 'in use')}</td>`;
+      disks.appendChild(tr);
+    }
+    const picker = document.getElementById('storage-picker');
+    picker.innerHTML = STORAGE_DISKS.map(d => `<label style="display:inline-block;margin-right:1rem">` +
+      `<input type="checkbox" data-storage-disk="${esc(d.byID || d.path)}" ${d.eligible ? '' : 'disabled'}> ` +
+      `${esc(d.path)} ${esc((d.byID || '').split('/').pop())} ${esc(humanBytes(d.size))}</label>`).join('') ||
+      '<span class="muted">no disks found</span>';
+  }
+
+  if (!localAvailable && STORAGE_MODE === 'local') setStorageMode('external');
+  if (!exportsOK) {
+    document.getElementById('storage-list').innerHTML = '<tr><td colspan="6" class="muted">storage list unavailable</td></tr>';
+    document.getElementById('external-storage-list').innerHTML = '<tr><td colspan="5" class="muted">storage list unavailable</td></tr>';
+    return;
+  }
+  renderLocalStorage(records.filter(e => e.kind !== 'external'));
+  renderExternalStorage(records.filter(e => e.kind === 'external'));
+}
+
+function humanBytes(n) {
+  if (!n) return '—';
+  const units = ['B','KiB','MiB','GiB','TiB'];
+  let i = 0; while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+function storageRequest() {
+  const kind = document.getElementById('storage-kind').value;
+  const disks = [...document.querySelectorAll('input[data-storage-disk]:checked')].map(x => x.dataset.storageDisk);
+  const req = {
+    name: document.getElementById('storage-name').value.trim(),
+    kind,
+    raid: document.getElementById('storage-raid').value,
+    filesystem: 'xfs',
+    mountpoint: document.getElementById('storage-mount').value.trim(),
+    directory: document.getElementById('storage-dir').value.trim(),
+    clients: document.getElementById('storage-clients').value.split(',').map(x => x.trim()).filter(Boolean),
+    options: document.getElementById('storage-options').value.trim(),
+    storageClass: document.getElementById('storage-class').value.trim(),
+    confirm: document.getElementById('storage-confirm').value.trim(),
+  };
+  if (kind === 'disk') req.disks = disks;
+  return req;
+}
+
+function externalStorageRequest() {
+  return {
+    name: document.getElementById('external-name').value.trim(),
+    kind: 'external',
+    server: document.getElementById('external-server').value.trim(),
+    export: document.getElementById('external-export').value.trim(),
+    storageClass: document.getElementById('external-class').value.trim(),
+    mountOptions: document.getElementById('external-mount-options').value.trim(),
+  };
+}
+
+function renderStoragePlan(p, el) {
+  const lines = [`Plan ${p.request.name}`];
+  if (p.request.kind === 'external') {
+    lines.push(`server: ${p.request.server}`, `export: ${p.export}`, `class: ${p.storageClass}`);
+    lines.push(`mount options: ${p.mountOptions || '—'}`);
+  } else {
+    lines.push(`device: ${p.device || '—'}`, `mount: ${p.mountpoint}`, `export: ${p.export}`, `class: ${p.storageClass}`);
+  }
+  for (const w of (p.warnings || [])) lines.push('WARN: ' + w);
+  for (const step of (p.steps || [])) lines.push('  - ' + step);
+  el.textContent = lines.join('\n');
+}
+
+async function planStorage() {
+  const external = STORAGE_MODE === 'external';
+  const req = external ? externalStorageRequest() : storageRequest();
+  const btn = document.getElementById(external ? 'external-plan' : 'storage-plan');
+  const out = document.getElementById(external ? 'external-plan-out' : 'storage-plan-out');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  out.textContent = external
+    ? `Checking NFS ${req.server || '<server>'}:${req.export || '<export>'} and validating the export…`
+    : 'Building the storage plan…';
+  try {
+    const res = await fetch('/api/storage/plan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    renderStoragePlan(JSON.parse(text), out);
+  } catch (err) {
+    out.textContent = 'Plan failed:\n' + String(err.message || err);
+    note(String(err.message || err), 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function applyStorage(req, external) {
+  if (!req.name) { note('storage name is required', 'err'); return; }
+  if (!external && req.kind === 'disk' && req.confirm !== 'FORMAT') {
+    const box = document.getElementById('storage-confirm');
+    note('Type FORMAT in the red "Formatting the selected disks" box, then click Apply.', 'err');
+    box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    box.focus();
+    return;
+  }
+  const prompt = external
+    ? `Add external NFS ${req.name}? This creates StorageClass ${req.storageClass || 'nfs-' + req.name}; the remote export is not formatted.`
+    : `Apply storage ${req.name}? This may format the selected disks.`;
+  if (!confirm(prompt)) return;
+
+  const form = document.getElementById(external ? 'external-storage-form' : 'storage-form');
+  const btn = form.querySelector('button[type="submit"]');
+  const out = document.getElementById(external ? 'external-plan-out' : 'storage-plan-out');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Applying…';
+  form.setAttribute('aria-busy', 'true');
+  out.textContent = external
+    ? `Applying external NFS ${req.server}:${req.export}…\nThis checks the export, installs the provisioner, and can take up to 5 minutes.`
+    : `Applying storage ${req.name}…\nThis can take several minutes.`;
+  note(`applying storage ${req.name}…`, '');
+  try {
+    const res = await fetch('/api/storage/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const p = JSON.parse(text);
+    note(`storage ${p.request.name} ready; StorageClass ${p.storageClass}`, 'ok');
+    if (external) {
+      form.reset();
+      out.textContent = `External NFS ${p.request.name} is ready.\nStorageClass: ${p.storageClass}\nSelect it as the media class for new app installs.`;
+    } else {
+      form.reset();
+      out.textContent = '';
+      syncStorageKind();
+    }
+    loadStorage(); loadConfig();
+  } catch (err) {
+    out.textContent = 'Apply failed:\n' + String(err.message || err);
+    note(String(err.message || err), 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+    form.removeAttribute('aria-busy');
+  }
+}
+
+async function removeStorage(name) {
+  if (!confirm(`Remove export ${name}? Data is kept.`)) return;
+  try {
+    const res = await fetch('/api/storage/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    note(`removed storage ${name}`, 'ok'); loadStorage(); loadConfig();
+  } catch (err) { note(String(err.message || err), 'err'); }
+}
+
+function syncStorageKind() {
+  const dir = document.getElementById('storage-kind').value === 'directory';
+  document.getElementById('storage-dir').disabled = !dir;
+  document.getElementById('storage-picker').style.opacity = dir ? '.4' : '1';
+  document.getElementById('storage-mount').disabled = dir;
+  const format = document.getElementById('storage-format');
+  format.style.display = dir ? 'none' : 'block';
+  if (dir) document.getElementById('storage-confirm').value = '';
+}
+
+document.getElementById('storage-form').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  applyStorage(storageRequest(), false);
+});
+document.getElementById('external-storage-form').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  applyStorage(externalStorageRequest(), true);
+});
+document.getElementById('storage-mode-local').onclick = () => setStorageMode('local');
+document.getElementById('storage-mode-external').onclick = () => setStorageMode('external');
+document.getElementById('storage-kind').onchange = syncStorageKind;
+document.getElementById('storage-plan').onclick = planStorage;
+document.getElementById('external-plan').onclick = planStorage;
+syncStorageKind();
+setStorageMode('local');
+
+async function loadCerts() {
+  const rows = document.getElementById('certs');
+  try {
+    const certs = await (await fetch('/api/certificates')).json();
+    rows.innerHTML = '';
+    if (!certs.length) { rows.innerHTML = '<tr><td colspan="5" class="muted">no manual certificates</td></tr>'; return; }
+    for (const c of certs) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(c.name)}</td><td>${esc(c.namespace)}</td>` +
+        `<td>${esc((c.hosts || []).join(', '))}</td><td>${esc((c.notAfter || '').slice(0, 10))}</td>`;
+      const td = document.createElement('td');
+      if (!c.default) {
+        const def = document.createElement('button');
+        def.textContent = 'Default'; def.onclick = () => setDefaultCert(c.name);
+        td.appendChild(def); td.appendChild(document.createTextNode(' '));
+      }
+      const del = document.createElement('button');
+      del.textContent = 'Remove'; del.onclick = () => removeCert(c.name, c.namespace);
+      td.appendChild(del); tr.appendChild(td); rows.appendChild(tr);
+    }
+  } catch (_) { rows.innerHTML = '<tr><td colspan="5">certificates unavailable</td></tr>'; }
+}
+
+async function setDefaultCert(name) {
+  try {
+    const res = await fetch('/api/certificates/' + encodeURIComponent(name) + '/default', { method: 'POST' });
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    note(`default certificate: ${name}`, 'ok'); loadCerts();
+  } catch (err) { note(String(err.message || err), 'err'); }
+}
+
+async function removeCert(name, namespace) {
+  if (!confirm(`Remove certificate ${name}?`)) return;
+  try {
+    const res = await fetch('/api/certificates/' + encodeURIComponent(name) + '?namespace=' + encodeURIComponent(namespace), { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+    note(`removed certificate ${name}`, 'ok'); loadCerts();
+  } catch (err) { note(String(err.message || err), 'err'); }
+}
+
+document.getElementById('cert-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const crt = document.getElementById('cert-crt').files[0];
+  const key = document.getElementById('cert-key').files[0];
+  if (!crt || !key) return;
+  const makeDefault = document.getElementById('cert-default').checked;
+  let namespace = document.getElementById('cert-ns').value.trim();
+  if (makeDefault && !namespace) namespace = 'kube-system';
+  try {
+    const res = await fetch('/api/certificates', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: document.getElementById('cert-name').value.trim(),
+        namespace,
+        cert: await crt.text(),
+        key: await key.text(),
+        hosts: document.getElementById('cert-hosts').value.split(',').map(s => s.trim()).filter(Boolean),
+        default: makeDefault,
+      }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    note('certificate added', 'ok');
+    document.getElementById('cert-form').reset();
+    loadCerts();
+  } catch (err) { note(String(err.message || err), 'err'); }
+});
+
+async function loadChecklist() {
+  try {
+    const [status, invites, wg] = await Promise.all([
+      fetch('/api/status').then(r => r.json()),
+      fetch('/api/invites').then(r => r.json()),
+      fetch('/api/wg/clients').then(r => r.json()),
+    ]);
+    document.getElementById('step-app').classList.toggle('done', status.length > 0);
+    document.getElementById('step-invite').classList.toggle('done', invites.length > 0);
+    document.getElementById('step-wg').classList.toggle('done', wg.length > 0);
+  } catch (_) {}
+}
+
+document.getElementById('apps-refresh').onclick = loadApplications;
+document.getElementById('indexer-add').onclick = openIndexerSearch;
+document.getElementById('indexer-search-button').onclick = searchIndexerDefinitions;
+document.getElementById('indexer-search-cancel').onclick = () => {
+  document.getElementById('indexer-search-panel').hidden = true;
+  document.getElementById('indexer-form').hidden = true;
+};
+document.getElementById('indexer-search').addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); searchIndexerDefinitions(); }
+});
+document.getElementById('indexer-back').onclick = () => {
+  document.getElementById('indexer-search-panel').hidden = false;
+  document.getElementById('indexer-form').hidden = true;
+  document.getElementById('indexer-status').textContent = '';
+  document.getElementById('indexer-search').focus();
+};
+document.getElementById('indexer-submit').onclick = submitIndexer;
+document.getElementById('profile-add').onclick = addProfile;
+document.getElementById('upgrade-cancel').onclick = () => document.getElementById('upgrade-dialog').close();
+document.getElementById('upgrade-start').onclick = startUpgrade;
+document.getElementById('upgrade-dialog').addEventListener('close', () => {
+  upgradeAppName = null;
+  upgradeChoices = [];
+  document.getElementById('upgrade-status').textContent = '';
+});
+
+(async function () {
+  activateTab(location.hash.slice(1) || 'overview', false);
+  await loadConfig();
+  loadCatalog();
+  loadInstalled();
+  loadApplications();
+  setInterval(loadApplications, 120000);
+  loadGroups();
+  loadInvites();
+  loadWg();
+  loadCerts();
+  loadStorage();
+  loadChecklist();
+  setInterval(loadChecklist, 120000);
+})();
+</script>
+</body>
+</html>

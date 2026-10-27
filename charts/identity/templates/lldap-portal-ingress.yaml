@@ -1,0 +1,28 @@
+{{- if and .Values.enabled .Values.traefik.deployMiddleware .Values.lldap.exposeWebUI .Values.lldap.webUIHost }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lldap-portal
+  namespace: {{ include "identity.namespace" . }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    traefik.ingress.kubernetes.io/router.middlewares: {{ include "identity.protectedIngressMiddlewares" . | quote }}
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ .Values.lldap.webUIHost | quote }}
+  rules:
+    - host: {{ .Values.lldap.webUIHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lldap
+                port:
+                  number: {{ .Values.lldap.httpPort }}
+{{- end }}

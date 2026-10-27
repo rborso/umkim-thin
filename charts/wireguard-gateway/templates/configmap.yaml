@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wireguard-gateway-script
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: wireguard-gateway
+data:
+  start.sh: |
+    #!/bin/sh
+    set -eu
+    echo "==> installing wireguard tools"
+    for i in 1 2 3 4 5; do
+      apk add --no-cache wireguard-tools iproute2 iptables >/dev/null 2>&1 && break
+      echo "==> apk failed (attempt $i), retrying"
+      sleep 5
+    done
+    apk info wireguard-tools >/dev/null 2>&1 || { echo "==> cannot install wireguard tools"; exit 1; }
+
+    CONF=/etc/wireguard/wg0.conf
+    build() {
+      {
+        echo "[Interface]"
+        echo "PrivateKey = $(cat /config/server-private-key)"
+        echo "ListenPort = ${PORT}"
+        while read -r pk aip; do
+          [ -z "${pk:-}" ] && continue
+          printf '\n[Peer]\nPublicKey = %s\nAllowedIPs = %s\n' "$pk" "$aip"
+        done < /config/peers
+      } > "$CONF"
+    }
+
+    build
+    ip link show wg0 >/dev/null 2>&1 || ip link add wg0 type wireguard
+    ip addr replace "$(cat /config/server-address)" dev wg0
+    wg setconf wg0 "$CONF"
+    ip link set wg0 up
+
+    # VPN-only routes live on Traefik's internal "vpn" entrypoint (NodePort
+    # 30444 by default). DNAT the tunnel's :443 there; the public router never
+    # forwards 30444 and the route has an IP allowlist as a second layer.
+    VPN_PORT="${TRAEFIK_VPN_PORT:-30444}"
+    iptables -t nat -C PREROUTING -s "${SUBNET}" -p tcp --dport 443 \
+      -j DNAT --to-destination "127.0.0.1:${VPN_PORT}" 2>/dev/null || \
+      iptables -t nat -A PREROUTING -s "${SUBNET}" -p tcp --dport 443 \
+        -j DNAT --to-destination "127.0.0.1:${VPN_PORT}"
+    # Keep the client source address on the Traefik path so the vpn-only
+    # allowlist can distinguish a peer from the node/LAN. Insert before the
+    # general masquerade rule.
+    iptables -t nat -C POSTROUTING -s "${SUBNET}" -d 127.0.0.1 -p tcp --dport "${VPN_PORT}" -j RETURN 2>/dev/null || \
+      iptables -t nat -I POSTROUTING 1 -s "${SUBNET}" -d 127.0.0.1 -p tcp --dport "${VPN_PORT}" -j RETURN
+
+    # Send the rest of the client traffic to the cluster out of the node; the
+    # node already has ip_forward set, and kube-proxy/flannel route the cluster
+    # networks.
+    iptables -t nat -C POSTROUTING -s "${SUBNET}" ! -o wg0 -j MASQUERADE 2>/dev/null || \
+      iptables -t nat -A POSTROUTING -s "${SUBNET}" ! -o wg0 -j MASQUERADE
+
+    echo "==> wireguard up (VPN web entrypoint -> 127.0.0.1:${VPN_PORT})"
+    wg show wg0 || true
+
+    # Reload peers when the Secret changes (a mounted Secret updates in place).
+    LAST=$(sha256sum /config/peers | cut -d' ' -f1)
+    while true; do
+      sleep 10
+      CUR=$(sha256sum /config/peers 2>/dev/null | cut -d' ' -f1 || true)
+      if [ "${CUR}" != "${LAST}" ]; then
+        build
+        wg syncconf wg0 "$CONF"
+        LAST="${CUR}"
+        echo "==> reloaded peers"
+      fi
+    done

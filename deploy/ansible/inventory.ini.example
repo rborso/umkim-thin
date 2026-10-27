@@ -1,0 +1,5 @@
+# Ansible inventory for the target host. deploy/provision.sh generates
+# inventory.ini from deploy/provision.env; this example is for running the
+# playbook by hand from the jumphost.
+[app]
+192.0.2.10 ansible_user=linux

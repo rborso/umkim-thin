@@ -1,0 +1,57 @@
+name: New app
+description: Propose a catalog entry.
+labels: ["catalog"]
+body:
+  - type: input
+    id: app
+    attributes:
+      label: App
+      description: Name and upstream project.
+    validations:
+      required: true
+  - type: dropdown
+    id: auth
+    attributes:
+      label: How does it authenticate?
+      description: A family-facing app must accept the directory; see docs/catalog.md.
+      options:
+        - OIDC (native)
+        - LDAP (native)
+        - Forward-auth only (no app account)
+        - Local accounts only (admin-only)
+    validations:
+      required: true
+  - type: input
+    id: upstream
+    attributes:
+      label: Upstream project and source
+      description: Repository/website. The official catalog records this in the entry and docs/licenses.md.
+    validations:
+      required: true
+  - type: input
+    id: license
+    attributes:
+      label: Upstream license
+      description: SPDX identifier if possible (MIT, Apache-2.0, GPL-3.0, AGPL-3.0, ...).
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it belongs in a household catalog
+    validations:
+      required: true
+  - type: textarea
+    id: needs
+    attributes:
+      label: What an install needs
+      description: Chart, storage (RWO/RWX), database, bootstrap/setup Job, public paths.
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: Catalog contract
+      options:
+        - label: I can add the pinned chart under `charts/apps/` and a `catalog/` entry.
+        - label: I can add an acceptance check/journey and run the single-node check.
+        - label: I can record the upstream project and license in the chart/entry.
+        - label: The app accepts OIDC or LDAP (or is intended to be admin-only).

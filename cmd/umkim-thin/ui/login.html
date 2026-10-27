@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>umkim-thin — sign in</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 22rem; margin: 5rem auto; padding: 0 1rem; color: #151515 }
+  h1 { font-size: 1.2rem; margin-bottom: .25rem }
+  p.sub { margin-top: 0; color: #666; font-size: .9rem }
+  label { display: block; margin: .9rem 0 .25rem; font-weight: 600; font-size: .9rem }
+  input { width: 100%; padding: .5rem; box-sizing: border-box }
+  button { margin-top: 1.1rem; padding: .55rem 1rem; font: inherit; font-weight: 600; cursor: pointer }
+  .err { margin-top: 1rem; padding: .6rem .8rem; border-radius: .25rem; background: #faeae8; color: #a30000 }
+</style>
+</head>
+<body>
+<h1>umkim-thin</h1>
+<p class="sub">Sign in to the console.</p>
+<form method="post" action="/login">
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username" autofocus required>
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Sign in</button>
+</form>
+<div id="err" class="err" style="display:none">Wrong username or password.</div>
+<script>
+if (location.search.indexOf('error=1') !== -1) {
+  document.getElementById('err').style.display = 'block';
+}
+</script>
+</body>
+</html>

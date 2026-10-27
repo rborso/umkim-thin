@@ -1,0 +1,95 @@
+{{- if and .Values.enabled .Values.lldap.bindAccount.enabled }}
+{{- $b := .Values.lldap.bindAccount }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $b.secretName | default "lldap-service-accounts" }}
+  namespace: {{ include "identity.namespace" . }}
+  labels:
+    app.kubernetes.io/name: identity
+    app.kubernetes.io/component: lldap-bind-account
+type: Opaque
+stringData:
+  username: {{ $b.username | quote }}
+  password: {{ $b.password | quote }}
+  group: {{ $b.group | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lldap-bind-account
+  namespace: {{ include "identity.namespace" . }}
+  labels:
+    app.kubernetes.io/name: identity
+    app.kubernetes.io/component: lldap-bind-account
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 8
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: lldap-bind-account
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bind-account
+          image: {{ .Values.lldap.image | quote }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              url="${LLDAP_URL}"
+              echo "==> waiting for LLDAP at ${url}"
+              for i in $(seq 1 40); do
+                curl -fsS "${url}/health" >/dev/null 2>&1 && break
+                sleep 3
+              done
+              token=$(curl -fsS -X POST "${url}/auth/simple/login" \
+                -H 'Content-Type: application/json' \
+                -d "{\"username\":\"admin\",\"password\":\"${LLDAP_ADMIN_PASSWORD}\"}" \
+                | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+              if [ -z "${token}" ]; then echo "LLDAP admin login failed"; exit 1; fi
+              gql() { curl -fsS -X POST "${url}/api/graphql" \
+                -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' --data "$1"; }
+
+              # Create the service user (ignore "already exists").
+              gql "{\"query\":\"mutation(\$u:CreateUserInput!){createUser(user:\$u){id}}\",\"variables\":{\"u\":{\"id\":\"${BIND_USERNAME}\",\"displayName\":\"${BIND_DISPLAY_NAME}\",\"email\":\"${BIND_USERNAME}@example.invalid\"}}}" >/dev/null 2>&1 || true
+
+              # Resolve the target group id, then add the user to it.
+              groups=$(gql '{"query":"{ groups { id displayName } }"}' 2>/dev/null || true)
+              gid=$(printf '%s' "${groups}" | tr '{' '\n' | grep -F "\"displayName\":\"${BIND_GROUP}\"" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9][0-9]*' || true)
+              if [ -n "${gid}" ]; then
+                gql "{\"query\":\"mutation(\$u:String!,\$g:Int!){addUserToGroup(userId:\$u,groupId:\$g){__typename}}\",\"variables\":{\"u\":\"${BIND_USERNAME}\",\"g\":${gid}}}" >/dev/null 2>&1 || true
+                echo "==> ${BIND_USERNAME} added to ${BIND_GROUP} (id ${gid})"
+              else
+                echo "WARN: group ${BIND_GROUP} not found"
+              fi
+
+              # Set the password (idempotent).
+              /app/lldap_set_password \
+                --base-url "${url}" \
+                --admin-username admin \
+                --admin-password "${LLDAP_ADMIN_PASSWORD}" \
+                --username "${BIND_USERNAME}" \
+                --password "${BIND_PASSWORD}"
+              echo "==> bind account ${BIND_USERNAME} ready"
+          env:
+            - name: LLDAP_URL
+              value: "http://lldap:{{ .Values.lldap.httpPort }}"
+            - name: LLDAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lldap-credentials
+                  key: LLDAP_LDAP_USER_PASS
+            - name: BIND_USERNAME
+              value: {{ $b.username | quote }}
+            - name: BIND_PASSWORD
+              value: {{ $b.password | quote }}
+            - name: BIND_GROUP
+              value: {{ $b.group | quote }}
+            - name: BIND_DISPLAY_NAME
+              value: {{ $b.displayName | default "Service bind account" | quote }}
+{{- end }}

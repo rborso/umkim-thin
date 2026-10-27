@@ -1,0 +1,166 @@
+---
+# Expose Traefik exactly as the topology expects: NodePorts the external NAT
+# publishes, ACME HTTP-01 certificates, and a file provider watching the
+# middleware ConfigMap the identity chart creates.
+
+- name: tls | certificate directory
+  ansible.builtin.file:
+    path: "{{ state_dir }}/tls"
+    state: directory
+    mode: '0700'
+
+# A locally-trusted wildcard certificate as Traefik's default, so browsers work
+# even when Let's Encrypt cannot issue (e.g. the HA zone is not reachable from
+# the internet for the HTTP-01 challenge). Import ca.crt into your browser.
+#
+# The CA must carry basicConstraints CA:TRUE and a keyUsage with keyCertSign:
+# strict TLS clients (Python/OpenSSL, and anything using it for an OIDC issuer)
+# reject a CA without them with "CA cert does not include key usage extension".
+# An older/conformant-unaware CA is regenerated (which also re-issues the
+# wildcard, since it is signed by that CA).
+- name: tls | generate the lab CA and a wildcard certificate
+  ansible.builtin.shell: |
+    set -euo pipefail
+    d={{ state_dir }}/tls
+    zone={{ zone }}
+    cd "$d"
+    # openssl prints the keyUsage bit as "Certificate Sign". Checking for the
+    # literal extension name (keyCertSign) would regenerate a valid CA on every
+    # re-provision and silently invalidate the CA bundle used by app pods.
+    if [ -f ca.crt ] && ! openssl x509 -in ca.crt -noout -ext keyUsage 2>/dev/null | grep -q 'Certificate Sign'; then
+      echo "existing CA is not a conformant CA; regenerating"
+      rm -f ca.crt ca.key ca.srl tls.crt tls.key tls.csr chain.crt
+    fi
+    [ -f ca.key ] || openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt \
+      -days 3650 -subj "/CN=umkim-thin lab CA" \
+      -addext "basicConstraints=critical,CA:TRUE" \
+      -addext "keyUsage=critical,keyCertSign,cRLSign" >/dev/null 2>&1
+    if [ ! -f tls.key ]; then
+      openssl req -newkey rsa:2048 -nodes -keyout tls.key -out tls.csr \
+        -subj "/CN=*.$zone" -addext "subjectAltName=DNS:*.$zone,DNS:$zone" >/dev/null 2>&1
+      openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+        -out tls.crt -days 3650 -copy_extensions copy >/dev/null 2>&1
+      cat tls.crt ca.crt > chain.crt
+    fi
+  changed_when: false
+
+# The wildcard is only the *fallback* for hosts ACME does not cover. In a full
+# run we leave it out: a default certificate that matches every host makes
+# Traefik treat each router as already covered and it never asks ACME (verified:
+# removing it makes staging issue certificates within seconds).
+- name: tls | default certificate Secret
+  ansible.builtin.shell: |
+    set -euo pipefail
+    K="/usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n kube-system"
+    $K create secret tls umkim-thin-wildcard \
+      --cert={{ state_dir }}/tls/chain.crt --key={{ state_dir }}/tls/tls.key \
+      --dry-run=client -o yaml | $K apply -f -
+  changed_when: false
+  when: lab_ca_default | default(true) | bool
+
+- name: tls | fetch the Let's Encrypt staging roots
+  ansible.builtin.shell: |
+    set -euo pipefail
+    d={{ state_dir }}/tls
+    mkdir -p "$d"
+    for name in x1 x2; do
+      [ -s "$d/staging-root-$name.pem" ] || \
+        curl -fsS "https://letsencrypt.org/certs/staging/letsencrypt-stg-root-$name.pem" \
+          -o "$d/staging-root-$name.pem"
+    done
+    openssl x509 -in "$d/staging-root-x1.pem" -noout -subject
+    openssl x509 -in "$d/staging-root-x2.pem" -noout -subject
+  changed_when: false
+  failed_when: false
+
+# Apps that call back into the cluster over HTTPS (an OIDC issuer on the portal,
+# for example) must trust the same CA the routes are signed with, or their TLS
+# client rejects the connection ("self-signed certificate in certificate
+# chain"). Publish it as one ConfigMap every app chart can mount at a known path.
+# Apps that call the portal over HTTPS must trust whichever CA signed the
+# routes: the lab CA in the default profile, the Let's Encrypt staging roots in
+# a full run. Publish a bundle so the same mount works in both.
+- name: tls | publish the CA bundle for in-cluster clients
+  ansible.builtin.shell: |
+    set -euo pipefail
+    d={{ state_dir }}/tls
+    K="/usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml"
+    cat "$d/ca.crt" > "$d/ca-bundle.crt"
+    for f in "$d"/staging-root-x1.pem "$d"/staging-root-x2.pem; do
+      [ -s "$f" ] && cat "$f" >> "$d/ca-bundle.crt"
+    done
+    $K -n kube-system create configmap umkim-thin-ca \
+      --from-file=ca.crt="$d/ca-bundle.crt" \
+      --dry-run=client -o yaml | $K apply -f -
+  changed_when: false
+
+- name: render the Traefik HelmChartConfig
+  ansible.builtin.template:
+    src: helmchartconfig.yaml.j2
+    dest: "{{ state_dir }}/traefik-config.yaml"
+    mode: '0644'
+
+- name: apply the Traefik HelmChartConfig
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl apply -f {{ state_dir }}/traefik-config.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: apply_traefik
+  changed_when: "'created' in apply_traefik.stdout or 'configured' in apply_traefik.stdout"
+
+# Optional lab escape hatch: pin the single Traefik replica to a known-good
+# node when one node's pod-network path is unhealthy. Empty means unconstrained.
+- name: traefik | pin the replica to the configured node
+  ansible.builtin.command: >-
+    /usr/local/bin/kubectl -n kube-system patch deploy traefik --type merge
+    -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"{{ traefik_node }}"}}}}}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: traefik_node | default('') | length > 0
+  changed_when: true
+
+# A single-replica Deployment whose /data is a ReadWriteOnce volume cannot roll
+# with RollingUpdate: the old pod holds the volume, the new one is scheduled on
+# another node and waits forever for the attach, so a config change never takes
+# effect (this is what kept ACME from ever starting on HA).
+- name: traefik | recreate rather than roll (the data volume is ReadWriteOnce)
+  ansible.builtin.command: >-
+    /usr/local/bin/kubectl -n kube-system patch deploy traefik --type merge
+    -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: wait for Traefik to roll out
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n kube-system rollout status deploy/traefik --timeout=420s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_rollout
+  until: traefik_rollout.rc == 0
+  retries: 6
+  delay: 10
+  changed_when: false
+
+- name: wait for Traefik to expose the published NodePorts
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n kube-system get svc traefik
+      -o jsonpath={.spec.ports[*].nodePort}
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_np
+  until: >-
+    (web_nodeport | string) in traefik_np.stdout and
+    (tls_nodeport | string) in traefik_np.stdout
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: assert Traefik is on the published NodePorts
+  ansible.builtin.assert:
+    that:
+      - (web_nodeport | string) in traefik_np.stdout
+      - (tls_nodeport | string) in traefik_np.stdout
+    success_msg: "traefik nodeports: {{ traefik_np.stdout }}"
+    fail_msg: "expected {{ web_nodeport }}/{{ tls_nodeport }}, got: {{ traefik_np.stdout }}"

@@ -1,0 +1,86 @@
+{{- if and .Values.enabled .Values.lldap.deploy }}
+{{- include "identity.validate" . }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lldap-credentials
+  namespace: {{ include "identity.namespace" . }}
+type: Opaque
+stringData:
+  LLDAP_JWT_SECRET: {{ .Values.lldap.jwtSecret | quote }}
+  LLDAP_LDAP_USER_PASS: {{ .Values.lldap.adminPassword | quote }}
+  LLDAP_LDAP_USER_EMAIL: {{ .Values.lldap.adminEmail | default "admin@example.com" | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lldap-data
+  namespace: {{ include "identity.namespace" . }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+{{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lldap
+  namespace: {{ include "identity.namespace" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lldap
+  template:
+    metadata:
+      labels:
+        app: lldap
+    spec:
+      containers:
+        - name: lldap
+          image: {{ .Values.lldap.image | quote }}
+          ports:
+            - name: ldap
+              containerPort: {{ .Values.lldap.ldapPort }}
+            - name: http
+              containerPort: {{ .Values.lldap.httpPort }}
+          envFrom:
+            - secretRef:
+                name: lldap-credentials
+          env:
+            - name: LLDAP_LDAP_BASE_DN
+              value: {{ .Values.lldap.baseDN | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lldap-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lldap
+  namespace: {{ include "identity.namespace" . }}
+spec:
+  selector:
+    app: lldap
+  ports:
+    - name: ldap
+      port: {{ .Values.lldap.ldapPort }}
+      targetPort: ldap
+    - name: http
+      port: {{ .Values.lldap.httpPort }}
+      targetPort: http
+{{- end }}

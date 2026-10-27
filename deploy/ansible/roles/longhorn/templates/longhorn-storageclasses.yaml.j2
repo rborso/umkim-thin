@@ -1,0 +1,32 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ longhorn_storage_class }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+# WaitForFirstConsumer so an RWO volume binds to (and pins) the node of its
+# first consumer; otherwise pods that share a claim but land on different nodes
+# deadlock on the attach.
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  numberOfReplicas: "{{ longhorn_replica_count }}"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ longhorn_rwx_storage_class }}
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  numberOfReplicas: "{{ longhorn_replica_count }}"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+  # Shared ReadWriteMany volumes are served by Longhorn's share-manager (an
+  # NFSv4 server per volume); the PVC's ReadWriteMany access mode selects it.

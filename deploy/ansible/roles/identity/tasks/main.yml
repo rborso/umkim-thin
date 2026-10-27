@@ -1,0 +1,160 @@
+---
+# The directory and the portal: LLDAP + Authelia + the Traefik middleware
+# ConfigMap. The ConfigMap is created in kube-system (the Traefik namespace) so
+# the traefik role can mount it as a file provider.
+
+- name: state directory
+  ansible.builtin.file:
+    path: "{{ state_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: secrets already present?
+  ansible.builtin.stat:
+    path: "{{ state_dir }}/secrets.yml"
+  register: identity_secrets
+
+- name: generate directory and portal secrets (first run only)
+  when: not identity_secrets.stat.exists
+  ansible.builtin.shell: |
+    set -euo pipefail
+    umask 077
+    cat > '{{ state_dir }}/secrets.yml' <<EOF
+    secret_lldap_admin_password: "$(openssl rand -base64 24)"
+    secret_lldap_jwt: "$(openssl rand -base64 32)"
+    secret_lldap_bind: "$(openssl rand -base64 24)"
+    secret_authelia_session: "$(openssl rand -base64 32)"
+    secret_authelia_storage: "$(openssl rand -base64 32)"
+    secret_authelia_reset: "$(openssl rand -base64 32)"
+    secret_console_localadmin_password: "$(head -c 18 /dev/urandom | base64 | tr -d '=+/')"
+    EOF
+  no_log: true
+
+# Older installs predate the console breakglass secret; add it in place.
+- name: ensure the console breakglass password is in secrets.yml
+  ansible.builtin.shell: |
+    set -euo pipefail
+    umask 077
+    f='{{ state_dir }}/secrets.yml'
+    grep -q '^secret_console_localadmin_password:' "$f" || \
+      printf 'secret_console_localadmin_password: "%s"\n' \
+        "$(head -c 18 /dev/urandom | base64 | tr -d '\n=+/')" >> "$f"
+  changed_when: false
+  no_log: true
+
+- name: read the secrets file
+  ansible.builtin.slurp:
+    src: "{{ state_dir }}/secrets.yml"
+  register: secrets_raw
+  no_log: true
+
+- name: load secrets
+  ansible.builtin.set_fact:
+    "{{ item.key }}": "{{ item.value }}"
+  loop: "{{ (secrets_raw.content | b64decode | from_yaml) | dict2items }}"
+  no_log: true
+
+- name: generate Authelia OIDC signing material (first run only)
+  ansible.builtin.shell: |
+    umask 077
+    head -c 32 /dev/urandom | base64 | tr -d '\n' > '{{ state_dir }}/authelia-oidc-hmac'
+  args:
+    creates: "{{ state_dir }}/authelia-oidc-hmac"
+
+- name: generate the Authelia OIDC signing key (first run only)
+  ansible.builtin.shell: |
+    umask 077
+    openssl genrsa -out '{{ state_dir }}/authelia-oidc-key.pem' 2048 2>/dev/null
+  args:
+    creates: "{{ state_dir }}/authelia-oidc-key.pem"
+
+# App-contributed identity config (OIDC clients, public-path bypass rules) is
+# written by the installer, not by this role; make sure it exists so helm always
+# receives it, and fold it into the change fingerprint so both are respected.
+- name: app-contributed identity overrides exist
+  ansible.builtin.copy:
+    content: "{}\n"
+    dest: "{{ state_dir }}/identity-apps.yml"
+    force: false
+    mode: '0600'
+
+- name: chart parent directory
+  ansible.builtin.file:
+    path: "{{ remote_dir }}/charts"
+    state: directory
+    mode: '0755'
+
+- name: copy the identity chart
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/artifacts/charts/identity"
+    dest: "{{ remote_dir }}/charts/"
+    mode: preserve
+
+- name: render identity values
+  ansible.builtin.template:
+    src: values.yml.j2
+    dest: "{{ state_dir }}/identity-values.yml"
+    mode: '0600'
+
+- name: ensure the identity namespace exists
+  ansible.builtin.shell: |
+    /usr/local/bin/kubectl create namespace identity --dry-run=client -o yaml \
+      | /usr/local/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: identity_ns
+  changed_when: "'created' in identity_ns.stdout"
+
+# helm upgrade always bumps a revision and re-runs hook Jobs, so only run it
+# when the rendered values or the chart actually changed.
+- name: fingerprint the chart and values
+  ansible.builtin.shell: |
+    { cat '{{ state_dir }}/identity-values.yml' '{{ state_dir }}/identity-apps.yml';
+      find '{{ remote_dir }}/charts/identity' -type f -print0 | sort -z | xargs -0 cat; } \
+      | sha256sum | cut -d' ' -f1
+  register: identity_fp
+  changed_when: false
+
+- name: stored fingerprint?
+  ansible.builtin.stat:
+    path: "{{ state_dir }}/identity.fingerprint"
+  register: identity_fp_file
+
+- name: read the stored fingerprint
+  ansible.builtin.slurp:
+    src: "{{ state_dir }}/identity.fingerprint"
+  register: identity_fp_stored
+  when: identity_fp_file.stat.exists
+
+- name: has the release changed?
+  ansible.builtin.set_fact:
+    identity_changed: >-
+      {{ (not identity_fp_file.stat.exists) or
+         ((identity_fp_stored.content | b64decode | trim) != identity_fp.stdout) }}
+
+- name: install or upgrade the identity chart
+  when: identity_changed
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/helm upgrade --install identity {{ remote_dir }}/charts/identity
+      --namespace identity
+      --kubeconfig /etc/rancher/k3s/k3s.yaml
+      --values {{ state_dir }}/identity-values.yml
+      --values {{ state_dir }}/identity-apps.yml
+      --wait --timeout 15m
+  register: helm_identity
+  changed_when: true
+
+- name: record the fingerprint
+  when: identity_changed
+  ansible.builtin.copy:
+    content: "{{ identity_fp.stdout }}\n"
+    dest: "{{ state_dir }}/identity.fingerprint"
+    mode: '0644'
+
+- name: identity workloads
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n identity get deploy,ingress
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false

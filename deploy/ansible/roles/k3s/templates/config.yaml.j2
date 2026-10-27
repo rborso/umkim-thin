@@ -1,0 +1,32 @@
+write-kubeconfig-mode: "0600"
+# Encrypt Secrets at rest in etcd. On a fresh cluster every Secret is written
+# through the encryption provider; an existing cluster needs a restart and a
+# re-encrypt pass (see `k3s secrets-encrypt status`). HA needs the same
+# encryption key on every server; set secrets_encryption=false until the key
+# distribution is automated (the current CI profile does this on HA).
+{% if secrets_encryption | default(true) | bool %}
+secrets-encryption: true
+{% endif %}
+node-name: {{ ansible_hostname }}
+node-ip: {{ ansible_default_ipv4.address }}
+advertise-address: {{ ansible_default_ipv4.address }}
+# Calico is the CNI and the NetworkPolicy engine.
+flannel-backend: none
+disable-network-policy: true
+# Align k3s's advertised ranges with the CNI (Calico's pool is pod_cidr).
+cluster-cidr: {{ pod_cidr }}
+service-cidr: {{ service_cidr }}
+{% if k3s_effective_tls_san | length %}
+tls-san:
+{% for san in k3s_effective_tls_san %}
+  - {{ san }}
+{% endfor %}
+{% endif %}
+{% if k3s_multi %}
+{% if inventory_hostname == k3s_primary %}
+cluster-init: true
+{% else %}
+server: https://{{ k3s_join_target }}:6443
+token: {{ k3s_effective_token }}
+{% endif %}
+{% endif %}

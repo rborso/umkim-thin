@@ -1,0 +1,19 @@
+apiVersion: v2
+name: identity
+description: LLDAP directory + Authelia forward-auth, SSO and invitations for apps on a cluster
+type: application
+version: 0.1.8
+appVersion: "1.0"
+
+home: https://github.com/rborso/umkim-thin
+sources:
+  - https://github.com/rborso/umkim-thin
+  - https://github.com/lldap/lldap
+  - https://github.com/authelia/authelia
+  - https://github.com/valkey-io/valkey
+  - https://nginx.org/
+maintainers:
+  - name: Robert Borso
+    url: https://github.com/rborso
+annotations:
+  artifacthub.io/license: Apache-2.0

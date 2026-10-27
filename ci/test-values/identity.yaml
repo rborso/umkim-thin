@@ -1,0 +1,37 @@
+# Dummy values for `helm lint`/`helm template` in Tier 1 only.
+# Never use these in a real install: the secrets are public and meaningless.
+namespace: identity
+createNamespace: false
+
+persistence:
+  storageClass: ""
+
+lldap:
+  deploy: true
+  baseDN: dc=example,dc=com
+  adminEmail: admin@example.com
+  adminPassword: ci-only-lldap-admin
+  jwtSecret: ci-only-lldap-jwt
+  bindAccount:
+    enabled: true
+    password: ci-only-lldap-bind
+
+authelia:
+  portalHost: auth.example.com
+  publicURL: https://auth.example.com
+  cookieDomain: example.com
+  sessionSecret: ci-only-authelia-session
+  storageEncryptionKey: ci-only-authelia-storage
+  resetPasswordJWTSecret: ci-only-authelia-reset
+  ldapPassword: ci-only-lldap-admin
+  accessDomains:
+    - "*.example.com"
+    - "example.com"
+
+traefik:
+  deployMiddleware: true
+  middlewareNamespace: kube-system
+
+signup:
+  enabled: true
+  redeemURL: "http://umkim-thin-console.umkim-thin.svc.cluster.local:8080/api/invites/redeem"

@@ -1,0 +1,155 @@
+---
+# Calico as the cluster CNI and NetworkPolicy engine. k3s runs with
+# `flannel-backend: none`, so nothing is scheduled until this runs.
+- name: calico | resolve the interface for IP autodetection
+  ansible.builtin.shell: |
+    set -euo pipefail
+    want="{{ ansible_default_ipv4.address }}"
+    ip -4 -o addr show | awk -v want="$want" '
+      { split($4, p, "/"); if (p[1] == want) { sub(/:$/, "", $2); print $2 } }' | head -1
+  register: calico_iface_raw
+  changed_when: false
+
+- name: calico | remember the interface
+  ansible.builtin.set_fact:
+    calico_iface: "{{ calico_iface_raw.stdout | trim | default('', true) }}"
+
+- name: calico | require an interface
+  ansible.builtin.assert:
+    that:
+      - calico_iface | length > 0
+    fail_msg: "Could not map {{ ansible_default_ipv4.address }} to a host interface"
+
+- name: calico | already installed?
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n kube-system get daemonset calico-node
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  register: calico_ds
+  changed_when: false
+  failed_when: false
+
+- name: calico | fetch the manifest
+  ansible.builtin.get_url:
+    url: "{{ calico_manifest_url }}"
+    dest: /tmp/calico.yaml
+    mode: '0644'
+    force: true
+  when: calico_ds.rc != 0
+
+# The manifest ships CALICO_IPV4POOL_CIDR commented out, so Calico would create
+# its pool at 192.168.0.0/16. Pin it to pod_cidr so it matches what the firewall
+# trusts, the NFS export and the WireGuard allowed IPs (and never overlaps the
+# node network).
+- name: calico | pin the IP pool to the cluster pod CIDR
+  ansible.builtin.shell: |
+    set -euo pipefail
+    f=/tmp/calico.yaml
+    sed -i -E 's|^([[:space:]]*)#[[:space:]]*- name: CALICO_IPV4POOL_CIDR|\1- name: CALICO_IPV4POOL_CIDR|' "$f"
+    sed -i -E '/- name: CALICO_IPV4POOL_CIDR/{n;s|^([[:space:]]*)#?[[:space:]]*value:.*|\1  value: "{{ pod_cidr }}"|}' "$f"
+    grep -A1 'name: CALICO_IPV4POOL_CIDR' "$f"
+  changed_when: false
+  when: calico_ds.rc != 0
+
+# The nodes share a subnet, so native BGP routing is enough; IPIP encapsulation
+# also interacts badly with the host firewall's FORWARD path.
+- name: calico | use native routing (no IPIP)
+  ansible.builtin.replace:
+    path: /tmp/calico.yaml
+    regexp: '(?s)(- name: CALICO_IPV4POOL_IPIP\s*\n\s*value: )"Always"'
+    replace: '\1"Never"'
+  when: calico_ds.rc != 0
+
+- name: calico | apply the manifest
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl apply --validate=false -f /tmp/calico.yaml
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  register: calico_apply
+  changed_when: "'created' in calico_apply.stdout or 'configured' in calico_apply.stdout"
+  when: calico_ds.rc != 0
+
+- name: calico | set IP autodetection on calico-node
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n kube-system set env daemonset/calico-node
+      IP_AUTODETECTION_METHOD=interface={{ calico_iface }}
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  register: calico_env
+  changed_when: calico_env.rc == 0
+
+- name: calico | run kube-controllers on host network (k3s multus-shim deadlock)
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n kube-system patch deployment calico-kube-controllers
+      --type=json -p='[{"op": "add", "path": "/spec/template/spec/hostNetwork", "value": true}]'
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  register: calico_kc
+  changed_when: false
+  failed_when: false
+
+- name: calico | stat the k3s multus-shim CNI config
+  ansible.builtin.stat:
+    path: /etc/cni/net.d/00-multus.conf
+  register: calico_multus_conf
+  when: calico_disable_k3s_multus_shim | bool
+
+- name: calico | disable the k3s multus-shim CNI
+  ansible.builtin.command:
+    cmd: mv /etc/cni/net.d/00-multus.conf /etc/cni/net.d/00-multus.conf.disabled-by-calico
+  when:
+    - calico_disable_k3s_multus_shim | bool
+    - calico_multus_conf.stat.exists | default(false)
+  register: calico_multus_disabled
+  changed_when: calico_multus_disabled.rc == 0
+  failed_when: false
+
+- name: calico | restart k3s after disabling the shim
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: restarted
+    daemon_reload: true
+  when: calico_multus_disabled is changed
+
+- name: calico | wait for the API
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl get --raw /readyz
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  register: calico_api
+  until: calico_api.rc == 0
+  retries: 36
+  delay: 10
+  changed_when: false
+  when: calico_multus_disabled is changed
+
+- name: calico | wait for the calico-node rollout
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n kube-system rollout status daemonset/calico-node --timeout={{ calico_rollout_timeout }}s
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  changed_when: false
+
+- name: calico | wait for every node to be Ready
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl wait node --all --for=condition=Ready --timeout=600s
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  changed_when: false
+
+# Pods created while the CNI was broken stay unscheduled until recreated.
+- name: calico | recycle pods stranded without a network
+  ansible.builtin.shell: |
+    set -u
+    K=/usr/local/bin/kubectl
+    for ns in $($K get ns -o jsonpath='{.items[*].metadata.name}'); do
+      for p in $($K -n "$ns" get pods --no-headers 2>/dev/null \
+                 | awk '$3=="ContainerCreating" || $3=="Pending" {print $1}'); do
+        $K -n "$ns" delete pod "$p" --wait=false >/dev/null 2>&1 || true
+      done
+    done
+  environment:
+    KUBECONFIG: "{{ calico_kubeconfig }}"
+  changed_when: false

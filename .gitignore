@@ -1,0 +1,33 @@
+# Local-only artifacts (never publish)
+*.bak
+*.bak-*
+*.retry
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.cache/
+tmp/
+logs/
+reports/
+test-results/
+playwright-report/
+
+# Local operator values: a filled-in inventory, secrets, rendered values.
+/values.local.yaml
+/secrets/
+*.vault-pass
+.env
+# Local, environment-specific notes and keys (lab access). Never published.
+/local/
+
+# Local provisioning inputs (host, domain, key paths). Never published.
+/deploy/provision.env
+/deploy/provision-single.env
+/deploy/provision-ha.env
+/deploy/ansible/inventory.ini
+/deploy/ansible/artifacts/
+/deploy/ansible/collections/
+
+# Local CI lab VM -> hypervisor map. Never published.
+/ci/lab.env

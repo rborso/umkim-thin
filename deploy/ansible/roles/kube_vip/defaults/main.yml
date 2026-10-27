@@ -1,0 +1,3 @@
+---
+kube_vip_version: v0.8.9
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:{{ kube_vip_version }}"

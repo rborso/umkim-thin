@@ -1,0 +1,60 @@
+{#
+  App namespaces: deny ingress by default, then allow the ingress controller
+  (Traefik, in kube-system) and pods in the same namespace. Egress is left open
+  so apps keep reaching the directory, DNS and the internet.
+-#}
+{% for ns in netpol_app_namespaces_existing %}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ ns }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ ns }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        # WireGuard clients reach apps through the tunnel gateway.
+        - ipBlock:
+            cidr: {{ wg_subnet }}
+        # The tunnel gateway is hostNetwork and MASQUERADEs client traffic to
+        # the node address, which is in the cluster/node network. (Not the pod
+        # CIDR: that would allow pod-to-pod access and defeat isolation.)
+        - ipBlock:
+            cidr: {{ lab_cidr }}
+---
+{% endfor %}
+{#
+  The directory (LLDAP/Authelia) is reached by every app and by the portal, so
+  its policy allows exactly those clients.
+-#}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-directory-clients
+  namespace: {{ netpol_identity_namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # The directory is a cluster-wide service: any pod may reach it, plus
+        # the ingress controller and WireGuard clients (via the tunnel gateway).
+        - ipBlock:
+            cidr: {{ pod_cidr }}
+        - ipBlock:
+            cidr: {{ wg_subnet }}
+        # The tunnel gateway is hostNetwork and MASQUERADEs client traffic to
+        # the node address (in the cluster/node network); the node also reaches
+        # the directory directly (kubelet, hostNetwork apps).
+        - ipBlock:
+            cidr: {{ lab_cidr }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system

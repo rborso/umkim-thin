@@ -1,0 +1,64 @@
+name: gitea
+displayName: Gitea
+description: Lightweight self-hosted Git service with issues, PRs and CI.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/gitea
+  version: 0.1.19
+  versions:
+    - version: 0.1.19
+      appVersion: 28.1.0
+      channel: stable
+
+namespace: gitea
+
+route:
+  mode: site
+  host: "gitea.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: gitea
+  servicePort: 3000
+
+auth:
+  # OIDC for the web SSO (Authelia), LDAP kept for the accounts and clients -
+  # git over SSH/HTTPS uses keys/tokens, not the browser session.
+  kind: oidc
+  ldap: true
+
+oidc:
+  clientId: gitea
+  redirectUris:
+    - "https://{{ .host }}/user/oauth2/authelia/callback"
+  # Gitea's OAuth2 client does not send a PKCE challenge.
+  requirePkce: false
+
+values:
+  gitea:
+    externalUrl: "https://{{ .host }}"
+    persistence:
+      data:
+        storageClass: "{{ .storage.configClass }}"
+    # Only directory/OIDC accounts; the public sign-up form stays disabled. The
+    # OAuth2 source auto-registers on first login.
+    disableRegistration: true
+    ssh:
+      # Traefik publishes the SSH server on a dedicated TCP entry point.
+      advertisedPort: 2222
+      domain: "gitea.{{ .zone }}"
+      traefik:
+        enabled: true
+        entryPoint: gitssh
+  postgres:
+    persistence:
+      storageClass: "{{ .storage.configClass }}"
+
+verify:
+  playwright: tests/playwright/journeys/gitea.spec.ts
+  checks:
+    - route_reachable
+    - auth_challenge
+    - authenticated_request_reaches_app
+    - ldap_user_visible        # the signed-in identity exists in Gitea

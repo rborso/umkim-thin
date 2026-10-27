@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: umkim-thin-console
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: umkim-thin
+spec:
+  selector:
+    app: umkim-thin-console
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

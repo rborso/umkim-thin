@@ -1,0 +1,87 @@
+---
+# kube-vip: a floating control-plane VIP so an HA cluster has one stable API
+# address (and a place for the external NAT / a load balancer to point). Adapted
+# from umkim, which runs it as a static manifest so k3s applies it on start.
+- name: kube-vip | skip when no control-plane VIP
+  ansible.builtin.meta: end_host
+  when: k3s_control_plane_vip | default('') | length == 0
+
+- name: kube-vip | gather network facts
+  ansible.builtin.setup:
+    gather_subset: [network]
+  when: ansible_default_ipv4 is not defined
+
+- name: kube-vip | require a VIP and an interface
+  ansible.builtin.assert:
+    that:
+      - k3s_control_plane_vip | length > 0
+      - ansible_default_ipv4.interface is defined
+    fail_msg: "k3s_control_plane_vip and a default interface are required for kube-vip"
+
+- name: kube-vip | manifests directory
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests
+    state: directory
+    mode: "0755"
+
+- name: kube-vip | install podman (to render the manifest)
+  ansible.builtin.dnf:
+    name: podman
+    state: present
+
+- name: kube-vip | pull the image
+  ansible.builtin.command:
+    cmd: podman pull {{ kube_vip_image }}
+  register: kube_vip_pull
+  changed_when: "'Downloading' in kube_vip_pull.stderr or 'Writing' in kube_vip_pull.stderr"
+
+- name: kube-vip | RBAC manifest
+  ansible.builtin.get_url:
+    url: https://kube-vip.io/manifests/rbac.yaml
+    dest: /var/lib/rancher/k3s/server/manifests/kube-vip-rbac.yaml
+    mode: "0644"
+    force: true
+
+- name: kube-vip | remove any legacy static pod
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests/kube-vip.yaml
+    state: absent
+
+- name: kube-vip | render the DaemonSet manifest
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      podman run --rm --network host {{ kube_vip_image }} \
+        manifest daemonset \
+        --interface {{ ansible_default_ipv4.interface }} \
+        --address {{ k3s_control_plane_vip }} \
+        --inCluster \
+        --taint \
+        --controlplane \
+        --services=false \
+        --arp \
+        --leaderElection \
+        > /var/lib/rancher/k3s/server/manifests/kube-vip-daemonset.yaml
+    executable: /bin/bash
+  register: kube_vip_manifest
+  changed_when: kube_vip_manifest.rc == 0
+
+# k3s's servicelb (klipper) advertises LoadBalancer services on the node IPs. If
+# kube-vip also manages services it adopts those node IPs as VIPs and aliases
+# them (/32) on the interface, which breaks ARP and etcd. Only the control-plane
+# VIP is ours; services stay with k3s.
+- name: kube-vip | leave LoadBalancer services to k3s servicelb
+  ansible.builtin.replace:
+    path: /var/lib/rancher/k3s/server/manifests/kube-vip-daemonset.yaml
+    regexp: '(- name: svc_enable\s*\n\s+value:\s*)"true"'
+    replace: '\1"false"'
+
+- name: kube-vip | assert service VIPs are disabled
+  ansible.builtin.shell: |
+    set -e
+    if grep -A1 'name: svc_enable' /var/lib/rancher/k3s/server/manifests/kube-vip-daemonset.yaml 2>/dev/null | grep -q '"true"'; then
+      echo "svc_enable is still true"
+      exit 1
+    fi
+    echo "service VIPs disabled"
+  changed_when: false

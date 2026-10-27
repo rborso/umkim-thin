@@ -1,0 +1,36 @@
+---
+# Default-deny ingress for the app namespaces (stopping pod-to-pod lateral
+# movement) while still allowing the ingress controller to reach them, plus the
+# allowances the directory needs from its clients.
+- name: existing namespaces
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get ns -o jsonpath={.items[*].metadata.name}
+  environment:
+    KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+  register: ns_raw
+  changed_when: false
+
+- name: app namespaces that exist
+  ansible.builtin.set_fact:
+    netpol_app_namespaces_existing: "{{ netpol_app_namespaces | intersect(ns_raw.stdout.split()) }}"
+
+- name: render network policies
+  ansible.builtin.template:
+    src: policies.yaml.j2
+    dest: "{{ state_dir }}/networkpolicies.yaml"
+    mode: '0644'
+
+- name: apply network policies
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml apply -f {{ state_dir }}/networkpolicies.yaml
+  environment:
+    KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+  register: netpol_apply
+  changed_when: "'created' in netpol_apply.stdout or 'configured' in netpol_apply.stdout"
+
+- name: network policies
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get networkpolicy -A
+  environment:
+    KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+  changed_when: false

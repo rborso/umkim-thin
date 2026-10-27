@@ -1,0 +1,159 @@
+---
+# base tooling, swap, forwarding, time, SELinux policy, and a kernel that can
+# actually do iptables. Idempotent.
+
+- name: install base packages
+  ansible.builtin.dnf:
+    name:
+      - curl
+      - tar
+      - git
+      - jq
+      - chrony
+      - firewalld
+      - container-selinux
+      - policycoreutils-python-utils
+      # k3s needs iptables on the host and netfilter modules in the kernel. The
+      # lab base image is stripped (a custom kernel with no xt_* modules and no
+      # iptables); installing the stock kernel here lets the reboot below land
+      # on a kernel that can actually program Service rules.
+      - kernel
+      - kernel-modules
+      - iptables
+      - iptables-nft
+      - conntrack-tools
+    state: present
+  register: base_pkgs
+  # The lab mirrors occasionally hiccup right after boot; retry rather than
+  # failing the whole run.
+  retries: 5
+  delay: 15
+  until: base_pkgs is succeeded
+
+- name: disable swap now
+  ansible.builtin.command: swapoff -a
+  when: ansible_swaptotal_mb | int > 0
+  changed_when: true
+
+- name: keep swap off across reboots
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#][^\n]*\sswap\s+[^\n]*)$'
+    replace: '#\1'
+  when: ansible_swaptotal_mb | int > 0
+
+- name: enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_file: /etc/sysctl.d/99-k3s.conf
+    sysctl_set: true
+    reload: true
+
+- name: keep the clock synced
+  ansible.builtin.systemd_service:
+    name: chronyd
+    enabled: true
+    state: started
+
+# A VM restored from a snapshot (which is exactly what the CI reset does) boots
+# with a stale clock. chrony's default `makestep 1.0 3` window is long gone by
+# the time the service settles, so it only *slews* a multi-hour offset and the
+# clock stays hours behind. That breaks anything time-based that a client checks
+# against the server - Authelia session cookies are issued with `now + 8h`, so a
+# client whose clock is ahead discards them and the login appears to loop.
+#
+# Step large corrections whenever they appear (the usual advice for VMs), then
+# force one step once a source is actually selected (`chronyc makestep` returns
+# 200 even with no source, so waiting for a source first is what matters).
+- name: keep the clock synced | step large corrections at any time
+  ansible.builtin.lineinfile:
+    path: /etc/chrony.conf
+    regexp: '^makestep\b'
+    line: 'makestep 1.0 -1'
+  register: chrony_makestep_conf
+
+- name: keep the clock synced | apply the new makestep policy
+  ansible.builtin.systemd_service:
+    name: chronyd
+    state: restarted
+  when: chrony_makestep_conf is changed
+
+- name: keep the clock synced | step a stale clock
+  ansible.builtin.shell: |
+    set -u
+    # "Reach" is the 5th column of `chronyc sources`; a non-zero value means at
+    # least one NTP packet got through.
+    for _ in $(seq 1 36); do
+      if chronyc sources 2>/dev/null | awk 'NR>2 && $1 ~ /^\^/ && $5 != "0" { ok=1 } END { exit !ok }'; then
+        chronyc makestep >/dev/null 2>&1 || true
+        exit 0
+      fi
+      sleep 5
+    done
+    # No usable time source; leave the clock alone rather than failing.
+    exit 0
+  changed_when: false
+
+- name: disable nm-cloud-setup (k3s recommendation)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop:
+    - nm-cloud-setup.service
+    - nm-cloud-setup.timer
+  failed_when: false
+
+- name: rancher k3s-common repo
+  ansible.builtin.copy:
+    dest: /etc/yum.repos.d/rancher-k3s-common.repo
+    mode: '0644'
+    content: |
+      [rancher-k3s-common-stable]
+      name=Rancher K3s Common (stable)
+      baseurl=https://rpm.rancher.io/k3s/stable/common/centos/9/noarch
+      enabled=1
+      gpgcheck=1
+      repo_gpgcheck=0
+      gpgkey=https://rpm.rancher.io/public.key
+
+- name: install k3s SELinux policy
+  ansible.builtin.dnf:
+    name: k3s-selinux
+    state: present
+  failed_when: false
+
+- name: does the running kernel provide the netfilter xt_ extensions?
+  ansible.builtin.find:
+    paths: "/lib/modules/{{ ansible_kernel }}"
+    patterns: "xt_mark.ko*"
+    recurse: true
+  register: running_xt
+
+# Some lab images boot a stripped kernel without xt_*/ip_tables, which leaves
+# iptables (and therefore flannel and kube-proxy) unable to program rules. A
+# stock kernel is usually installed beside it.
+- name: boot a kernel that can do iptables
+  when: running_xt.matched | int == 0
+  block:
+    - name: explain the reboot
+      ansible.builtin.debug:
+        msg: "kernel {{ ansible_kernel }} has no xt_* modules; rebooting to the default kernel"
+    - name: reboot
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        post_reboot_delay: 15
+        msg: "netfilter module support"
+    - name: re-gather facts
+      ansible.builtin.setup:
+    - name: confirm netfilter extensions are present
+      ansible.builtin.find:
+        paths: "/lib/modules/{{ ansible_kernel }}"
+        patterns: "xt_mark.ko*"
+        recurse: true
+      register: after_xt
+    - ansible.builtin.assert:
+        that: after_xt.matched | int > 0
+        fail_msg: "kernel {{ ansible_kernel }} still lacks xt_mark; iptables cannot work"
+        success_msg: "netfilter extensions present on {{ ansible_kernel }}"

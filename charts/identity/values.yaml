@@ -1,0 +1,132 @@
+namespace: identity
+
+enabled: true
+createNamespace: false
+
+cluster:
+  # Service DNS address (kube-dns). nginx's `resolver` directive needs an IP,
+  # not a Service name, and the invite page resolves the console at request
+  # time.
+  dnsServiceIP: "10.43.0.10"
+
+# PVC storage class for LLDAP/Authelia data (use local-path on single-node
+# clusters; empty = the cluster default).
+persistence:
+  storageClass: ""
+
+lldap:
+  deploy: true
+  # Required when deploy is false (an external directory); otherwise the chart
+  # points Authelia at the in-cluster Service.
+  externalUrl: ""
+  image: ghcr.io/lldap/lldap@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8
+  ldapPort: 3890
+  httpPort: 17170
+  # Required. Set these when installing the chart directly; the provisioned
+  # path renders them from state_dir/secrets.yml.
+  baseDN: ""
+  adminEmail: admin@example.com
+  jwtSecret: ""
+  adminPassword: ""
+  exposeWebUI: false
+  webUIHost: ""
+  # Groups the cluster's routes declare. The chart ensures each exists in this
+  # cluster's directory: a post-install/upgrade Job applies a change
+  # immediately, and a CronJob restores a group that is deleted out of band.
+  managedGroups: []
+  managedGroupsSchedule: "*/10 * * * *"
+  # Group every install gets at deploy time, so an invitation has a group to
+  # target out of the box. Added to managedGroups (created by the Job, kept by
+  # the CronJob); empty disables it.
+  defaultTenant: default-tenant
+  # Shared low-privilege LLDAP bind account for apps (Authelia, Jellyfin, ...).
+  # Created by a post-install/upgrade Job and added to lldap_strict_readonly.
+  # Set password from the role (per-cluster); empty disables creation.
+  bindAccount:
+    enabled: true
+    username: svc-bind
+    displayName: "Shared service bind account"
+    group: lldap_strict_readonly
+    password: ""
+    secretName: lldap-service-accounts
+
+# Valkey is Authelia's session store. An in-memory store would drop every portal
+# session when Authelia rolls for an OIDC/public-path config change. This is
+# deliberately ephemeral: a Valkey restart logs sessions out, but app installs
+# do not.
+valkey:
+  enabled: true
+  image: docker.io/valkey/valkey:9.1.2-alpine@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+  # Set by the installer to the generated Authelia session secret. Empty keeps
+  # the in-cluster Valkey unauthenticated (chart-only installs).
+  password: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+authelia:
+  image: ghcr.io/authelia/authelia:4.38.19@sha256:46021dc20efdcc5cdc38a29e3050b8835429a155ae6215388ed3b793a02eb0ab
+  port: 9091
+  # Required secrets. Generate them once per install and keep them out of git.
+  sessionSecret: ""
+  storageEncryptionKey: ""
+  resetPasswordJWTSecret: ""
+  # Required when lldap.deploy is false (an external directory); otherwise it
+  # defaults to lldap.adminPassword.
+  ldapPassword: ""
+  # LDAP bind user DN. Defaults to the directory admin; set to a read-only bind
+  # account (e.g. uid=svc-bind,ou=people,<baseDN>) for a dedicated service user.
+  ldapUser: ""
+  # Required. The zone-wide cookie domain and the portal host.
+  cookieDomain: ""
+  portalHost: ""
+  # Defaults to https://<portalHost> when empty.
+  publicURL: ""
+  # Required. Hosts that may use the portal. The provisioned install sets
+  # "*.<zone>" and "<zone>".
+  accessDomains: []
+  # OIDC provider for applications that only speak OIDC (Immich, ...). Authelia
+  # authenticates against the same LLDAP directory and issues tokens.
+  oidc:
+    enabled: false
+    hmacSecret: ""
+    issuerPrivateKey: ""
+    clients: []
+  # Host-level rules that restrict a route to directory groups (tenants). These
+  # are evaluated before accessDomains. Empty groups means any authenticated user.
+  accessRules: []
+
+# Invite sign-up page. The form posts to this install's console, which redeems
+# the invitation against the cluster's directory. The endpoint is a Service
+# address, not a public URL: nginx resolves it at request time.
+signup:
+  enabled: false
+  image: docker.io/library/nginx:1.27.5-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+  redeemURL: ""
+
+traefik:
+  deployMiddleware: true
+  middlewareName: identity-authelia
+  middlewareNamespace: identity
+  redirectMiddlewareName: identity-redirect-https
+  stripAuthorizationMiddlewareName: strip-authorization
+  # Portal entrypoint/TLS. Clusters that terminate TLS use websecure + ACME;
+  # clusters behind an external proxy publish the portal on web.
+  portalEntrypoint: websecure
+  portalTLS: true
+  # Manual default certificate (wildcard) and the VPN/LAN source allowlists.
+  defaultCertificateSecret: ""
+  vpnSourceRanges:
+    - "192.168.168.0/24"
+  vpnLocalSourceRanges:
+    - "192.168.168.0/24"
+    - "192.168.1.0/24"
+    - "127.0.0.1/32"
+    - "10.42.0.0/16"
+    - "10.43.0.0/16"
+
+registry:
+  prefix: ""

@@ -1,0 +1,109 @@
+name: servarr
+displayName: Servarr stack
+description: Media automation — Seerr, Radarr, Sonarr, Prowlarr, qBittorrent and Jellyfin, wired together.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/servarr
+  version: 0.2.26
+  versions:
+    - version: 0.2.26
+      appVersion: 1.0.0
+      channel: stable
+
+namespace: servarr
+
+# One chart, several published routes. Each key becomes its own route with the
+# same auth policy, so the media server and its request UI are reachable
+# separately.
+routes:
+  - key: seerr
+    host: "servarr.{{ .zone }}"
+    requireAuth: true
+    exposure:
+      default: authelia
+      allowed: [public, authelia, vpn]
+    serviceName: seerr
+    servicePort: 80
+  - key: jellyfin
+    host: "jellyfin.{{ .zone }}"
+    requireAuth: true
+    exposure:
+      default: authelia
+      allowed: [public, authelia, vpn]
+    serviceName: jellyfin
+    servicePort: 80
+  - key: sonarr
+    host: "sonarr.{{ .zone }}"
+    requireAuth: true
+    exposure:
+      default: authelia
+      allowed: [public, authelia, vpn]
+    serviceName: sonarr
+    servicePort: 80
+  - key: radarr
+    host: "radarr.{{ .zone }}"
+    requireAuth: true
+    exposure:
+      default: authelia
+      allowed: [public, authelia, vpn]
+    serviceName: radarr
+    servicePort: 80
+  # Indexer management and the download client are part of the stack's UI: an
+  # operator has to reach them, and without routes they are only reachable from
+  # inside the cluster.
+  - key: prowlarr
+    host: "prowlarr.{{ .zone }}"
+    requireAuth: true
+    exposure:
+      default: authelia
+      allowed: [public, authelia, vpn]
+    serviceName: prowlarr
+    servicePort: 80
+  - key: qbittorrent
+    host: "qbittorrent.{{ .zone }}"
+    requireAuth: true
+    exposure:
+      default: authelia
+      allowed: [public, authelia, vpn]
+    serviceName: qbittorrent
+    servicePort: 80
+
+auth:
+  # Forward-auth for the web UIs. Jellyfin's native clients cannot complete a
+  # browser login, so they authenticate against Jellyfin itself; see
+  # docs/identity.md on why that is a deliberate choice rather than a path list.
+  kind: forward_auth
+  ldap: true
+
+values:
+  storage:
+    # Config volumes hold SQLite databases: a block-backed ReadWriteOnce class.
+    config:
+      storageClass: "{{ .storage.configClass }}"
+      accessMode: ReadWriteOnce
+    # Media is mounted by several apps at once. The default is ReadWriteMany;
+    # a single-node local-path install sets it to ReadWriteOnce (one node can
+    # still mount the same RWO volume in several pods).
+    media:
+      storageClass: "{{ .storage.mediaClass }}"
+      accessMode: "{{ .storage.mediaAccessMode }}"
+  media:
+    enabled: true
+    size: 50Gi
+  bootstrap:
+    # The chart's bootstrap runs a Playwright image built from this repo.
+    # The console builds and imports it on demand; set bootstrap.image only
+    # when using an externally built image.
+    enabled: false
+    mediaLanguage: hu
+    qualityCutoff: 720p
+    seerrAutoApprove: true
+    jellyfinLibraryScanMinutes: 15
+
+verify:
+  playwright: tests/playwright/journeys/servarr.spec.ts
+  checks:
+    - route_reachable
+    - auth_challenge
+    - authenticated_request_reaches_app
+    - import_chain_reaches_library   # request -> indexer -> client -> imported

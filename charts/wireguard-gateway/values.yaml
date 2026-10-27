@@ -1,0 +1,25 @@
+# The gateway binds the node's UDP port (hostNetwork), so an external NAT
+# forwards the published port straight to it.
+image: docker.io/library/alpine:3.20.10@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+port: 51820
+# Tunnel network; the gateway itself is .1 and clients get .2, .3, ...
+subnet: 192.168.168.0/24
+# Secret holding the gateway keypair and the peer list (written by umkim-thin).
+secretName: wireguard-peers
+dns: 10.43.0.10
+# The internal Traefik VPN entrypoint NodePort. VPN clients' :443 is DNATed
+# here so the route can use an ordinary https URL.
+traefikVPNPort: 30444
+# Empty runs the gateway on every node (DaemonSet). Set a nodeSelector only to
+# restrict it to a subset. For HA keep it empty so the node holding the VIP
+# already has a local UDP 51820 listener.
+nodeSelector: {}
+# Tolerate the normal control-plane taint so the gateway can run on the nodes
+# that hold the kube-vip VIP.
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+  - key: node-role.kubernetes.io/master
+    operator: Exists
+    effect: NoSchedule

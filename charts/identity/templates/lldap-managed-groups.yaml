@@ -1,0 +1,42 @@
+{{- if and .Values.enabled .Values.lldap.deploy }}
+{{/*
+Reconcile the groups this cluster's own directory must have: the ones its routes
+declare (route.requireAuthGroups) plus the default tenant, so an invitation or a
+tenant add-user has a group to target out of the box.
+
+The Job name is keyed to the declared set: the manifests are applied through a
+ManifestWork rather than by Helm, so the hook annotations below do nothing and a
+stable name would be a no-op on re-apply. A changed set therefore yields a new
+Job, which runs immediately. The CronJob then restores a group that is deleted
+out of band.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lldap-managed-groups-{{ include "identity.managedGroups" . | sha256sum | trunc 8 }}
+  namespace: {{ include "identity.namespace" . }}
+  labels:
+    app.kubernetes.io/name: identity
+    app.kubernetes.io/component: lldap-managed-groups
+spec:
+  ttlSecondsAfterFinished: 600
+{{ include "identity.managedGroupsJobSpec" . | indent 2 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lldap-managed-groups-sync
+  namespace: {{ include "identity.namespace" . }}
+  labels:
+    app.kubernetes.io/name: identity
+    app.kubernetes.io/component: lldap-managed-groups
+spec:
+  schedule: {{ .Values.lldap.managedGroupsSchedule | default "*/10 * * * *" | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+{{ include "identity.managedGroupsJobSpec" . | indent 6 }}
+{{- end }}

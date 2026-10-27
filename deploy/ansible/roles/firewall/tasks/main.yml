@@ -1,0 +1,75 @@
+---
+# Host firewall.
+#
+# Single node: expose only the published ports, restrict the API/etcd to the
+# lab subnet, and trust the cluster networks.
+#
+# Multi-node (HA): firewalld drops pod traffic that Calico's native routing
+# forwards in from peer nodes (the interface zone wins over source zones, and
+# the host-network pods' ClusterIP access would be dropped too), which breaks
+# cross-node Services, the VIP and hostNetwork pods. Kubernetes expects the host
+# firewall to be off or fully CNI-aware, so it is disabled here; Calico's
+# NetworkPolicy remains the enforcement point and the router is the external
+# boundary.
+
+- name: multi-node | disable firewalld (Calico owns the dataplane)
+  ansible.builtin.systemd_service:
+    name: firewalld
+    enabled: false
+    state: stopped
+  when: groups['server'] | length > 1
+
+- name: single node | configure the host firewall
+  when: groups['server'] | length <= 1
+  block:
+    - name: firewalld running
+      ansible.builtin.systemd_service:
+        name: firewalld
+        enabled: true
+        state: started
+
+    - name: allow the published service ports
+      ansible.posix.firewalld:
+        port: "{{ item.port }}/{{ item.proto }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - { port: "{{ web_nodeport }}", proto: tcp }   # Traefik web        (published as {{ pub_web }})
+        - { port: "{{ tls_nodeport }}", proto: tcp }   # Traefik websecure  (published as {{ pub_tls }})
+        - { port: "{{ git_nodeport }}", proto: tcp }   # Traefik gitssh     (published as {{ pub_git }})
+        - { port: "{{ pub_git }}",      proto: tcp }   # servicelb binds the git port
+        - { port: "{{ pub_web }}",      proto: tcp }   # servicelb binds 80/443 on the node
+        - { port: "{{ pub_tls }}",      proto: tcp }
+        - { port: "{{ wg_port }}",      proto: udp }   # WireGuard gateway  (published as {{ pub_wg }})
+        - { port: "8472",               proto: udp }   # flannel VXLAN
+        - { port: "10250",              proto: tcp }   # kubelet
+
+    - name: keep ssh reachable
+      ansible.posix.firewalld:
+        service: ssh
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: API server reachable only from the lab subnet
+      ansible.posix.firewalld:
+        rich_rule: 'rule family="ipv4" source address="{{ lab_cidr }}" port port="6443" protocol="tcp" accept'
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: trust the cluster networks
+      ansible.posix.firewalld:
+        zone: trusted
+        source: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - "{{ pod_cidr }}"
+        - "{{ service_cidr }}"
+
+    - name: reload firewalld
+      ansible.builtin.command: firewall-cmd --reload
+      changed_when: false

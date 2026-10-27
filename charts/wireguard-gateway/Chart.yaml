@@ -1,0 +1,16 @@
+apiVersion: v2
+name: wireguard-gateway
+description: In-cluster WireGuard gateway for umkim-thin; peers come from a Secret
+type: application
+version: 0.1.3
+appVersion: "1.0"
+
+home: https://github.com/rborso/umkim-thin
+sources:
+  - https://github.com/rborso/umkim-thin
+  - https://www.wireguard.com/
+maintainers:
+  - name: Robert Borso
+    url: https://github.com/rborso
+annotations:
+  artifacthub.io/license: Apache-2.0

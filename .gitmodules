@@ -1,0 +1,3 @@
+[submodule "charts/apps"]
+	path = charts/apps
+	url = https://github.com/rborso/umkim-charts.git

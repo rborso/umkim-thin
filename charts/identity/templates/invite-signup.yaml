@@ -1,0 +1,107 @@
+{{- if and .Values.enabled .Values.signup.enabled .Values.signup.redeemURL .Values.authelia.portalHost }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: invite-signup
+  namespace: {{ include "identity.namespace" . }}
+  labels:
+    app: invite-signup
+data:
+  nginx.conf: |
+{{ include "identity.inviteSignupNginx" . | indent 4 }}
+  index.html: |
+{{ include "identity.inviteSignupIndex" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invite-signup
+  namespace: {{ include "identity.namespace" . }}
+  labels:
+    app: invite-signup
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: invite-signup
+  template:
+    metadata:
+      labels:
+        app: invite-signup
+      annotations:
+        checksum/config: {{ printf "%s|%s|%s" (include "identity.inviteSignupNginx" .) (include "identity.inviteSignupIndex" .) (.Values.signup | toYaml) | sha256sum }}
+    spec:
+      containers:
+        - name: nginx
+          image: {{ .Values.signup.image | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: config
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+      volumes:
+        - name: config
+          configMap:
+            name: invite-signup
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: invite-signup
+  namespace: {{ include "identity.namespace" . }}
+  labels:
+    app: invite-signup
+spec:
+  selector:
+    app: invite-signup
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- $entrypoint := .Values.traefik.portalEntrypoint | default "websecure" }}
+{{- $tls := true }}
+{{- if hasKey .Values.traefik "portalTLS" }}{{ $tls = .Values.traefik.portalTLS }}{{ end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: invite-signup
+  namespace: {{ include "identity.namespace" . }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ $entrypoint }}
+{{- if $tls }}
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: {{ .Values.traefik.portalCertResolver | default "letsencrypt" }}
+{{- end }}
+spec:
+  ingressClassName: traefik
+{{- if $tls }}
+  tls:
+    - hosts:
+        - {{ .Values.authelia.portalHost | quote }}
+{{- end }}
+  rules:
+    - host: {{ .Values.authelia.portalHost | quote }}
+      http:
+        paths:
+          - path: /invite
+            pathType: Prefix
+            backend:
+              service:
+                name: invite-signup
+                port:
+                  number: 8080
+{{- end }}

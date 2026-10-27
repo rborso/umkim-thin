@@ -1,0 +1,53 @@
+# Values for charts/identity, rendered from the site's group_vars.
+namespace: identity
+# helm --create-namespace owns the namespace; the chart must not also create it.
+createNamespace: false
+
+cluster:
+  dnsServiceIP: "{{ dns_service_ip | default('10.43.0.10') }}"
+
+persistence:
+  storageClass: "{{ storage_class_config }}"
+
+lldap:
+  baseDN: "{{ base_dn }}"
+  adminEmail: "{{ admin_email }}"
+  adminPassword: "{{ secret_lldap_admin_password }}"
+  jwtSecret: "{{ secret_lldap_jwt }}"
+  # Behind the portal; the household admin uses it for resets and removals.
+  exposeWebUI: true
+  webUIHost: "lldap.{{ zone }}"
+  bindAccount:
+    enabled: true
+    password: "{{ secret_lldap_bind }}"
+
+valkey:
+  # Reuse the generated Authelia session secret as the internal Valkey
+  # password; it is already rendered into the identity Secret.
+  password: "{{ secret_authelia_session }}"
+
+authelia:
+  portalHost: "{{ portal_host }}"
+  publicURL: "https://{{ portal_host }}"
+  cookieDomain: "{{ zone }}"
+  sessionSecret: "{{ secret_authelia_session }}"
+  storageEncryptionKey: "{{ secret_authelia_storage }}"
+  resetPasswordJWTSecret: "{{ secret_authelia_reset }}"
+  # Every host under the zone is reachable once authenticated.
+  accessDomains:
+    - "*.{{ zone }}"
+    - "{{ zone }}"
+
+traefik:
+  deployMiddleware: true
+  # Put the file-provider middleware ConfigMap where Traefik runs, so the
+  # traefik role can mount it.
+  middlewareNamespace: kube-system
+  portalEntrypoint: websecure
+  portalTLS: true
+  portalCertResolver: letsencrypt
+
+# The invite sign-up page posts to this install's console.
+signup:
+  enabled: true
+  redeemURL: "http://umkim-thin-console.umkim-thin.svc.cluster.local:8080/api/invites/redeem"

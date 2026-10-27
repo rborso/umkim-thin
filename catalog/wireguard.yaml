@@ -1,0 +1,48 @@
+name: wireguard
+displayName: WireGuard gateway
+description: >
+  Optional private access. Runs the VPN gateway as a workload in this cluster,
+  so peers reach the apps over the overlay instead of the public internet.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/wireguard-gateway
+  version: 0.1.3
+  versions:
+    - version: 0.1.3
+      appVersion: 1.0.0
+      channel: stable
+    - version: 0.1.2
+      appVersion: 1.0.0
+      channel: stable
+    - version: 0.1.1
+      appVersion: 1.0.0
+      channel: stable
+
+namespace: wireguard
+
+# No HTTP route: the gateway is reached by UDP. Apps that need a browser
+# behind the VPN use `exposure: vpn`; no-route apps simply omit the route block.
+
+auth:
+  kind: none
+
+exposure:
+  # UDP cannot go through an HTTP ingress. The operator forwards this port to
+  # the cluster (NodePort on a node, or a UDP-capable load balancer); the
+  # gateway binds it directly because it runs with hostNetwork.
+  protocol: udp
+  port: 51820
+
+values:
+  port: 51820
+  subnet: 192.168.168.0/24
+  secretName: wireguard-peers
+  dns: "{{ .cluster.dnsServiceIP }}"
+
+verify:
+  playwright: tests/playwright/journeys/wireguard.spec.ts
+  checks:
+    - gateway_udp_reachable
+    - peer_config_generated
+    - client_reaches_cluster_service
+    - client_reaches_app_route

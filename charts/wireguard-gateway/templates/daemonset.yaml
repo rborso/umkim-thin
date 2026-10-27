@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: wireguard-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: wireguard-gateway
+spec:
+  selector:
+    matchLabels:
+      app: wireguard-gateway
+  template:
+    metadata:
+      labels:
+        app: wireguard-gateway
+    spec:
+      # hostNetwork keeps the UDP path simple: every node runs a local UDP
+      # listener, so whichever node owns the VIP can accept WireGuard traffic.
+      # A DaemonSet gives failover without moving a single stateful pod.
+      hostNetwork: true
+      # The gateway is hostNetwork; the node's resolver can reach the internet
+      # (cluster DNS does not work from the host network on every CNI).
+      dnsPolicy: Default
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ .Values.image | quote }}
+          command: ["/bin/sh", "/scripts/start.sh"]
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          env:
+            - name: PORT
+              value: {{ .Values.port | quote }}
+            - name: SUBNET
+              value: {{ .Values.subnet | quote }}
+            - name: TRAEFIK_VPN_PORT
+              value: {{ .Values.traefikVPNPort | default 30444 | quote }}
+          ports:
+            - name: wg
+              containerPort: {{ .Values.port }}
+              protocol: UDP
+          readinessProbe:
+            exec:
+              command: ["wg", "show", "wg0"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Values.secretName }}
+        - name: script
+          configMap:
+            name: wireguard-gateway-script

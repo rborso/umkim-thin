@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: umkim-thin-console
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: umkim-thin-console
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: umkim-thin-console
+  template:
+    metadata:
+      labels:
+        app: umkim-thin-console
+    spec:
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # The PVC is group-writable for the console user.
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: seed
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mkdir -p /data/chart-mirror
+              for f in secrets.yml identity-values.yml identity-apps.yml console-session-key \
+                       authelia-oidc-hmac authelia-oidc-key.pem \
+                       invites.json wg-clients.json apps-state.json; do
+                [ -f "/seed/$f" ] || continue
+                # These files are mutable at runtime (media settings,
+                # app-contributed identity overrides, invites, WireGuard peers
+                # and app state); seed them only when absent. The other files
+                # are installer-owned and should track the seed.
+                case "$f" in
+                  secrets.yml|identity-apps.yml|invites.json|wg-clients.json|apps-state.json)
+                    if [ -f "/data/$f" ]; then
+                      continue
+                    fi
+                    ;;
+                esac
+                cp -f "/seed/$f" "/data/$f"
+              done
+              [ -f /mirror/mirror.tar ] && tar xf /mirror/mirror.tar -C /data/chart-mirror || true
+          volumeMounts:
+            - { name: seed, mountPath: /seed, readOnly: true }
+            - { name: mirror, mountPath: /mirror, readOnly: true }
+            - { name: state, mountPath: /data }
+      containers:
+        - name: console
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{- with .Values.podSecurity.seLinuxType }}
+            seLinuxOptions:
+              type: {{ . | quote }}
+{{- end }}
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: HELM_CACHE_HOME, value: /tmp/helm/cache }
+            - { name: HELM_CONFIG_HOME, value: /tmp/helm/config }
+            - { name: HELM_DATA_HOME, value: /tmp/helm/data }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              umask 077
+              mkdir -p /tmp/helm/cache /tmp/helm/config /tmp/helm/data
+              cat > /tmp/kubeconfig <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+                - name: in-cluster
+                  cluster:
+                    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                    server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+              users:
+                - name: sa
+                  user:
+                    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+              contexts:
+                - name: sa
+                  context: {cluster: in-cluster, user: sa}
+              current-context: sa
+              EOF
+              exec /usr/local/bin/umkim-thin serve --addr :8080 --catalog /opt/umkim-thin/catalog
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - { name: config, mountPath: /etc/umkim-thin, readOnly: true }
+            - { name: state, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+            {{- if .Values.storageSocket }}
+            - { name: storage-socket, mountPath: /run/umkim-thin }
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.storageSocket }}
+        - name: storage-socket
+          hostPath:
+            path: {{ .Values.storageSocket | quote }}
+            type: DirectoryOrCreate
+        {{- end }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: umkim-thin-state
+        - name: config
+          configMap:
+            name: {{ .Values.configMapName }}
+        - name: seed
+          secret:
+            secretName: {{ .Values.seedSecretName }}
+        - name: mirror
+          configMap:
+            name: {{ .Values.mirrorConfigMap }}

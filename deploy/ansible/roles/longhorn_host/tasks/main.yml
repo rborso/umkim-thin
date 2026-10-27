@@ -1,0 +1,30 @@
+---
+# Longhorn host prerequisites. Runs on every node (the Longhorn components use
+# iscsi and NFS on the host).
+- name: longhorn | install host dependencies
+  ansible.builtin.dnf:
+    name:
+      - iscsi-initiator-utils
+      - nfs-utils
+    state: present
+
+- name: longhorn | enable iscsid
+  ansible.builtin.systemd_service:
+    name: iscsid
+    enabled: true
+    state: started
+
+# Longhorn's nsenter into the host mount namespace uses a minimal PATH; Rocky
+# ships iscsiadm only under /usr/sbin.
+- name: longhorn | symlink iscsiadm into /usr/bin
+  ansible.builtin.file:
+    src: /usr/sbin/iscsiadm
+    dest: /usr/bin/iscsiadm
+    state: link
+    force: true
+
+- name: longhorn | ensure the data directory exists
+  ansible.builtin.file:
+    path: "{{ longhorn_data_path }}"
+    state: directory
+    mode: '0755'

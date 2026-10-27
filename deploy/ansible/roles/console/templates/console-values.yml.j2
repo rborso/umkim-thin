@@ -1,0 +1,13 @@
+image: localhost/umkim-thin:dev
+imagePullPolicy: Never
+consoleHost: {{ console_host }}
+forwardAuthMiddleware: {{ middleware | default('identity-authelia@file') }}
+persistence:
+  storageClass: "{{ console_persistence_class | default(storage_class_config) }}"
+  size: {{ console_state_size | default('2Gi') }}
+configMapName: umkim-thin-config
+seedSecretName: umkim-thin-secrets
+mirrorConfigMap: umkim-thin-mirror
+storageSocket: {{ (storage_socket | default("")) | to_json }}
+podSecurity:
+  seLinuxType: "{{ console_selinux_type | default('') }}"

@@ -1,0 +1,214 @@
+---
+# The console runs as a Deployment from the umkim-thin image (helm + kubectl
+# baked in). In every target the state lives on a PVC and the config comes from
+# a ConfigMap, so the pod can run on any node. The single-node host storage
+# agent is the only host-coupled piece: its socket is mounted on targets where
+# storage_agent is true.
+
+- name: copy the chart mirror to the target
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/artifacts/chart-mirror"
+    dest: "{{ remote_dir }}/"
+    mode: preserve
+
+- name: console session key (first run only)
+  ansible.builtin.shell: |
+    umask 077
+    head -c 32 /dev/urandom | base64 | tr -d '\n' > '{{ state_dir }}/console-session-key'
+  args:
+    creates: "{{ state_dir }}/console-session-key"
+
+- name: copy the console chart
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/artifacts/charts/umkim-thin"
+    dest: "{{ remote_dir }}/charts/"
+    mode: preserve
+
+# ---------------------------------------------------------------------------
+# The installer still needs the node kubeconfig for helm/kubectl. It is not the
+# console pod's kubeconfig: the pod generates one from its ServiceAccount.
+# ---------------------------------------------------------------------------
+- name: kubeconfig for the installer
+  ansible.builtin.copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "{{ state_dir }}/kubeconfig"
+    remote_src: true
+    mode: '0600'
+
+- name: find the identity chart package
+  ansible.builtin.shell: |
+    ls '{{ remote_dir }}/chart-mirror/'identity-*.tgz 2>/dev/null | xargs -n1 basename | head -1
+  register: identity_tgz
+  changed_when: false
+
+- name: render the console config
+  ansible.builtin.template:
+    src: config.env.j2
+    dest: "{{ state_dir }}/config.env"
+    mode: '0644'
+
+# ---------------------------------------------------------------------------
+# Seed the PVC from a Secret + ConfigMaps. This is the only path for both
+# single and HA; the chart extracts the mirror and copies the installer-owned
+# files on first start.
+# ---------------------------------------------------------------------------
+- name: ensure the console namespace
+  ansible.builtin.shell: |
+    set -eu
+    K="/usr/local/bin/kubectl --kubeconfig {{ state_dir }}/kubeconfig"
+    $K create namespace umkim-thin --dry-run=client -o yaml | $K apply -f -
+  changed_when: false
+
+- name: seed Secret and ConfigMaps
+  ansible.builtin.shell: |
+    set -eu
+    K="/usr/local/bin/kubectl --kubeconfig {{ state_dir }}/kubeconfig -n umkim-thin"
+    seed=""
+    for f in secrets.yml identity-values.yml identity-apps.yml console-session-key \
+             console-localadmin-password authelia-oidc-hmac authelia-oidc-key.pem \
+             invites.json wg-clients.json apps-state.json; do
+      [ -f "{{ state_dir }}/$f" ] && seed="$seed --from-file=$f={{ state_dir }}/$f"
+    done
+    $K create secret generic umkim-thin-secrets $seed --dry-run=client -o yaml | $K apply -f -
+    $K create configmap umkim-thin-config \
+      --from-file=config.env={{ state_dir }}/config.env \
+      --dry-run=client -o yaml | $K apply -f -
+    tar cf /tmp/umkim-mirror.tar -C {{ remote_dir }}/chart-mirror .
+    $K create configmap umkim-thin-mirror \
+      --from-file=mirror.tar=/tmp/umkim-mirror.tar \
+      --dry-run=client -o yaml | $K apply -f -
+    rm -f /tmp/umkim-mirror.tar
+
+# ---------------------------------------------------------------------------
+- name: render the console chart values
+  ansible.builtin.template:
+    src: console-values.yml.j2
+    dest: "{{ state_dir }}/console-values.yml"
+    mode: '0644'
+
+- name: stop the legacy host process
+  ansible.builtin.systemd_service:
+    name: umkim-thin
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: take over objects left by the host-process setup
+  ansible.builtin.shell: |
+    set -u
+    K=/usr/local/bin/kubectl
+    for kind in service ingress; do
+      mgr=$($K -n umkim-thin get "$kind" umkim-thin-console \
+        -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)
+      if [ "$mgr" != "Helm" ]; then
+        $K -n umkim-thin delete "$kind" umkim-thin-console --ignore-not-found
+      fi
+    done
+    $K -n umkim-thin delete endpointslice -l kubernetes.io/service-name=umkim-thin-console --ignore-not-found
+  environment:
+    KUBECONFIG: "{{ state_dir }}/kubeconfig"
+  changed_when: false
+
+# ---------------------------------------------------------------------------
+# Single-node host storage agent (disks/RAID/NFS). It is a root host service,
+# not a privileged pod; the console reaches it over a hostPath Unix socket.
+# ---------------------------------------------------------------------------
+- name: (host) install storage packages
+  ansible.builtin.dnf:
+    name: [mdadm, xfsprogs, nfs-utils]
+    state: present
+  when: (storage_agent | default(false) | bool)
+
+- name: (host) install the umkim-thin binary
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/artifacts/umkim-thin"
+    dest: /usr/local/bin/umkim-thin
+    mode: '0755'
+  when: (storage_agent | default(false) | bool)
+
+- name: (host) storage agent systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/umkim-thin-storage.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=umkim-thin host storage agent
+      After=network-online.target
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/umkim-thin storage-agent --socket /run/umkim-thin/storage.sock --state {{ state_dir }}/storage.yml
+      Restart=on-failure
+      RuntimeDirectory=umkim-thin
+      RuntimeDirectoryMode=0750
+      [Install]
+      WantedBy=multi-user.target
+  when: (storage_agent | default(false) | bool)
+
+- name: (host) start the storage agent
+  ansible.builtin.systemd_service:
+    name: umkim-thin-storage
+    enabled: true
+    state: restarted
+    daemon_reload: true
+  when: (storage_agent | default(false) | bool)
+
+- name: (host) let the console reach the storage socket
+  ansible.builtin.shell: |
+    chown root:65532 /run/umkim-thin
+    chmod 0750 /run/umkim-thin
+  changed_when: false
+  when: (storage_agent | default(false) | bool)
+
+- name: (host) NFS in the trusted zone
+  ansible.posix.firewalld:
+    zone: trusted
+    service: nfs
+    permanent: true
+    immediate: true
+    state: enabled
+  when:
+    - (storage_agent | default(false) | bool)
+    - groups['server'] | length <= 1
+
+- name: install or upgrade the console
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/helm upgrade --install umkim-thin {{ remote_dir }}/charts/umkim-thin
+      --namespace umkim-thin --create-namespace
+      --kubeconfig {{ state_dir }}/kubeconfig
+      --values {{ state_dir }}/console-values.yml
+      --wait --timeout 5m
+  register: console_release
+  changed_when: >-
+    'Installing it now' in console_release.stdout or
+    'has been upgraded' in console_release.stdout
+
+# The image tag is :dev, so a Helm upgrade with the same values does not change
+# the pod template even when provision.sh imported a new image. Restart after
+# the import so the console actually runs the code in this checkout.
+- name: restart the console to use the freshly imported image
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n umkim-thin rollout restart deployment/umkim-thin-console
+  environment:
+    KUBECONFIG: "{{ state_dir }}/kubeconfig"
+  changed_when: true
+
+- name: console workloads
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n umkim-thin get deploy,svc,ingress
+  environment:
+    KUBECONFIG: "{{ state_dir }}/kubeconfig"
+  changed_when: false
+
+- name: wait for the console to answer
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n umkim-thin wait --for=condition=Ready pod
+      -l app=umkim-thin-console --timeout=120s
+  environment:
+    KUBECONFIG: "{{ state_dir }}/kubeconfig"
+  changed_when: false
+  retries: 6
+  delay: 5
+  register: console_ready
+  until: console_ready.rc == 0

@@ -1,0 +1,68 @@
+{{- $host := required "consoleHost is required (e.g. console.example.com)" .Values.consoleHost -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: umkim-thin-console
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    # Authelia gates it first; then the console's own login (admin/breakglass).
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.forwardAuthMiddleware | quote }}
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: umkim-thin-console
+                port:
+                  number: 8080
+---
+# The console has its own login/session. Keep /login outside Authelia's
+# forward-auth so the login form can issue umkim_thin_session; the rest of the
+# console (including /api/*) remains gated by Authelia.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: umkim-thin-console-login
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    # Beat the catch-all / Prefix route.
+    traefik.ingress.kubernetes.io/router.priority: "1000"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /login
+            pathType: Exact
+            backend:
+              service:
+                name: umkim-thin-console
+                port:
+                  number: 8080
+          # CI invite redemption uses the console API directly; the portal page
+          # remains at /invite/redeem. Both handlers are public.
+          - path: /api/invites/redeem
+            pathType: Exact
+            backend:
+              service:
+                name: umkim-thin-console
+                port:
+                  number: 8080

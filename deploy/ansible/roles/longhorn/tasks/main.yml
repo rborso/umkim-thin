@@ -1,0 +1,90 @@
+---
+# Install Longhorn (shared, replicated storage) on the primary.
+- name: longhorn | add the chart repository
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm repo add longhorn https://charts.longhorn.io
+  register: longhorn_repo
+  changed_when: "'has been added' in longhorn_repo.stdout"
+  failed_when: longhorn_repo.rc != 0 and 'already exists' not in (longhorn_repo.stderr | default(''))
+
+- name: longhorn | update chart repositories
+  ansible.builtin.command: /usr/local/bin/helm repo update
+  changed_when: false
+
+- name: longhorn | install or upgrade the chart
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/helm upgrade --install longhorn longhorn/longhorn
+      --namespace longhorn-system --create-namespace
+      --version {{ longhorn_chart_version }}
+      --kubeconfig /etc/rancher/k3s/k3s.yaml
+      --set defaultSettings.defaultDataPath={{ longhorn_data_path }}
+      --set defaultSettings.defaultReplicaCount={{ longhorn_replica_count }}
+      --set defaultSettings.storageReservedPercentageForDefaultDisk={{ longhorn_disk_storage_reserved_percent }}
+      --set defaultSettings.storageOverProvisioningPercentage={{ longhorn_storage_over_provisioning_percentage }}
+      --set defaultSettings.storageMinimalAvailablePercentage={{ longhorn_storage_minimal_available_percentage }}
+      --set persistence.defaultClass=false
+      --wait --timeout 20m
+  register: longhorn_install
+  changed_when: "'has been installed' in longhorn_install.stdout or 'has been upgraded' in longhorn_install.stdout"
+
+# We manage the storage classes ourselves so both use WaitForFirstConsumer:
+# with Immediate binding an RWO volume can attach to one node while a second pod
+# (e.g. an app's bootstrap Job) is scheduled to another, and the pods deadlock.
+- name: longhorn | render the storage classes
+  ansible.builtin.template:
+    src: longhorn-storageclasses.yaml.j2
+    dest: /tmp/longhorn-storageclasses.yaml
+    mode: '0644'
+
+- name: longhorn | apply the storage classes
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl apply -f /tmp/longhorn-storageclasses.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: longhorn | wait for the manager
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n longhorn-system wait --for=condition=ready pod
+      -l app=longhorn-manager --timeout=900s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+# Longhorn computes the reservation when the disk is created, so cap the disks
+# that already exist as well (the setting above only seeds new ones). Without
+# this a fresh HA node keeps 30% reserved and large volumes stay unschedulable.
+- name: longhorn | cap the per-disk reservation
+  ansible.builtin.shell: |
+    set -u
+    K=/usr/local/bin/kubectl
+    for n in $($K -n longhorn-system get nodes.longhorn.io -o name); do
+      for d in $($K -n longhorn-system get "$n" -o go-template='{% raw %}{{range $k,$v := .spec.disks}}{{$k}}{{"\n"}}{{end}}{% endraw %}'); do
+        $K -n longhorn-system patch "$n" --type merge \
+          -p "{\"spec\":{\"disks\":{\"$d\":{\"storageReserved\":{{ longhorn_disk_storage_reserved }}}}}}"
+      done
+    done
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: longhorn | stop local-path claiming the default class
+  ansible.builtin.shell: |
+    set -u
+    K=/usr/local/bin/kubectl
+    if $K get storageclass local-path >/dev/null 2>&1; then
+      $K patch storageclass local-path \
+        -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
+    fi
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: longhorn | storage classes
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl get storageclass
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false

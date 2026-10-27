@@ -1,0 +1,60 @@
+{{- if and .Values.enabled .Values.traefik.deployMiddleware }}
+# Traefik file-provider fragment for the forward-auth middleware and the
+# optional manual default certificate (wildcard).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-traefik
+  namespace: {{ .Values.traefik.middlewareNamespace }}
+  labels:
+    app.kubernetes.io/name: identity
+data:
+  authelia-middleware.yml: |
+    http:
+      middlewares:
+        {{ .Values.traefik.middlewareName }}:
+          forwardAuth:
+            address: "http://authelia.{{ include "identity.namespace" . }}.svc.cluster.local:{{ .Values.authelia.port }}/api/authz/forward-auth"
+            trustForwardHeader: true
+            authRequestHeaders:
+              - Accept
+              - Cookie
+              - X-Forwarded-For
+              - X-Forwarded-Proto
+              - X-Forwarded-Host
+              - X-Forwarded-Uri
+              - X-Forwarded-Method
+            authResponseHeaders:
+              - Remote-User
+              - Remote-Groups
+              - Remote-Email
+              - Remote-Name
+        {{ .Values.traefik.redirectMiddlewareName | default "identity-redirect-https" }}:
+          redirectScheme:
+            scheme: https
+            permanent: true
+        {{ .Values.traefik.stripAuthorizationMiddlewareName | default "strip-authorization" }}:
+          headers:
+            customRequestHeaders:
+              Authorization: ""
+        {{ .Values.traefik.vpnOnlyMiddlewareName | default "vpn-only" }}:
+          ipAllowList:
+            sourceRange:
+{{- range .Values.traefik.vpnSourceRanges }}
+              - {{ . | quote }}
+{{- end }}
+        {{ .Values.traefik.vpnLocalMiddlewareName | default "vpn-local" }}:
+          ipAllowList:
+            sourceRange:
+{{- range .Values.traefik.vpnLocalSourceRanges }}
+              - {{ . | quote }}
+{{- end }}
+{{- if .Values.traefik.defaultCertificateSecret }}
+  certs.yml: |
+    tls:
+      stores:
+        default:
+          defaultCertificate:
+            secretName: {{ .Values.traefik.defaultCertificateSecret | quote }}
+{{- end }}
+{{- end }}

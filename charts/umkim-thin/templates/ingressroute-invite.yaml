@@ -1,0 +1,21 @@
+{{- $host := required "consoleHost is required (e.g. console.example.com)" .Values.consoleHost -}}
+# Public invite redemption handler on the console. The console's own auth code
+# already exempts /api/invites/redeem, but the catch-all Ingress applies
+# Authelia to every path. A dedicated IngressRoute with no middleware makes the
+# CI/client invitation path deterministic and does not affect the portal page.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: umkim-thin-console-invite
+  namespace: {{ .Release.Namespace }}
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`{{ $host }}`) && Path(`/api/invites/redeem`)
+      kind: Rule
+      priority: 100000
+      services:
+        - name: umkim-thin-console
+          port: 8080
+  tls:
+    certResolver: letsencrypt

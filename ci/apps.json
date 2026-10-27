@@ -1,0 +1,114 @@
+{
+  "_comment": "Per-app verification targets for the lab run. {zone} is substituted with the target's zone; 'public' are sample paths that must bypass auth. 'admin' names the app's own admin account: ci/e2e.sh reads that Secret and exports UMKIM_THIN_<APP>_ADMIN_USER / _ADMIN_PASSWORD for the client journeys.",
+  "gitea": [
+    {
+      "name": "gitea",
+      "host": "gitea.{zone}",
+      "auth": "oidc",
+      "admin": {
+        "namespace": "gitea",
+        "secret": "gitea-secrets",
+        "user": "gitea-admin"
+      }
+    }
+  ],
+  "nextcloud": [
+    {
+      "name": "nextcloud",
+      "host": "nextcloud.{zone}",
+      "auth": "forward_auth",
+      "public": [
+        "/s/ci-none",
+        "/public.php",
+        "/index.php/apps/richdocuments/wopi/files/1?access_token=ci-probe",
+        "/core/css/server.css",
+        "/dist/core-public.js",
+        "/apps/theming/theme/default.css",
+        "/apps/text/css/text-viewer.css",
+        "/apps/richdocuments/token",
+        "/apps/files_sharing/publicpreview/ci-none"
+      ],
+      "admin": {
+        "namespace": "nextcloud",
+        "secret": "nextcloud-secrets",
+        "user": "nc-admin"
+      }
+    }
+  ],
+  "immich": [
+    {
+      "name": "immich",
+      "host": "immich.{zone}",
+      "auth": "oidc",
+      "public": [
+        "/share/ci-none",
+        "/api/server/config",
+        "/api/public/config"
+      ],
+      "admin": {
+        "namespace": "immich",
+        "secret": "immich-secrets",
+        "user": "admin@immich.local"
+      }
+    }
+  ],
+  "paperless": [
+    {
+      "name": "paperless",
+      "host": "paperless.{zone}",
+      "auth": "oidc",
+      "admin": {
+        "namespace": "paperless",
+        "secret": "paperless-secrets",
+        "user": "admin"
+      }
+    }
+  ],
+  "servarr": [
+    {
+      "name": "servarr",
+      "host": "servarr.{zone}",
+      "auth": "forward_auth"
+    },
+    {
+      "name": "jellyfin",
+      "host": "jellyfin.{zone}",
+      "auth": "forward_auth"
+    },
+    {
+      "name": "sonarr",
+      "host": "sonarr.{zone}",
+      "auth": "forward_auth",
+      "apiKey": {
+        "namespace": "servarr",
+        "secret": "servarr-api-keys",
+        "key": "sonarr-api-key"
+      }
+    },
+    {
+      "name": "radarr",
+      "host": "radarr.{zone}",
+      "auth": "forward_auth",
+      "apiKey": {
+        "namespace": "servarr",
+        "secret": "servarr-api-keys",
+        "key": "radarr-api-key"
+      }
+    },
+    {
+      "name": "prowlarr",
+      "host": "prowlarr.{zone}",
+      "auth": "forward_auth",
+      "apiKey": {
+        "namespace": "servarr",
+        "secret": "servarr-api-keys",
+        "key": "prowlarr-api-key"
+      }
+    },
+    {
+      "name": "qbittorrent",
+      "host": "qbittorrent.{zone}",
+      "auth": "forward_auth"
+    }
+  ]
+}

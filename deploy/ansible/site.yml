@@ -1,0 +1,45 @@
+---
+# Two plays: host + cluster on every node; the platform roles once, on the
+# primary.
+- name: host and cluster
+  hosts: server
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+      tags: [common]
+    - role: firewall
+      tags: [firewall]
+    # Host storage prerequisites must run before k3s: if a node's k3s start is
+    # slow/fails, a failed host skips later roles, and the Longhorn manager then
+    # crash-loops because iscsiadm is missing. longhorn_host needs no cluster.
+    - role: longhorn_host
+      tags: [longhorn]
+      when: storage_backend | default('') == 'longhorn'
+    - role: k3s
+      tags: [k3s]
+
+- name: platform
+  hosts: primary
+  become: true
+  gather_facts: true
+  roles:
+    # Calico first: nothing schedules until the CNI is up.
+    - role: calico
+      tags: [calico]
+    # Storage backend (local needs nothing; the classes come from group vars).
+    - role: nfs
+      tags: [nfs]
+      when: (storage_backend | default('')) in ['', 'nfs'] or (nfs_mode | default('host')) == 'external'
+    - role: longhorn
+      tags: [longhorn]
+      when: storage_backend | default('') == 'longhorn'
+    - role: identity
+      tags: [identity]
+    - role: traefik
+      tags: [traefik]
+    - role: console
+      tags: [console]
+    - role: netpol
+      tags: [netpol]
+      when: enable_network_policies | default(true)
