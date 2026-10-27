@@ -103,6 +103,14 @@ local admin. Existing users keep their own language. **Immich** has no
 server-side install language: the Immich UI follows the user/browser setting and
 can be changed in Immich's own user settings.
 
+The **Gitea install form** exposes a default/fallback UI locale. Gitea still
+prefers a matching browser locale; the selected locale is the fallback and the
+first entry in Gitea's language list. Users keep their own per-user choice.
+
+The **Paperless install form** exposes the Tesseract **OCR language** (English
+by default). It does not control Paperless's UI language, which follows the
+browser/user locale; Paperless has no server-side UI-language default.
+
 The **Servarr install form** exposes the media stack's defaults:
 
 - **Default language** (English by default; Hungarian and the other Radarr languages are selectable):

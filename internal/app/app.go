@@ -174,8 +174,11 @@ type Options struct {
 	// after the default stack has been installed.
 	ExtraLanguages []string
 	// Language is an app-level default for apps that support one. It is
-	// currently used by Nextcloud; Immich language is a per-user/browser setting.
+	// currently used by Nextcloud and Gitea; Immich language is a per-user/
+	// browser setting.
 	Language string
+	// OCRLanguage is Paperless's Tesseract OCR language.
+	OCRLanguage string
 }
 
 func (o Options) step(format string, a ...any) {
@@ -437,20 +440,51 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 
 	values := in.renderValues(e, ctx)
 	if opts.Language != "" {
-		if e.Name != "nextcloud" {
+		switch e.Name {
+		case "nextcloud":
+			code, err := normalizeAppLanguage(opts.Language)
+			if err != nil {
+				return Result{}, err
+			}
+			bootstrap, ok := values["bootstrap"].(map[string]any)
+			if !ok {
+				bootstrap = map[string]any{}
+				values["bootstrap"] = bootstrap
+			}
+			bootstrap["language"] = code
+			opts.Language = code
+		case "gitea":
+			langs, names, err := giteaLanguageLists(opts.Language)
+			if err != nil {
+				return Result{}, err
+			}
+			gitea, ok := values["gitea"].(map[string]any)
+			if !ok {
+				gitea = map[string]any{}
+				values["gitea"] = gitea
+			}
+			i18n, ok := gitea["i18n"].(map[string]any)
+			if !ok {
+				i18n = map[string]any{}
+				gitea["i18n"] = i18n
+			}
+			i18n["languages"] = langs
+			i18n["names"] = names
+		default:
 			return Result{}, fmt.Errorf("%s does not support an install-time language", e.Name)
 		}
-		code, err := normalizeAppLanguage(opts.Language)
+	}
+	if opts.OCRLanguage != "" {
+		if e.Name != "paperless" {
+			return Result{}, fmt.Errorf("%s does not support an OCR language", e.Name)
+		}
+		code, err := normalizeOCRLanguage(opts.OCRLanguage)
 		if err != nil {
 			return Result{}, err
 		}
-		bootstrap, ok := values["bootstrap"].(map[string]any)
-		if !ok {
-			bootstrap = map[string]any{}
-			values["bootstrap"] = bootstrap
-		}
-		bootstrap["language"] = code
-		opts.Language = code
+		values["ocrLanguage"] = code
+		values["ocrLanguages"] = code
+		opts.OCRLanguage = code
 	}
 	if opts.Upgrade {
 		if err := in.preserveStorageClasses(e.Name, e.Namespace, values); err != nil {

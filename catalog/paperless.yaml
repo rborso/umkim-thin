@@ -4,8 +4,11 @@ description: Document archive with OCR, tags and full-text search.
 
 chart:
   ref: oci://ghcr.io/rborso/charts/paperless
-  version: 0.1.11
+  version: 0.1.12
   versions:
+    - version: 0.1.12
+      appVersion: 3.3.0
+      channel: stable
     - version: 0.1.11
       appVersion: 3.3.0
       channel: stable
@@ -34,6 +37,7 @@ oidc:
   requirePkce: false
 
 values:
+  ocrLanguage: eng
   externalUrl: "https://{{ .host }}"
   # The search index belongs on the block-backed config class; documents and
   # the import/export directories are media and should use the shared media

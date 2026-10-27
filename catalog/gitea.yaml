@@ -4,8 +4,11 @@ description: Lightweight self-hosted Git service with issues, PRs and CI.
 
 chart:
   ref: oci://ghcr.io/rborso/charts/gitea
-  version: 0.1.19
+  version: 0.1.20
   versions:
+    - version: 0.1.20
+      appVersion: 28.1.0
+      channel: stable
     - version: 0.1.19
       appVersion: 28.1.0
       channel: stable

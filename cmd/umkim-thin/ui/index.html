@@ -658,6 +658,62 @@ const MEDIA_LANGUAGE_OPTIONS = [
   { value: 'ar', label: 'Arabic' },
   { value: 'he', label: 'Hebrew' },
 ];
+const GITEA_LANGUAGE_OPTIONS = [
+  { value: 'en-US', label: 'English' },
+  { value: 'hu-HU', label: 'Hungarian' },
+  { value: 'de-DE', label: 'German' },
+  { value: 'fr-FR', label: 'French' },
+  { value: 'es-ES', label: 'Spanish' },
+  { value: 'it-IT', label: 'Italian' },
+  { value: 'nl-NL', label: 'Dutch' },
+  { value: 'pl-PL', label: 'Polish' },
+  { value: 'pt-BR', label: 'Portuguese (Brazil)' },
+  { value: 'pt-PT', label: 'Portuguese (Portugal)' },
+  { value: 'cs-CZ', label: 'Czech' },
+  { value: 'ru-RU', label: 'Russian' },
+  { value: 'uk-UA', label: 'Ukrainian' },
+  { value: 'sv-SE', label: 'Swedish' },
+  { value: 'fi-FI', label: 'Finnish' },
+  { value: 'tr-TR', label: 'Turkish' },
+  { value: 'el-GR', label: 'Greek' },
+  { value: 'bg-BG', label: 'Bulgarian' },
+  { value: 'ja-JP', label: 'Japanese' },
+  { value: 'ko-KR', label: 'Korean' },
+  { value: 'zh-CN', label: 'Chinese (Simplified)' },
+  { value: 'zh-TW', label: 'Chinese (Traditional)' },
+  { value: 'fa-IR', label: 'Persian' },
+  { value: 'id-ID', label: 'Indonesian' },
+];
+
+const PAPERLESS_OCR_OPTIONS = [
+  { value: 'eng', label: 'English' },
+  { value: 'hun', label: 'Hungarian' },
+  { value: 'deu', label: 'German' },
+  { value: 'fra', label: 'French' },
+  { value: 'spa', label: 'Spanish' },
+  { value: 'ita', label: 'Italian' },
+  { value: 'nld', label: 'Dutch' },
+  { value: 'pol', label: 'Polish' },
+  { value: 'ces', label: 'Czech' },
+  { value: 'slk', label: 'Slovak' },
+  { value: 'ron', label: 'Romanian' },
+  { value: 'rus', label: 'Russian' },
+  { value: 'ukr', label: 'Ukrainian' },
+  { value: 'tur', label: 'Turkish' },
+  { value: 'ell', label: 'Greek' },
+  { value: 'por', label: 'Portuguese' },
+  { value: 'swe', label: 'Swedish' },
+  { value: 'dan', label: 'Danish' },
+  { value: 'fin', label: 'Finnish' },
+  { value: 'nor', label: 'Norwegian' },
+  { value: 'jpn', label: 'Japanese' },
+  { value: 'kor', label: 'Korean' },
+  { value: 'chi_sim', label: 'Chinese (Simplified)' },
+  { value: 'chi_tra', label: 'Chinese (Traditional)' },
+  { value: 'ara', label: 'Arabic' },
+  { value: 'heb', label: 'Hebrew' },
+];
+
 const MEDIA_QUALITY_OPTIONS = [
   { value: '480p', label: '480p (SD)' },
   { value: '720p', label: '720p (HD)' },
@@ -777,6 +833,12 @@ function openInstall(e) {
     : e.Name === 'nextcloud'
     ? `<div><label>Default app language</label><select id="install-language">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, 'en')}</select></div>` +
       `<span class="hint">New Nextcloud users default to this language; existing users keep their own choice.</span>`
+    : e.Name === 'gitea'
+    ? `<div><label>Default/fallback UI locale</label><select id="install-gitea-language">${optionMarkup(GITEA_LANGUAGE_OPTIONS, 'en-US')}</select></div>` +
+      `<span class="hint">Gitea prefers a matching browser locale; this is the fallback. Users can change their own language.</span>`
+    : e.Name === 'paperless'
+    ? `<div><label>OCR language</label><select id="install-ocr-language">${optionMarkup(PAPERLESS_OCR_OPTIONS, 'eng')}</select></div>` +
+      `<span class="hint">Controls document OCR, not the Paperless UI language. The UI follows the browser/user locale.</span>`
     : e.Name === 'immich'
     ? `<p class="hint">Immich language is a per-user/browser setting; it cannot be set at install time.</p>`
     : '';
@@ -857,6 +919,12 @@ async function doInstall(e, panel) {
   }
   if (e.Name === 'nextcloud') {
     body.language = document.getElementById('install-language').value;
+  }
+  if (e.Name === 'gitea') {
+    body.language = document.getElementById('install-gitea-language').value;
+  }
+  if (e.Name === 'paperless') {
+    body.ocrLanguage = document.getElementById('install-ocr-language').value;
   }
   note(`installing ${e.Name}…`);
   try {

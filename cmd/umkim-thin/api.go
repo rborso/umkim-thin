@@ -357,6 +357,7 @@ func serveAPI(catalogDir, addr string) error {
 			QualityCutoff  string            `json:"qualityCutoff"`
 			ExtraLanguages []string          `json:"extraLanguages"`
 			Language       string            `json:"language"`
+			OCRLanguage    string            `json:"ocrLanguage"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -370,7 +371,7 @@ func serveAPI(catalogDir, addr string) error {
 		opts := app.Options{Hosts: req.Hosts, ConfigClass: req.ConfigClass, MediaClass: req.MediaClass,
 			ChartVersion: req.Version, Exposure: req.Exposure, AllowLocal: req.AllowLocal, Certificate: req.Certificate,
 			MediaLanguage: req.MediaLanguage, QualityCutoff: req.QualityCutoff,
-			ExtraLanguages: req.ExtraLanguages, Language: req.Language}
+			ExtraLanguages: req.ExtraLanguages, Language: req.Language, OCRLanguage: req.OCRLanguage}
 		if e.Name == app.ServarrApp {
 			settings, err := app.NormalizeServarrSettings(app.ServarrSettings{
 				MediaLanguage: req.MediaLanguage,

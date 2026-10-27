@@ -273,6 +273,34 @@ func TestKnownAccessModes(t *testing.T) {
 	}
 }
 
+func TestGiteaLanguageLists(t *testing.T) {
+	langs, names, err := giteaLanguageLists("hu-HU")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(langs, "hu-HU,en-US") {
+		t.Errorf("LANGS = %q", langs)
+	}
+	if !strings.HasPrefix(names, "Hungarian,English") {
+		t.Errorf("NAMES = %q", names)
+	}
+	if strings.Count(langs, "hu-HU") != 1 {
+		t.Errorf("duplicate language: %q", langs)
+	}
+	if _, _, err := giteaLanguageLists("xx-XX"); err == nil {
+		t.Error("unknown Gitea language accepted")
+	}
+}
+
+func TestNormalizeOCRLanguage(t *testing.T) {
+	if got, err := normalizeOCRLanguage("HUN"); err != nil || got != "hun" {
+		t.Fatalf("normalizeOCRLanguage(HUN) = %q, %v", got, err)
+	}
+	if _, err := normalizeOCRLanguage("xx"); err == nil {
+		t.Error("unknown OCR language accepted")
+	}
+}
+
 func TestNormalizeAppLanguage(t *testing.T) {
 	cases := []struct {
 		in      string
