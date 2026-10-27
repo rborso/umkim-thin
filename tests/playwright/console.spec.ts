@@ -89,7 +89,7 @@ test.describe('console', () => {
     // licence. SparkyFitness is the deliberate non-commercial entry, so it is
     // the useful canary for the warning text as well.
     await page.locator('#tab-catalog-label').click();
-    await expect(page.locator('#catalog')).toContainText('License');
+    await expect(page.getByRole('columnheader', { name: 'License' }).first()).toBeVisible();
     await expect(page.locator('#catalog')).toContainText('Source-available (non-commercial)');
     await expect(page.locator('#catalog')).toContainText('chart Apache-2.0');
 

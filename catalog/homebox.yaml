@@ -1,0 +1,52 @@
+name: homebox
+displayName: HomeBox
+description: Household inventory, warranty tracking and asset labels.
+
+license:
+  chart: Apache-2.0
+  application: "AGPL-3.0"
+  url: "https://github.com/sysadminsmedia/homebox/blob/main/LICENSE"
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/homebox
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 0.27.1
+      channel: stable
+
+namespace: homebox
+
+route:
+  mode: site
+  host: "homebox.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: homebox
+  servicePort: 7745
+
+auth:
+  # HomeBox has its own OIDC provider; the portal adds the household gate.
+  kind: oidc
+
+oidc:
+  clientId: homebox
+  redirectUris:
+    - "https://{{ .host }}/api/v1/users/login/oidc/callback"
+
+values:
+  externalUrl: "https://{{ .host }}"
+  hostname: "{{ .host }}"
+  persistence:
+    data:
+      storageClass: "{{ .storage.configClass }}"
+
+verify:
+  playwright: tests/playwright/journeys/homebox.spec.ts
+  checks:
+    - route_reachable
+    - oidc_login_redirects_to_provider
+    - oidc_login_completes
+    - inventory_status_reachable

@@ -301,3 +301,67 @@ test.describe('sparkyfitness directory login', () => {
     await context.close();
   });
 });
+
+test.describe('actualbudget directory login', () => {
+  test.skip(!installed('actualbudget'), 'actualbudget is not installed');
+
+  test('a directory user completes the Actual Budget OIDC flow', async ({ browser }) => {
+    test.setTimeout(120_000);
+    const host = hostOf('actualbudget');
+    const username = ciUser('ci-actual');
+    const password = ciPassword();
+    await createUser(username, password, { displayName: username });
+
+    let callbackStatus = 0;
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username, password },
+      onPage: (p) =>
+        p.on('response', (r) => {
+          if (r.url().includes('/openid/callback')) callbackStatus = r.status();
+        }),
+      ready: async (p) =>
+        p
+          .evaluate(() => {
+            const text = document.body.innerText || '';
+            return text.includes('Server online') && !text.includes('Start using OpenID');
+          })
+          .catch(() => false),
+    });
+    expect(callbackStatus, 'Actual Budget exchanged the code').toBeGreaterThanOrEqual(200);
+    expect(callbackStatus, 'Actual Budget callback succeeded').toBeLessThan(400);
+    expect(page.url(), 'still on the app').toContain(host);
+    await context.close();
+  });
+});
+
+test.describe('homebox directory login', () => {
+  test.skip(!installed('homebox'), 'homebox is not installed');
+
+  test('a directory user completes the HomeBox OIDC flow', async ({ browser }) => {
+    test.setTimeout(120_000);
+    const host = hostOf('homebox');
+    const username = ciUser('ci-homebox');
+    const password = ciPassword();
+    await createUser(username, password, { displayName: username });
+
+    let callbackStatus = 0;
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username, password },
+      onPage: (p) =>
+        p.on('response', (r) => {
+          if (r.url().includes('/api/v1/users/login/oidc/callback')) callbackStatus = r.status();
+        }),
+      ready: async (p) =>
+        p
+          .evaluate(() => {
+            const text = document.body.innerText || '';
+            return location.pathname === '/home' || text.includes('Sign Out');
+          })
+          .catch(() => false),
+    });
+    expect(callbackStatus, 'HomeBox exchanged the code').toBeGreaterThanOrEqual(200);
+    expect(callbackStatus, 'HomeBox callback succeeded').toBeLessThan(400);
+    expect(page.url(), 'still on the app').toContain(host);
+    await context.close();
+  });
+});

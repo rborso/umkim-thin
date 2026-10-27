@@ -57,6 +57,20 @@ packages retain their own licenses; the image keeps the project's `LICENSE` and
 The catalog deploys upstream images. The chart is Apache-2.0; the application
 inside the image keeps its own license.
 
+### Actual Budget
+
+| Component | License | Source |
+|---|---|---|
+| Actual Budget | MIT | https://github.com/actualbudget/actual |
+| SQLite | Public Domain | https://www.sqlite.org/copyright.html |
+
+### HomeBox
+
+| Component | License | Source |
+|---|---|---|
+| HomeBox | AGPL-3.0 | https://github.com/sysadminsmedia/homebox |
+| SQLite | Public Domain | https://www.sqlite.org/copyright.html |
+
 ### Gitea
 
 | Component | License | Source |

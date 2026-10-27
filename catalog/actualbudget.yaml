@@ -1,0 +1,56 @@
+name: actualbudget
+displayName: Actual Budget
+description: Local-first personal finance and budgeting with multi-user OIDC.
+
+license:
+  chart: Apache-2.0
+  application: "MIT"
+  url: "https://github.com/actualbudget/actual/blob/master/LICENSE.txt"
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/actualbudget
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 26.10.0
+      channel: stable
+
+namespace: actualbudget
+
+route:
+  mode: site
+  host: "actual.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: actualbudget
+  servicePort: 5006
+
+auth:
+  # Actual has its own OIDC login. Keep the portal default for browser users;
+  # native clients can use the public or VPN exposure without the portal.
+  kind: oidc
+
+oidc:
+  clientId: actualbudget
+  redirectUris:
+    - "https://{{ .host }}/openid/callback"
+
+values:
+  externalUrl: "https://{{ .host }}"
+  persistence:
+    data:
+      storageClass: "{{ .storage.configClass }}"
+  oidc:
+    authMethod: oauth2
+    userCreationMode: login
+    enforce: false
+
+verify:
+  playwright: tests/playwright/journeys/actualbudget.spec.ts
+  checks:
+    - route_reachable
+    - oidc_login_redirects_to_provider
+    - oidc_login_completes
+    - app_health_reachable

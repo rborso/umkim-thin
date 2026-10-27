@@ -45,7 +45,7 @@ Known gaps, deliberately not hidden:
 |---|---|
 | **Identity** | LLDAP directory + Authelia. SSO (OIDC) for apps that speak it, forward-auth for apps that do not |
 | **Routes** | Every install gets a Traefik route automatically, with auth attached and public paths exempted where the app needs them (share links, native clients) |
-| **Catalog** | Curated apps with pinned charts, values, auth mode, and a verification suite that has to pass before an entry is accepted. Today: Gitea, Immich, Nextcloud, Paperless, Mealie, the Servarr media stack, and WireGuard. SparkyFitness is available as an optional source-available/non-commercial entry |
+| **Catalog** | Curated apps with pinned charts, values, auth mode, and a verification suite that has to pass before an entry is accepted. Today: Gitea, Immich, Nextcloud, Paperless, Mealie, the Servarr media stack, WireGuard, Actual Budget, and HomeBox. SparkyFitness is available as an optional source-available/non-commercial entry |
 | **Invitations** | Self-service onboarding: an operator issues a link, the invitee sets their own password |
 | **Directory UI** | `lldap.<zone>` behind the portal, for the occasional password reset or removal |
 | **WireGuard** | Optional private access: per-client configs created self-service, so apps can stay off the public internet entirely |

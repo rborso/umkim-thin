@@ -176,6 +176,26 @@ rm -f "$immich_render"
 if grep -Rq 'value: /etc/ssl/umkim-thin/ca.crt' catalog; then
   echo "the catalog must not hard-code the lab CA path" >&2; exit 1
 fi
+
+actual_render=$(mktemp)
+helm template actualbudget charts/apps/actualbudget \
+  --set externalUrl=https://actual.example.com \
+  --set oidc.enabled=true --set oidc.clientSecret=ci-only \
+  --set oidc.issuerUrl=https://auth.example.com >"$actual_render"
+grep -q 'name: ca-bundle' "$actual_render" || { echo "actualbudget: CA init container missing" >&2; exit 1; }
+grep -q 'NODE_EXTRA_CA_CERTS' "$actual_render" || { echo "actualbudget: Node CA path missing" >&2; exit 1; }
+grep -q 'ACTUAL_OPENID_CLIENT_ID' "$actual_render" || { echo "actualbudget: OIDC client id missing" >&2; exit 1; }
+rm -f "$actual_render"
+
+homebox_render=$(mktemp)
+helm template homebox charts/apps/homebox \
+  --set externalUrl=https://homebox.example.com --set hostname=homebox.example.com \
+  --set oidc.enabled=true --set oidc.clientSecret=ci-only \
+  --set oidc.issuerUrl=https://auth.example.com >"$homebox_render"
+grep -q 'name: ca-bundle' "$homebox_render" || { echo "homebox: CA init container missing" >&2; exit 1; }
+grep -q 'SSL_CERT_FILE' "$homebox_render" || { echo "homebox: Go CA path missing" >&2; exit 1; }
+grep -q 'HBOX_OIDC_CLIENT_ID' "$homebox_render" || { echo "homebox: OIDC client id missing" >&2; exit 1; }
+rm -f "$homebox_render"
 echo "   ok"
 
 echo ">> catalog charts match the tree"
