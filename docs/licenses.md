@@ -6,6 +6,8 @@ umkim-thin itself is licensed under the **Apache License 2.0**. See
 The platform installs and runs third-party software. This page records the
 license of each project in the official catalog and of the platform components.
 It is an attribution index, not a replacement for the upstream license text.
+The console shows each catalog entry's application license and chart license;
+`catalog/*.yaml` is the machine-readable source for that view.
 
 ## Repository and charts
 

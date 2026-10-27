@@ -142,6 +142,9 @@ type Result struct {
 	AppVersion string   `json:"appVersion,omitempty"`
 	HelmStatus string   `json:"helmStatus,omitempty"`
 	Routes     []string `json:"routes"`
+	// License is filled by the console/API from the catalog entry. Helm list
+	// itself does not know it.
+	License *catalog.License `json:"license,omitempty"`
 }
 
 // Options are per-install overrides; the zero value uses the site defaults.
@@ -940,14 +943,15 @@ type Component struct {
 
 // Status is the health of an installed app.
 type Status struct {
-	Name       string      `json:"name"`
-	Namespace  string      `json:"namespace"`
-	Chart      string      `json:"chart"`
-	AppVersion string      `json:"appVersion,omitempty"`
-	HelmStatus string      `json:"helmStatus"`
-	Ready      bool        `json:"ready"`
-	Routes     []string    `json:"routes"`
-	Components []Component `json:"components"`
+	Name       string           `json:"name"`
+	Namespace  string           `json:"namespace"`
+	Chart      string           `json:"chart"`
+	AppVersion string           `json:"appVersion,omitempty"`
+	HelmStatus string           `json:"helmStatus"`
+	Ready      bool             `json:"ready"`
+	Routes     []string         `json:"routes"`
+	Components []Component      `json:"components"`
+	License    *catalog.License `json:"license,omitempty"`
 }
 
 // VersionInfo is the installed and available chart versions for one app.
@@ -986,6 +990,9 @@ func (in *Installer) Status(name string, e *catalog.Entry) (Status, error) {
 		ns = e.Namespace
 	}
 	st := Status{Name: name, Namespace: ns, Routes: []string{}, Components: []Component{}}
+	if e != nil {
+		st.License = e.License
+	}
 
 	if out, err := in.run(in.cfg.Helm, "status", name, "--namespace", ns, "--kubeconfig", in.cfg.Kubeconfig, "-o", "json"); err == nil {
 		var hs struct {

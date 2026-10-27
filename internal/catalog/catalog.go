@@ -51,6 +51,22 @@ type Auth struct {
 	LDAP bool   `yaml:"ldap,omitempty"`
 }
 
+// License records both the chart licence and the licence of the application
+// the chart deploys. They are deliberately separate: the platform's charts are
+// Apache-2.0, while the upstream application may be AGPL, GPL, source-available
+// or something else.
+type License struct {
+	// Chart is the licence of the Helm chart itself.
+	Chart string `yaml:"chart" json:"Chart"`
+	// Application is the licence of the deployed application. Use a short
+	// expression for a mixed stack, e.g. "Mixed: MIT, GPL-2.0, GPL-3.0".
+	Application string `yaml:"application" json:"Application"`
+	// URL points at the authoritative licence text or notice.
+	URL string `yaml:"url,omitempty" json:"URL,omitempty"`
+	// Note carries a short warning, such as a non-commercial restriction.
+	Note string `yaml:"note,omitempty" json:"Note,omitempty"`
+}
+
 // OIDC is present when the app authenticates against Authelia itself.
 type OIDC struct {
 	ClientID     string   `yaml:"clientId"`
@@ -77,6 +93,7 @@ type Entry struct {
 	Route       *Route         `yaml:"route,omitempty"`
 	Routes      []Route        `yaml:"routes,omitempty"`
 	Auth        Auth           `yaml:"auth"`
+	License     *License       `yaml:"license"`
 	OIDC        *OIDC          `yaml:"oidc,omitempty"`
 	Exposure    map[string]any `yaml:"exposure,omitempty"`
 	Values      map[string]any `yaml:"values,omitempty"`
@@ -159,6 +176,15 @@ func (e Entry) Validate() error {
 		if !found {
 			return fmt.Errorf("%s: chart.version %s is not in chart.versions", e.Name, e.Chart.Version)
 		}
+	}
+	if e.License == nil {
+		return fmt.Errorf("%s: license is required (chart and application)", e.Name)
+	}
+	if e.License.Chart == "" {
+		return fmt.Errorf("%s: license.chart is required", e.Name)
+	}
+	if e.License.Application == "" {
+		return fmt.Errorf("%s: license.application is required", e.Name)
 	}
 	switch e.Auth.Kind {
 	case "forward_auth", "oidc", "none":

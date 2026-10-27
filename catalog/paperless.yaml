@@ -2,6 +2,11 @@ name: paperless
 displayName: Paperless-ngx
 description: Document archive with OCR, tags and full-text search.
 
+license:
+  chart: Apache-2.0
+  application: "GPL-3.0"
+  url: "https://github.com/paperless-ngx/paperless-ngx/blob/main/LICENSE"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/paperless
   version: 0.1.12

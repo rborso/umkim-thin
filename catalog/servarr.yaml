@@ -2,6 +2,12 @@ name: servarr
 displayName: Servarr stack
 description: Media automation — Seerr, Radarr, Sonarr, Prowlarr, qBittorrent and Jellyfin, wired together.
 
+license:
+  chart: Apache-2.0
+  application: "Mixed: MIT, GPL-2.0, GPL-3.0"
+  url: "https://github.com/rborso/umkim-thin/blob/main/docs/licenses.md#servarr-stack"
+  note: "Seerr/FlareSolverr/plugin MIT; Jellyfin GPL-2.0; Sonarr/Radarr/Prowlarr GPL-3.0."
+
 chart:
   ref: oci://ghcr.io/rborso/charts/servarr
   version: 0.2.27

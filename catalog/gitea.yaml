@@ -2,6 +2,11 @@ name: gitea
 displayName: Gitea
 description: Lightweight self-hosted Git service with issues, PRs and CI.
 
+license:
+  chart: Apache-2.0
+  application: "MIT"
+  url: "https://github.com/go-gitea/gitea/blob/main/LICENSE"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/gitea
   version: 0.1.20

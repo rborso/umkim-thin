@@ -282,6 +282,13 @@ func catalogCmd(dir string, args []string) error {
 			fmt.Printf("%s (%s) — %s\n", e.DisplayName, e.Name, e.Description)
 			fmt.Printf("  chart:    %s %s\n", e.Chart.Ref, e.Chart.Version)
 			fmt.Printf("  auth:     %s\n", e.Auth.Kind)
+			fmt.Printf("  license:  %s (chart %s)\n", e.License.Application, e.License.Chart)
+			if e.License.URL != "" {
+				fmt.Printf("            %s\n", e.License.URL)
+			}
+			if e.License.Note != "" {
+				fmt.Printf("            %s\n", e.License.Note)
+			}
 			for _, r := range e.EffectiveRoutes() {
 				fmt.Printf("  route:    %s %s\n", r.Mode, r.Host)
 				for _, p := range r.PublicPaths {

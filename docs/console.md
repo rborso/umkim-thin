@@ -15,7 +15,9 @@ page:
   nudge, not a gate.
 - **Catalog** — installable apps with hostname, exposure, certificate and
   storage-class pickers, followed by the **Installed apps** management table
-  (Helm releases from the catalog only; uninstall/purge and status).
+  (Helm releases from the catalog only; uninstall/purge and status). Both
+  tables show the deployed application's licence and the chart licence; the
+  install panel shows the full licence notice and any non-commercial warning.
 - **Access** — **Invitations** and **WireGuard clients**, the two person/device
   onboarding surfaces.
 - **Storage** — local-host disks/RAID/NFS exports and external NFS
@@ -41,6 +43,7 @@ button. **Versions…** shows the full catalogued list and the upgrade path runs
 | `helmStatus` | Helm's release status (`deployed`, `pending-upgrade`, ...) |
 | `ready` | Helm is deployed **and** every Deployment/StatefulSet/Job is ready/complete |
 | `routes` | hosts of the Ingresses in the app's namespace |
+| `license` | catalog licence block: chart and application licence, text URL and note |
 | `components` | per-workload `kind/name/ready/status` |
 | `bootstrap` | media stack only: `not-configured`, `pending`, `running`, `succeeded`, `failed` |
 A release in `pending-*` is shown as **configuring** (amber), not as down: that
@@ -216,9 +219,9 @@ image is a no-op (the chart's Jellyfin wizard step cannot be re-run).
 
 | method | path | purpose |
 |---|---|---|
-| GET | `/api/catalog` | catalog entries |
+| GET | `/api/catalog` | catalog entries, including chart/application licences |
 | GET | `/api/config` | zone, portal, default + classes |
-| GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes) |
+| GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence) |
 | POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate` (async job) |
 | GET | `/api/apps/{name}` | one app's health, chart/app version and routes |
 | GET | `/api/apps/{name}/versions` | installed + available chart/app versions |

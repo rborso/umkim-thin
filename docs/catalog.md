@@ -12,6 +12,11 @@ name: nextcloud
 displayName: Nextcloud
 description: Files, shares and collaboration, with Collabora for editing.
 
+license:
+  chart: Apache-2.0
+  application: AGPL-3.0
+  url: https://github.com/nextcloud/server/blob/master/COPYING
+
 chart:
   # An OCI reference to the chart's own repository, pinned by version.
   ref: oci://ghcr.io/example/charts/nextcloud
@@ -77,6 +82,10 @@ verify:
 | `route.certificate` | no | `default`/`allowed`: `acme`, `default`, `secret:<name>` |
 | `route.vpnHost` | no | optional VPN hostname; derived as `<host>.vpn.<zone>` when omitted |
 | `namespace` | yes | created if absent |
+| `license.chart` | yes | licence of the Helm chart itself |
+| `license.application` | yes | licence of the deployed application; use a short mixed-stack expression where needed |
+| `license.url` | no | authoritative upstream licence text or notice |
+| `license.note` | no | short warning, e.g. a non-commercial restriction |
 | `route.mode` | yes | `site` publishes it; omit the route for no HTTP surface |
 | `route.host` | when `site` | supports `{{ .zone }}` |
 | `route.requireAuth` | yes | whether Authelia is in front |
@@ -107,7 +116,12 @@ verify:
 7. **Every entry has a verification suite.** An app without passing tests is not
    in the catalog. `verify.checks` names the assertions; the Playwright spec
    implements them.
-8. **Native clients are not forward-authed.** An app whose mobile/desktop client
+8. **Licences are explicit and shown.** Every entry records both the chart
+   licence (`license.chart`, normally Apache-2.0) and the deployed application
+   licence (`license.application`). The console shows both, and the latter is
+   the one to read before installing. Source-available or non-commercial terms
+   belong in `license.note`, not only in prose.
+9. **Native clients are not forward-authed.** An app whose mobile/desktop client
    cannot complete a browser login (Jellyfin, for one) gets `oidc` or a
    route with `exposure: vpn`, not a path exemption list.
 

@@ -127,7 +127,8 @@ func serveAPI(catalogDir, addr string) error {
 		// may manage.
 		out := make([]app.Result, 0, len(installed))
 		for _, a := range installed {
-			if _, ok := byName[a.Name]; ok {
+			if e, ok := byName[a.Name]; ok {
+				a.License = e.License
 				out = append(out, a)
 			}
 		}

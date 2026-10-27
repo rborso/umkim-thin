@@ -20,6 +20,11 @@ func validEntry() Entry {
 			ServicePort: 80,
 		},
 		Auth: Auth{Kind: "forward_auth", LDAP: true},
+		License: &License{
+			Chart:       "Apache-2.0",
+			Application: "AGPL-3.0",
+			URL:         "https://example.com/license",
+		},
 		Verify: Verify{
 			Playwright: "tests/playwright/journeys/nextcloud.spec.ts",
 			Checks:     []string{"route_reachable"},
@@ -38,6 +43,9 @@ func TestValidate(t *testing.T) {
 		{name: "missing chart ref", mutate: func(e *Entry) { e.Chart.Ref = "" }, wantErr: "chart.ref is required"},
 		{name: "floating chart version", mutate: func(e *Entry) { e.Chart.Version = "" }, wantErr: "chart.version must be pinned"},
 		{name: "missing namespace", mutate: func(e *Entry) { e.Namespace = "" }, wantErr: "namespace is required"},
+		{name: "missing license", mutate: func(e *Entry) { e.License = nil }, wantErr: "license is required"},
+		{name: "missing chart license", mutate: func(e *Entry) { e.License.Chart = "" }, wantErr: "license.chart is required"},
+		{name: "missing application license", mutate: func(e *Entry) { e.License.Application = "" }, wantErr: "license.application is required"},
 		{name: "missing auth", mutate: func(e *Entry) { e.Auth.Kind = "" }, wantErr: "auth.kind is required"},
 		{name: "unknown auth", mutate: func(e *Entry) { e.Auth.Kind = "magic" }, wantErr: "unknown auth.kind"},
 		{name: "oidc without client", mutate: func(e *Entry) { e.Auth.Kind = "oidc" }, wantErr: "needs an oidc.clientId"},
@@ -133,6 +141,7 @@ chart: {ref: oci://example.com/charts/zeta, version: 1.0.0}
 namespace: zeta
 route: {mode: site, host: "zeta.{{ .zone }}"}
 auth: {kind: none}
+license: {chart: Apache-2.0, application: MIT}
 verify: {playwright: tests/zeta.spec.ts, checks: [route_reachable]}
 `)
 	write("alpha.yaml", `
@@ -141,6 +150,7 @@ chart: {ref: oci://example.com/charts/alpha, version: 1.0.0}
 namespace: alpha
 route: {mode: site, host: "alpha.{{ .zone }}"}
 auth: {kind: none}
+license: {chart: Apache-2.0, application: MIT}
 verify: {playwright: tests/alpha.spec.ts, checks: [route_reachable]}
 `)
 
@@ -166,6 +176,7 @@ name: broken
 chart: {ref: oci://example.com/charts/broken}
 namespace: broken
 auth: {kind: none}
+license: {chart: Apache-2.0, application: MIT}
 verify: {playwright: tests/broken.spec.ts, checks: [route_reachable]}
 `
 	if err := os.WriteFile(filepath.Join(dir, "broken.yaml"), []byte(body), 0o644); err != nil {

@@ -2,6 +2,12 @@ name: sparkyfitness
 displayName: SparkyFitness
 description: Health, food and exercise tracker. Source-available and non-commercial; optional, not OSI open source.
 
+license:
+  chart: Apache-2.0
+  application: "Source-available (non-commercial)"
+  url: "https://github.com/CodeWithCJ/SparkyFitness/blob/main/LICENSE"
+  note: "Not OSI open source. Commercial use requires the author's written permission."
+
 chart:
   ref: oci://ghcr.io/rborso/charts/sparkyfitness
   version: 0.1.0

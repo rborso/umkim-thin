@@ -85,6 +85,14 @@ test.describe('console', () => {
       timeout: 15_000,
     });
 
+    // The Catalog table must show both the application licence and the chart
+    // licence. SparkyFitness is the deliberate non-commercial entry, so it is
+    // the useful canary for the warning text as well.
+    await page.locator('#tab-catalog-label').click();
+    await expect(page.locator('#catalog')).toContainText('License');
+    await expect(page.locator('#catalog')).toContainText('Source-available (non-commercial)');
+    await expect(page.locator('#catalog')).toContainText('chart Apache-2.0');
+
     const result = await page.evaluate(async () => {
       const r = await fetch('/api/status', { credentials: 'same-origin' });
       return { status: r.status, body: await r.json() };

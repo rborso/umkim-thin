@@ -227,8 +227,8 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>App</th><th>Auth</th><th>Chart</th><th></th></tr></thead>
-          <tbody id="catalog"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+          <thead><tr><th>App</th><th>Auth</th><th>Chart</th><th>License</th><th></th></tr></thead>
+          <tbody id="catalog"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
         </table>
       </div>
       <div id="install-panel"></div>
@@ -244,8 +244,8 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>App</th><th>Namespace</th><th>Chart</th><th></th></tr></thead>
-          <tbody id="installed"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+          <thead><tr><th>App</th><th>Namespace</th><th>Chart</th><th>License</th><th></th></tr></thead>
+          <tbody id="installed"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
         </table>
       </div>
       <div id="app-detail"></div>
@@ -618,6 +618,49 @@ function routesOf(e) {
   if (e.Route) return [e.Route];
   return [];
 }
+
+// Catalog JSON uses the Go field names; installed-app JSON uses the lower-case
+// tags. Accept both so the same helper works everywhere.
+function licenseOf(value) {
+  if (!value) return null;
+  return value.License || value.license || null;
+}
+
+function licenseParts(value) {
+  const l = licenseOf(value) || {};
+  return {
+    chart: l.Chart || l.chart || '',
+    application: l.Application || l.application || '',
+    url: l.URL || l.url || '',
+    note: l.Note || l.note || '',
+  };
+}
+
+// Show the application licence prominently and the chart licence beside it.
+// The title keeps the full notice available without widening the table.
+function licenseMarkup(value) {
+  const l = licenseParts(value);
+  if (!l.chart && !l.application) return '<span class="muted">unknown</span>';
+  const title = [l.application ? 'Application: ' + l.application : '', l.chart ? 'Chart: ' + l.chart : '', l.note]
+    .filter(Boolean).join('\n');
+  const app = esc(l.application || 'unknown');
+  const appMarkup = l.url
+    ? `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" title="${esc(title)}">${app}</a>`
+    : `<span title="${esc(title)}">${app}</span>`;
+  return appMarkup + (l.chart ? `<br><span class="muted" title="${esc(title)}">chart ${esc(l.chart)}</span>` : '');
+}
+
+function licenseSummary(value) {
+  const l = licenseParts(value);
+  if (!l.chart && !l.application) return 'unknown';
+  const parts = [];
+  if (l.application) parts.push(esc(l.application));
+  if (l.chart) parts.push(`chart ${esc(l.chart)}`);
+  if (l.url) parts.push(`<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">license text</a>`);
+  let out = parts.join(' · ');
+  if (l.note) out += `<br><span class="muted">${esc(l.note)}</span>`;
+  return out;
+}
 function defaultHost(route) {
   return (route.Host || '').replace('{{ .zone }}', CFG.zone);
 }
@@ -781,7 +824,7 @@ async function loadCatalog() {
       ENTRIES[e.Name] = e;
       const tr = document.createElement('tr');
       const auth = e.Auth.Kind + (e.Auth.LDAP ? ' + ldap' : '');
-      tr.innerHTML = `<td>${esc(e.DisplayName || e.Name)}</td><td>${esc(auth)}</td><td><code>${esc(e.Chart.Version)}</code></td>`;
+      tr.innerHTML = `<td>${esc(e.DisplayName || e.Name)}</td><td>${esc(auth)}</td><td><code>${esc(e.Chart.Version)}</code></td><td>${licenseMarkup(e)}</td>`;
       const td = document.createElement('td');
       const btn = document.createElement('button');
       btn.textContent = 'Install';
@@ -791,7 +834,7 @@ async function loadCatalog() {
       rows.appendChild(tr);
     }
   } catch (_) {
-    rows.innerHTML = '<tr><td colspan="4">catalog unavailable</td></tr>';
+    rows.innerHTML = '<tr><td colspan="5">catalog unavailable</td></tr>';
   }
 }
 
@@ -850,6 +893,7 @@ function openInstall(e) {
       `<div><label>Media storage class (RWX on HA)</label><select id="med-class"></select></div>` +
     `</div>` +
     `<div id="media-warn" class="muted"></div>` +
+    `<p class="hint"><strong>License:</strong> ${licenseSummary(e)}</p>` +
     `<div style="margin-top:1rem"><button id="do-install">Install</button> <button id="cancel-install">Cancel</button></div>`;
   panel.style.display = 'block';
   activateTab('catalog');
@@ -1024,10 +1068,10 @@ async function loadInstalled() {
   try {
     const apps = await (await fetch('/api/apps')).json();
     rows.innerHTML = '';
-    if (!apps.length) { rows.innerHTML = '<tr><td colspan="4" class="muted">nothing installed yet</td></tr>'; return; }
+    if (!apps.length) { rows.innerHTML = '<tr><td colspan="5" class="muted">nothing installed yet</td></tr>'; return; }
     for (const a of apps) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${esc(a.name)}</td><td>${esc(a.namespace)}</td><td><code>${esc(a.chart)}</code></td>`;
+      tr.innerHTML = `<td>${esc(a.name)}</td><td>${esc(a.namespace)}</td><td><code>${esc(a.chart)}</code></td><td>${licenseMarkup(a)}</td>`;
       const td = document.createElement('td');
       const st = document.createElement('button');
       st.textContent = 'Status'; st.onclick = () => showStatus(a.name);
@@ -1038,7 +1082,7 @@ async function loadInstalled() {
       td.append(st, document.createTextNode(' '), un, document.createTextNode(' '), pg);
       tr.appendChild(td); rows.appendChild(tr);
     }
-  } catch (_) { rows.innerHTML = '<tr><td colspan="4">apps unavailable</td></tr>'; }
+  } catch (_) { rows.innerHTML = '<tr><td colspan="5">apps unavailable</td></tr>'; }
 }
 
 async function uninstall(name, purge) {
@@ -1175,7 +1219,8 @@ async function loadApplications() {
           `<button data-profiles data-app="${esc(a.name)}" data-namespace="${esc(a.namespace)}">Profiles</button>`;
       }
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${esc(a.name)}<br><span class="muted">${esc(a.namespace)}</span></td>` +
+      const lic = licenseParts(a);
+      tr.innerHTML = `<td>${esc(a.name)}<br><span class="muted">${esc(a.namespace)}${lic.application ? ' · ' + esc(lic.application) : ''}</span></td>` +
         `<td><span class="chip ${chip}">${esc(state)}</span><br><span class="muted job-progress">${detail}</span></td>` +
         `<td>${version}</td>` +
         `<td>${links}</td><td>${setup}<br><button data-upgrade="${esc(a.name)}">${upgradeLabel}</button></td>`;
