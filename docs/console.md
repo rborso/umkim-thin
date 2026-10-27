@@ -53,10 +53,12 @@ readiness, not an HTTP probe.
 hints. Kubernetes does **not** declare access modes on a StorageClass (they are
 a PVC property), so the API uses the first source that knows:
 
-1. access modes observed on bound PVs of that class (`observed`);
-2. `UMKIM_THIN_STORAGE_ACCESS_MODES` (`class=RWX+RWO,...`, `configured`);
-3. the platform's conventions (`umkim-thin-nfs`/`nfs`/`nfs-client` → RWX,
-   `*-rwx` → RWX, `local-path`/Longhorn → RWO, `known`);
+1. `UMKIM_THIN_STORAGE_ACCESS_MODES` (`class=RWX+RWO,...`, `configured`);
+2. the platform's conventions (`nfs`/`nfs-client` provisioners and `*-rwx`
+   classes → RWX, `local-path`/Longhorn → RWO, `known`);
+3. for classes with no convention, access modes observed on bound PVs of that
+   class (`observed`). A single PVC can ask for RWO on a class that is also
+   capable of RWX, so observation is not authoritative for known classes;
 4. otherwise `unknown`, and the install form warns rather than guessing.
 
 The media picker warns when the chosen class does not advertise RWX. It never

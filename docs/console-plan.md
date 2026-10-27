@@ -163,10 +163,11 @@ See `docs/console.md` and `docs/servarr-indexers.md`.
 
 ## Implementation notes (what changed while building it)
 
-- **Storage access modes** are not a StorageClass field. The API reports the
-  modes observed on bound PVs, an optional configured map, then known platform
-  conventions; anything else is `unknown` and the UI warns. It never invents an
-  RWX guarantee.
+- **Storage access modes** are not a StorageClass field. The API reports an
+  explicit configured map, then known platform conventions, then observed
+  bound PVs for unknown classes; anything else is `unknown` and the UI warns.
+  A single RWO PVC on an NFS class does not make the class RWO. It never
+  invents an RWX guarantee.
 - **The Secret is created at install**, not by the bootstrap: the chart's
   qBittorrent initContainer needs the WebUI password before the pod starts. App
   passwords are generated once; the chart API keys are copied in after install.
