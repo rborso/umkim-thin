@@ -89,6 +89,13 @@ inside the image keeps its own license.
 | PostgreSQL | PostgreSQL License | https://www.postgresql.org/about/licence/ |
 | Valkey | BSD-3-Clause | https://github.com/valkey-io/valkey |
 
+### Mealie
+
+| Component | License | Source |
+|---|---|---|
+| Mealie | AGPL-3.0 | https://github.com/mealie-recipes/mealie |
+| PostgreSQL | PostgreSQL License | https://www.postgresql.org/about/licence/ |
+
 ### Servarr stack
 
 | Component | License | Source |

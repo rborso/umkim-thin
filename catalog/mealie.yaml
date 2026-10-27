@@ -1,0 +1,51 @@
+name: mealie
+displayName: Mealie
+description: Recipe manager with meal planning, shopping lists and household sharing.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/mealie
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 3.22.0
+      channel: stable
+
+namespace: mealie
+
+route:
+  mode: site
+  host: "mealie.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: mealie
+  servicePort: 9000
+
+auth:
+  # OIDC, so recipes and households belong to directory users.
+  kind: oidc
+
+oidc:
+  clientId: mealie
+  redirectUris:
+    - "https://{{ .host }}/login"
+
+values:
+  externalUrl: "https://{{ .host }}"
+  persistence:
+    data:
+      storageClass: "{{ .storage.configClass }}"
+  postgres:
+    persistence:
+      storageClass: "{{ .storage.configClass }}"
+  bootstrap:
+    adminEmail: "mealie-admin@{{ .zone }}"
+
+verify:
+  playwright: tests/playwright/journeys/mealie.spec.ts
+  checks:
+    - route_reachable
+    - oidc_login_redirects_to_provider
+    - oidc_login_completes
+    - recipe_list_reachable

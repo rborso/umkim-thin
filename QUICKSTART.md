@@ -57,7 +57,7 @@ EXPECTED_IP=<public-ip> ./ci/acme-check.sh <zone> auth console lldap nextcloud .
 It validates DNS and the certificate issuer and never asks Let's Encrypt for a
 certificate, so it cannot consume the rate limit.
 
-For the measured version of this path — clean VM, all six catalog apps, and the
+For the measured version of this path — clean VM, all six catalog apps used at the time, and the
 first ordinary user — see
 [`docs/manual-install-timed.md`](docs/manual-install-timed.md): **24 m 36 s**
 end to end, of which **21 m 20 s** is the install stages; 295 s was the platform
@@ -188,5 +188,5 @@ using `--acme-staging`, the self-signed warning is expected; use
   Each app's own login is the second gate (see `PROJECT_GOAL.md`).
 - No email/SMTP: password reset is manual from `lldap.<zone>`.
 - No self-service console for family members; the console is the admin's.
-- Only the six verified catalog apps are installable. An entry is accepted only
+- Only the verified catalog apps are installable. An entry is accepted only
   after it passes the verification suite; do not add one by hand.
