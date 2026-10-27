@@ -31,7 +31,7 @@ gating contract check, a platform health check, and an informational workflow.
 | Spec | Category | Covers |
 |---|---|---|
 | `apps.spec.ts` | acceptance | route reachability, auth challenge, public-path exemptions, authenticated reachability |
-| `auth.spec.ts` | acceptance | regular tenant login: Gitea/Jellyfin/Nextcloud LDAP, Immich/Paperless OIDC, Gitea SSH |
+| `auth.spec.ts` | acceptance | regular tenant login: Gitea/Jellyfin/Nextcloud LDAP, Immich/Paperless/SparkyFitness OIDC, Gitea SSH |
 | `tls.spec.ts` | acceptance | the edge serves a real certificate for every route |
 | `console.spec.ts` | acceptance | browser login through Authelia + console, Applications page, `/api/status`, CSP/HSTS, anonymous API refusal |
 
@@ -41,8 +41,10 @@ tls.spec.ts console.spec.ts`.
 ## Functional user journeys
 
 `tests/playwright/journeys/` (informational, but reported with pass/fail).
-All checks are run manually. Currently there are 18: one platform journey and 17 app journeys. They run
-serially because OCR/indexing is sensitive to concurrent load.
+All checks are run manually. Currently there are 18 for the default app set: one
+platform journey and 17 app journeys; the optional SparkyFitness entry adds a
+19th when it is installed. They run serially because OCR/indexing is sensitive
+to concurrent load.
 
 ### Platform
 

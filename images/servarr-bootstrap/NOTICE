@@ -111,6 +111,8 @@ not upstream application source. The current official catalog includes:
   Immich             AGPL-3.0
   Paperless-ngx      GPL-3.0
   Mealie             AGPL-3.0
+  SparkyFitness      Source-available, non-commercial (custom license;
+                     optional catalog entry, not OSI open source)
   Servarr stack      MIT (Seerr, FlareSolverr, Jellyfin LDAP plugin),
                      GPL-2.0 (Jellyfin), GPL-3.0 (Sonarr, Radarr, Prowlarr),
                      GPL-2.0+ source / GPL-3.0+ binary (qBittorrent)

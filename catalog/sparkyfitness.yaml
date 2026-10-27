@@ -1,0 +1,61 @@
+name: sparkyfitness
+displayName: SparkyFitness
+description: Health, food and exercise tracker. Source-available and non-commercial; optional, not OSI open source.
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/sparkyfitness
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 1.9.0
+      channel: stable
+
+namespace: sparkyfitness
+
+route:
+  mode: site
+  host: "sparkyfitness.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [authelia, vpn]
+  serviceName: sparkyfitness
+  servicePort: 80
+
+auth:
+  # Authelia OIDC, so the admin panel and the per-user food diary belong to
+  # directory users.
+  kind: oidc
+
+oidc:
+  clientId: sparkyfitness
+  # The slug is oidc.providerSlug below. SparkyFitness builds the callback from
+  # its public frontend URL.
+  redirectUris:
+    - "https://{{ .host }}/api/auth/sso/callback/authelia"
+
+values:
+  externalUrl: "https://{{ .host }}"
+  persistence:
+    uploads:
+      storageClass: "{{ .storage.configClass }}"
+    backup:
+      storageClass: "{{ .storage.configClass }}"
+  postgres:
+    persistence:
+      storageClass: "{{ .storage.configClass }}"
+  server:
+    # The directory admin gets the admin panel after the first OIDC login.
+    adminEmail: "admin@{{ .zone }}"
+    # Mealie is reached at http://mealie.mealie.svc.cluster.local:9000, which
+    # SparkyFitness treats as a private address. The platform is single-tenant,
+    # so allow the recipe provider for invited users as well as admins.
+    allowPrivateNetworkFoodProviders: true
+
+verify:
+  playwright: tests/playwright/journeys/sparkyfitness.spec.ts
+  checks:
+    - route_reachable
+    - oidc_login_redirects_to_provider
+    - oidc_login_completes
+    - app_api_reachable

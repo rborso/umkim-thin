@@ -110,5 +110,12 @@
       "host": "qbittorrent.{zone}",
       "auth": "forward_auth"
     }
+  ],
+  "sparkyfitness": [
+    {
+      "name": "sparkyfitness",
+      "host": "sparkyfitness.{zone}",
+      "auth": "oidc"
+    }
   ]
 }

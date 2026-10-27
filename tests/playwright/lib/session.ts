@@ -206,9 +206,15 @@ export async function oidcLogin(
       continue;
     }
 
-    const sso = page.locator(
-      'button:has-text("SSO"), a:has-text("SSO"), button:has-text("Sign in with"), a:has-text("Sign in with"), a:has-text("OpenID"), button:has-text("OpenID")',
-    );
+    // Provider-specific labels first: SparkyFitness also has a "Sign in with
+    // Passkey" button, which a generic "Sign in with" selector would click
+    // instead of the OIDC provider.
+    let sso = page.locator('button:has-text("Authelia"), a:has-text("Authelia")');
+    if ((await sso.count()) === 0) {
+      sso = page.locator(
+        'button:has-text("SSO"), a:has-text("SSO"), button:has-text("OpenID"), a:has-text("OpenID"), button:has-text("Sign in with"):not(:has-text("Passkey")), a:has-text("Sign in with")',
+      );
+    }
     if (await sso.count()) {
       await sso.first().click();
       await page.waitForTimeout(2000);

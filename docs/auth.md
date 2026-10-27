@@ -17,6 +17,7 @@ trust a proxy identity header.
 |---|---|---|
 | Immich | OIDC (Authelia client) | **yes** |
 | Paperless | OIDC (django-allauth → Authelia) | **yes** |
+| SparkyFitness | OIDC (Authelia client) | **yes** |
 | Gitea | OIDC source **configured**; LDAP also enabled | not yet reliable for new users |
 | Nextcloud | LDAP (`user_ldap`) | no; `user_oidc` is disabled (see below) |
 | Jellyfin | LDAP plugin | no (native clients need direct auth) |
@@ -47,8 +48,12 @@ trust a proxy identity header.
 
 ## OIDC status and limits
 
-**Working:** Immich and Paperless use real OIDC clients against Authelia; one
-portal login, then the app signs itself in.
+**Working:** Immich, Paperless and SparkyFitness use real OIDC clients against
+Authelia; one portal login, then the app signs itself in. SparkyFitness
+registers its provider from the `SPARKY_FITNESS_OIDC_*` environment on startup;
+the chart checks it in `/api/auth/settings`. Its admin panel is granted to the
+account whose email matches `SPARKY_FITNESS_ADMIN_EMAIL` (the catalog uses the
+directory admin address).
 
 **Gitea (partial):** the installer creates an Authelia client, the chart creates
 an `openidConnect` auth source (discovery URL, scopes), and the login page shows

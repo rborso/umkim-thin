@@ -263,3 +263,41 @@ test.describe('gitea ssh', () => {
     }
   });
 });
+
+test.describe('sparkyfitness directory login', () => {
+  test.skip(!installed('sparkyfitness'), 'sparkyfitness is not installed');
+
+  test('a regular directory user signs in with the real OIDC flow', async ({ browser }) => {
+    test.setTimeout(120_000);
+    const host = hostOf('sparkyfitness');
+    const username = ciUser('ci-sparky');
+    const password = ciPassword();
+    await createUser(username, password, { displayName: username });
+
+    let callbackStatus = 0;
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username, password },
+      onPage: (p) =>
+        p.on('response', (r) => {
+          if (r.url().includes('/api/auth/sso/callback/')) callbackStatus = r.status();
+        }),
+      ready: async (p) =>
+        p
+          .evaluate(async () => {
+            const r = await fetch('/api/auth/get-session', {
+              credentials: 'same-origin',
+              headers: { Accept: 'application/json' },
+            });
+            if (r.status !== 200) return false;
+            const body = await r.json().catch(() => null);
+            return Boolean(body?.user?.email);
+          })
+          .catch(() => false),
+    });
+    expect(callbackStatus, 'the app exchanged the code').toBeGreaterThanOrEqual(200);
+    // Better Auth completes the exchange with a 302 back to the app.
+    expect(callbackStatus, 'the exchange succeeded').toBeLessThan(400);
+    expect(page.url(), 'still on the app').toContain(host);
+    await context.close();
+  });
+});

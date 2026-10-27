@@ -96,6 +96,23 @@ inside the image keeps its own license.
 | Mealie | AGPL-3.0 | https://github.com/mealie-recipes/mealie |
 | PostgreSQL | PostgreSQL License | https://www.postgresql.org/about/licence/ |
 
+### SparkyFitness
+
+| Component | License | Source |
+|---|---|---|
+| SparkyFitness | Source-available, non-commercial (custom license) | https://github.com/CodeWithCJ/SparkyFitness/blob/main/LICENSE |
+| PostgreSQL | PostgreSQL License | https://www.postgresql.org/about/licence/ |
+
+SparkyFitness is an **optional** catalog entry, not part of the default app set.
+It is **not OSI open source**: the upstream `LICENSE` permits personal,
+educational and nonprofit use that generates no revenue, and forbids use in a
+product, service or project primarily intended for or resulting in commercial
+advantage or monetary compensation without the author's written permission.
+Modifications and derivative works must stay under the same terms, and
+contributors assign their contributions to the author. The Apache-2.0 chart only
+covers the Kubernetes templates; it does not relicense the application or its
+image. Users who need commercial use must ask the upstream author.
+
 ### Servarr stack
 
 | Component | License | Source |
