@@ -202,7 +202,7 @@ yes. Any other warning set defaults to **No**; use `--yes` to accept it.
 
 ## 1. Prepare the environment file
 
-From the checkout:
+From a fresh checkout:
 
 ```bash
 git clone --recurse-submodules https://github.com/rborso/umkim-thin.git
@@ -210,6 +210,13 @@ cd umkim-thin
 
 cp deploy/provision-ha.env.example deploy/provision-ha.env
 $EDITOR deploy/provision-ha.env
+```
+
+If you already have a checkout, update it first:
+
+```bash
+git pull --ff-only
+git submodule update --init --recursive
 ```
 
 Minimum changes:
