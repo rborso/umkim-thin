@@ -173,6 +173,9 @@ type Options struct {
 	// ExtraLanguages creates optional language variants of the target quality
 	// after the default stack has been installed.
 	ExtraLanguages []string
+	// Language is an app-level default for apps that support one. It is
+	// currently used by Nextcloud; Immich language is a per-user/browser setting.
+	Language string
 }
 
 func (o Options) step(format string, a ...any) {
@@ -433,6 +436,22 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 	}
 
 	values := in.renderValues(e, ctx)
+	if opts.Language != "" {
+		if e.Name != "nextcloud" {
+			return Result{}, fmt.Errorf("%s does not support an install-time language", e.Name)
+		}
+		code, err := normalizeAppLanguage(opts.Language)
+		if err != nil {
+			return Result{}, err
+		}
+		bootstrap, ok := values["bootstrap"].(map[string]any)
+		if !ok {
+			bootstrap = map[string]any{}
+			values["bootstrap"] = bootstrap
+		}
+		bootstrap["language"] = code
+		opts.Language = code
+	}
 	if opts.Upgrade {
 		if err := in.preserveStorageClasses(e.Name, e.Namespace, values); err != nil {
 			return Result{}, err
@@ -642,6 +661,22 @@ func (in *Installer) StorageClasses() ([]StorageClass, error) {
 		sc.AccessModes, sc.AccessSource = accessModesFor(*sc, modes, configured)
 	}
 	return classes, nil
+}
+
+func normalizeAppLanguage(raw string) (string, error) {
+	code := strings.ToLower(strings.TrimSpace(raw))
+	if i := strings.IndexAny(code, "-_"); i > 0 {
+		code = code[:i]
+	}
+	if code == "" {
+		return "", fmt.Errorf("language is empty")
+	}
+	for _, option := range servarrLanguageOptions {
+		if option.Value == code {
+			return code, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported language %q", raw)
 }
 
 func accessModesFor(sc StorageClass, observed, configured map[string][]string) ([]string, string) {

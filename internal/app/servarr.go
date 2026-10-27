@@ -47,8 +47,8 @@ type SettingOption struct {
 }
 
 var servarrLanguageOptions = []SettingOption{
-	{Value: "hu", Label: "Hungarian"},
 	{Value: "en", Label: "English"},
+	{Value: "hu", Label: "Hungarian"},
 	{Value: "de", Label: "German"},
 	{Value: "fr", Label: "French"},
 	{Value: "es", Label: "Spanish"},
@@ -90,7 +90,7 @@ func ServarrQualityOptions() []SettingOption {
 }
 
 func DefaultServarrSettings() ServarrSettings {
-	return ServarrSettings{MediaLanguage: "hu", QualityCutoff: "720p"}
+	return ServarrSettings{MediaLanguage: "en", QualityCutoff: "720p"}
 }
 
 // NormalizeServarrSettings accepts the console's short language code and target
@@ -102,7 +102,7 @@ func NormalizeServarrSettings(s ServarrSettings) (ServarrSettings, error) {
 		s.MediaLanguage = s.MediaLanguage[:i]
 	}
 	if s.MediaLanguage == "" {
-		s.MediaLanguage = "hu"
+		s.MediaLanguage = "en"
 	}
 	knownLanguage := false
 	for _, option := range servarrLanguageOptions {

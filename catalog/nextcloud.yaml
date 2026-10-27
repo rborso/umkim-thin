@@ -4,8 +4,11 @@ description: Files, shares and collaboration. Ships Collabora for document editi
 
 chart:
   ref: oci://ghcr.io/rborso/charts/nextcloud
-  version: 0.1.18
+  version: 0.1.19
   versions:
+    - version: 0.1.19
+      appVersion: 35.0.1
+      channel: stable
     - version: 0.1.18
       appVersion: 35.0.1
       channel: stable
@@ -81,6 +84,8 @@ auth:
   ldap: true
 
 values:
+  bootstrap:
+    language: en
   nextcloud:
     externalUrl: "https://{{ .host }}"
     persistence:

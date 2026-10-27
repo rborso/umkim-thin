@@ -120,7 +120,7 @@ func TestNormalizeServarrSettings(t *testing.T) {
 		{
 			name: "defaults",
 			in:   ServarrSettings{},
-			want: ServarrSettings{MediaLanguage: "hu", QualityCutoff: "720p"},
+			want: ServarrSettings{MediaLanguage: "en", QualityCutoff: "720p"},
 		},
 		{
 			name: "language and numeric quality",

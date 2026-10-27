@@ -97,9 +97,15 @@ bootstrap as a background job:
 
 ### Default language and quality
 
+The **Nextcloud install form** has a **Default app language** selector; English
+is the default. It sets Nextcloud's `default_language` for new users and the
+local admin. Existing users keep their own language. **Immich** has no
+server-side install language: the Immich UI follows the user/browser setting and
+can be changed in Immich's own user settings.
+
 The **Servarr install form** exposes the media stack's defaults:
 
-- **Default language** (Hungarian, English, and the other Radarr languages):
+- **Default language** (English by default; Hungarian and the other Radarr languages are selectable):
   sets the Seerr original language and the Radarr quality-profile language.
   Jellyfin receives it during its first-run wizard; an existing Jellyfin UI
   language is not rewritten.

@@ -89,7 +89,7 @@ function loadComponents(): BootstrapComponents {
 
 export function loadConfig(): BootstrapConfig {
   const components = loadComponents();
-  const mediaLanguage = (process.env.DEFAULT_MEDIA_LANGUAGE?.trim() || 'hu').toLowerCase();
+  const mediaLanguage = (process.env.DEFAULT_MEDIA_LANGUAGE?.trim() || 'en').toLowerCase();
   const needsJellyfinCreds = components.jellyfin || components.seerr;
   const needsArrPassword =
     components.prowlarr || components.sonarr || components.radarr || components.lidarr;

@@ -632,8 +632,8 @@ function optionList(select, values, chosen) {
 }
 
 const MEDIA_LANGUAGE_OPTIONS = [
-  { value: 'hu', label: 'Hungarian' },
   { value: 'en', label: 'English' },
+  { value: 'hu', label: 'Hungarian' },
   { value: 'de', label: 'German' },
   { value: 'fr', label: 'French' },
   { value: 'es', label: 'Spanish' },
@@ -769,11 +769,16 @@ function openInstall(e) {
       `${esc(v.Version)}${v.AppVersion ? ' · app ' + esc(v.AppVersion) : ''} · ${esc(v.Channel || 'stable')}</option>`).join('') +
     `</select></div>`;
   const mediaFields = e.Name === 'servarr'
-    ? `<div><label>Default media language</label><select id="install-media-language">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, 'hu')}</select></div>` +
+    ? `<div><label>Default media language</label><select id="install-media-language">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, 'en')}</select></div>` +
       `<div><label>Target resolution</label><select id="install-media-quality">${optionMarkup(MEDIA_QUALITY_OPTIONS, '720p')}</select></div>` +
       `<div><label>Additional languages (optional, same target)</label>` +
       `<select id="install-extra-languages" multiple size="5">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, '')}</select>` +
       `<span class="hint">Ctrl/Cmd-click to offer additional language profiles. The default stays the default.</span></div>`
+    : e.Name === 'nextcloud'
+    ? `<div><label>Default app language</label><select id="install-language">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, 'en')}</select></div>` +
+      `<span class="hint">New Nextcloud users default to this language; existing users keep their own choice.</span>`
+    : e.Name === 'immich'
+    ? `<p class="hint">Immich language is a per-user/browser setting; it cannot be set at install time.</p>`
     : '';
   panel.innerHTML =
     `<h3>Install ${esc(e.DisplayName || e.Name)}</h3>` +
@@ -849,6 +854,9 @@ async function doInstall(e, panel) {
     body.qualityCutoff = document.getElementById('install-media-quality').value;
     body.extraLanguages = Array.from(document.getElementById('install-extra-languages').selectedOptions)
       .map(option => option.value);
+  }
+  if (e.Name === 'nextcloud') {
+    body.language = document.getElementById('install-language').value;
   }
   note(`installing ${e.Name}…`);
   try {

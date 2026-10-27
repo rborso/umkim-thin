@@ -273,6 +273,32 @@ func TestKnownAccessModes(t *testing.T) {
 	}
 }
 
+func TestNormalizeAppLanguage(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"en", "en", false},
+		{"HU", "hu", false},
+		{"pt-BR", "pt", false},
+		{"xx", "", true},
+		{"", "", true},
+	}
+	for _, c := range cases {
+		got, err := normalizeAppLanguage(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("normalizeAppLanguage(%q) succeeded, want error", c.in)
+			}
+			continue
+		}
+		if err != nil || got != c.want {
+			t.Errorf("normalizeAppLanguage(%q) = %q, %v; want %q", c.in, got, err, c.want)
+		}
+	}
+}
+
 func TestAccessModesFor(t *testing.T) {
 	cases := []struct {
 		name       string
