@@ -7,6 +7,10 @@ license:
   application: "MIT"
   url: "https://github.com/go-gitea/gitea/blob/main/LICENSE"
 
+links:
+  homepage: "https://about.gitea.com/"
+  source: "https://github.com/go-gitea/gitea"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/gitea
   version: 0.1.20

@@ -129,6 +129,7 @@ func serveAPI(catalogDir, addr string) error {
 		for _, a := range installed {
 			if e, ok := byName[a.Name]; ok {
 				a.License = e.License
+				a.Links = e.Links
 				out = append(out, a)
 			}
 		}

@@ -7,6 +7,10 @@ license:
   application: "AGPL-3.0"
   url: "https://github.com/mealie-recipes/mealie/blob/mealie-next/LICENSE"
 
+links:
+  homepage: "https://mealie.io/"
+  source: "https://github.com/mealie-recipes/mealie"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/mealie
   version: 0.1.3

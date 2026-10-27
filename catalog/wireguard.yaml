@@ -10,6 +10,10 @@ license:
   url: "https://git.zx2c4.com/wireguard-tools/tree/COPYING"
   note: "WireGuard userspace/tools; the in-cluster gateway chart is Apache-2.0."
 
+links:
+  homepage: "https://www.wireguard.com/"
+  source: "https://git.zx2c4.com/wireguard-linux/"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/wireguard-gateway
   version: 0.1.3

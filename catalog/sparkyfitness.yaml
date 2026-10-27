@@ -8,6 +8,10 @@ license:
   url: "https://github.com/CodeWithCJ/SparkyFitness/blob/main/LICENSE"
   note: "Not OSI open source. Commercial use requires the author's written permission."
 
+links:
+  homepage: "https://codewithcj.github.io/SparkyFitness/"
+  source: "https://github.com/CodeWithCJ/SparkyFitness"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/sparkyfitness
   version: 0.1.0

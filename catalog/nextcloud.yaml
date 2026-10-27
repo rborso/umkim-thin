@@ -7,6 +7,10 @@ license:
   application: "AGPL-3.0"
   url: "https://github.com/nextcloud/server/blob/master/COPYING"
 
+links:
+  homepage: "https://nextcloud.com/"
+  source: "https://github.com/nextcloud/server"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/nextcloud
   version: 0.1.19

@@ -661,6 +661,28 @@ function licenseSummary(value) {
   if (l.note) out += `<br><span class="muted">${esc(l.note)}</span>`;
   return out;
 }
+
+function linksOf(value) {
+  const l = value?.Links || value?.links || {};
+  return {
+    homepage: l.Homepage || l.homepage || '',
+    source: l.Source || l.source || '',
+  };
+}
+
+function sourceLabel(url) {
+  return /github\.com/i.test(url) ? 'GitHub' : 'source';
+}
+
+// Keep the upstream website/source one click away from every app row. Labels
+// stay compact so the App column remains readable.
+function linksMarkup(value) {
+  const l = linksOf(value);
+  const links = [];
+  if (l.homepage) links.push(`<a href="${esc(l.homepage)}" target="_blank" rel="noopener noreferrer" title="Official website">website</a>`);
+  if (l.source) links.push(`<a href="${esc(l.source)}" target="_blank" rel="noopener noreferrer" title="Upstream source">${sourceLabel(l.source)}</a>`);
+  return links.length ? `<span class="muted">${links.join(' · ')}</span>` : '';
+}
 function defaultHost(route) {
   return (route.Host || '').replace('{{ .zone }}', CFG.zone);
 }
@@ -824,7 +846,8 @@ async function loadCatalog() {
       ENTRIES[e.Name] = e;
       const tr = document.createElement('tr');
       const auth = e.Auth.Kind + (e.Auth.LDAP ? ' + ldap' : '');
-      tr.innerHTML = `<td>${esc(e.DisplayName || e.Name)}</td><td>${esc(auth)}</td><td><code>${esc(e.Chart.Version)}</code></td><td>${licenseMarkup(e)}</td>`;
+      const appLinks = linksMarkup(e);
+      tr.innerHTML = `<td>${esc(e.DisplayName || e.Name)}${appLinks ? '<br>' + appLinks : ''}</td><td>${esc(auth)}</td><td><code>${esc(e.Chart.Version)}</code></td><td>${licenseMarkup(e)}</td>`;
       const td = document.createElement('td');
       const btn = document.createElement('button');
       btn.textContent = 'Install';
@@ -894,6 +917,7 @@ function openInstall(e) {
     `</div>` +
     `<div id="media-warn" class="muted"></div>` +
     `<p class="hint"><strong>License:</strong> ${licenseSummary(e)}</p>` +
+    `<p class="hint"><strong>Upstream:</strong> ${linksMarkup(e) || "not recorded"}</p>` +
     `<div style="margin-top:1rem"><button id="do-install">Install</button> <button id="cancel-install">Cancel</button></div>`;
   panel.style.display = 'block';
   activateTab('catalog');
@@ -1071,7 +1095,8 @@ async function loadInstalled() {
     if (!apps.length) { rows.innerHTML = '<tr><td colspan="5" class="muted">nothing installed yet</td></tr>'; return; }
     for (const a of apps) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${esc(a.name)}</td><td>${esc(a.namespace)}</td><td><code>${esc(a.chart)}</code></td><td>${licenseMarkup(a)}</td>`;
+      const appLinks = linksMarkup(a);
+      tr.innerHTML = `<td>${esc(a.name)}${appLinks ? '<br>' + appLinks : ''}</td><td>${esc(a.namespace)}</td><td><code>${esc(a.chart)}</code></td><td>${licenseMarkup(a)}</td>`;
       const td = document.createElement('td');
       const st = document.createElement('button');
       st.textContent = 'Status'; st.onclick = () => showStatus(a.name);
@@ -1220,7 +1245,8 @@ async function loadApplications() {
       }
       const tr = document.createElement('tr');
       const lic = licenseParts(a);
-      tr.innerHTML = `<td>${esc(a.name)}<br><span class="muted">${esc(a.namespace)}${lic.application ? ' · ' + esc(lic.application) : ''}</span></td>` +
+      const appLinks = linksMarkup(a);
+      tr.innerHTML = `<td>${esc(a.name)}<br><span class="muted">${esc(a.namespace)}${lic.application ? ' · ' + esc(lic.application) : ''}</span>${appLinks ? '<br>' + appLinks : ''}</td>` +
         `<td><span class="chip ${chip}">${esc(state)}</span><br><span class="muted job-progress">${detail}</span></td>` +
         `<td>${version}</td>` +
         `<td>${links}</td><td>${setup}<br><button data-upgrade="${esc(a.name)}">${upgradeLabel}</button></td>`;

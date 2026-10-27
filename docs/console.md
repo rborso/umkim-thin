@@ -16,8 +16,9 @@ page:
 - **Catalog** — installable apps with hostname, exposure, certificate and
   storage-class pickers, followed by the **Installed apps** management table
   (Helm releases from the catalog only; uninstall/purge and status). Both
-  tables show the deployed application's licence and the chart licence; the
-  install panel shows the full licence notice and any non-commercial warning.
+  tables show the deployed application's licence, the chart licence and links
+  to the upstream website/source; the install panel repeats those links and
+  shows the full licence notice and any non-commercial warning.
 - **Access** — **Invitations** and **WireGuard clients**, the two person/device
   onboarding surfaces.
 - **Storage** — local-host disks/RAID/NFS exports and external NFS
@@ -219,9 +220,9 @@ image is a no-op (the chart's Jellyfin wizard step cannot be re-run).
 
 | method | path | purpose |
 |---|---|---|
-| GET | `/api/catalog` | catalog entries, including chart/application licences |
+| GET | `/api/catalog` | catalog entries, including chart/application licences and upstream links |
 | GET | `/api/config` | zone, portal, default + classes |
-| GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence) |
+| GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence, upstream links) |
 | POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate` (async job) |
 | GET | `/api/apps/{name}` | one app's health, chart/app version and routes |
 | GET | `/api/apps/{name}/versions` | installed + available chart/app versions |

@@ -25,6 +25,10 @@ func validEntry() Entry {
 			Application: "AGPL-3.0",
 			URL:         "https://example.com/license",
 		},
+		Links: &Links{
+			Homepage: "https://example.com",
+			Source:   "https://github.com/example/app",
+		},
 		Verify: Verify{
 			Playwright: "tests/playwright/journeys/nextcloud.spec.ts",
 			Checks:     []string{"route_reachable"},
@@ -43,6 +47,8 @@ func TestValidate(t *testing.T) {
 		{name: "missing chart ref", mutate: func(e *Entry) { e.Chart.Ref = "" }, wantErr: "chart.ref is required"},
 		{name: "floating chart version", mutate: func(e *Entry) { e.Chart.Version = "" }, wantErr: "chart.version must be pinned"},
 		{name: "missing namespace", mutate: func(e *Entry) { e.Namespace = "" }, wantErr: "namespace is required"},
+		{name: "missing links", mutate: func(e *Entry) { e.Links = nil }, wantErr: "links.homepage or links.source is required"},
+		{name: "invalid homepage link", mutate: func(e *Entry) { e.Links.Homepage = "javascript:alert(1)" }, wantErr: "must be an http(s) URL"},
 		{name: "missing license", mutate: func(e *Entry) { e.License = nil }, wantErr: "license is required"},
 		{name: "missing chart license", mutate: func(e *Entry) { e.License.Chart = "" }, wantErr: "license.chart is required"},
 		{name: "missing application license", mutate: func(e *Entry) { e.License.Application = "" }, wantErr: "license.application is required"},
@@ -142,6 +148,7 @@ namespace: zeta
 route: {mode: site, host: "zeta.{{ .zone }}"}
 auth: {kind: none}
 license: {chart: Apache-2.0, application: MIT}
+links: {homepage: https://example.com, source: https://github.com/example/app}
 verify: {playwright: tests/zeta.spec.ts, checks: [route_reachable]}
 `)
 	write("alpha.yaml", `
@@ -151,6 +158,7 @@ namespace: alpha
 route: {mode: site, host: "alpha.{{ .zone }}"}
 auth: {kind: none}
 license: {chart: Apache-2.0, application: MIT}
+links: {homepage: https://example.com, source: https://github.com/example/app}
 verify: {playwright: tests/alpha.spec.ts, checks: [route_reachable]}
 `)
 
@@ -177,6 +185,7 @@ chart: {ref: oci://example.com/charts/broken}
 namespace: broken
 auth: {kind: none}
 license: {chart: Apache-2.0, application: MIT}
+links: {homepage: https://example.com, source: https://github.com/example/app}
 verify: {playwright: tests/broken.spec.ts, checks: [route_reachable]}
 `
 	if err := os.WriteFile(filepath.Join(dir, "broken.yaml"), []byte(body), 0o644); err != nil {

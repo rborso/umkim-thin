@@ -92,6 +92,8 @@ test.describe('console', () => {
     await expect(page.getByRole('columnheader', { name: 'License' }).first()).toBeVisible();
     await expect(page.locator('#catalog')).toContainText('Source-available (non-commercial)');
     await expect(page.locator('#catalog')).toContainText('chart Apache-2.0');
+    await expect(page.locator('#catalog')).toContainText('website');
+    await expect(page.locator('#catalog')).toContainText('GitHub');
 
     const result = await page.evaluate(async () => {
       const r = await fetch('/api/status', { credentials: 'same-origin' });

@@ -7,6 +7,10 @@ license:
   application: "GPL-3.0"
   url: "https://github.com/paperless-ngx/paperless-ngx/blob/main/LICENSE"
 
+links:
+  homepage: "https://docs.paperless-ngx.com/"
+  source: "https://github.com/paperless-ngx/paperless-ngx"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/paperless
   version: 0.1.12

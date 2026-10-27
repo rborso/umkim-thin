@@ -17,6 +17,10 @@ license:
   application: AGPL-3.0
   url: https://github.com/nextcloud/server/blob/master/COPYING
 
+links:
+  homepage: https://nextcloud.com/
+  source: https://github.com/nextcloud/server
+
 chart:
   # An OCI reference to the chart's own repository, pinned by version.
   ref: oci://ghcr.io/example/charts/nextcloud
@@ -86,6 +90,8 @@ verify:
 | `license.application` | yes | licence of the deployed application; use a short mixed-stack expression where needed |
 | `license.url` | no | authoritative upstream licence text or notice |
 | `license.note` | no | short warning, e.g. a non-commercial restriction |
+| `links.homepage` | one of | official project website |
+| `links.source` | one of | upstream source repository |
 | `route.mode` | yes | `site` publishes it; omit the route for no HTTP surface |
 | `route.host` | when `site` | supports `{{ .zone }}` |
 | `route.requireAuth` | yes | whether Authelia is in front |
@@ -121,7 +127,10 @@ verify:
    licence (`license.application`). The console shows both, and the latter is
    the one to read before installing. Source-available or non-commercial terms
    belong in `license.note`, not only in prose.
-9. **Native clients are not forward-authed.** An app whose mobile/desktop client
+9. **Upstream links are explicit.** Every entry records at least one of
+   `links.homepage` and `links.source`; the console renders them on the Catalog,
+   Installed apps and Applications views. URLs must be `http(s)`.
+10. **Native clients are not forward-authed.** An app whose mobile/desktop client
    cannot complete a browser login (Jellyfin, for one) gets `oidc` or a
    route with `exposure: vpn`, not a path exemption list.
 

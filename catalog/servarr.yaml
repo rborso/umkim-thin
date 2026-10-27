@@ -8,6 +8,10 @@ license:
   url: "https://github.com/rborso/umkim-thin/blob/main/docs/licenses.md#servarr-stack"
   note: "Seerr/FlareSolverr/plugin MIT; Jellyfin GPL-2.0; Sonarr/Radarr/Prowlarr GPL-3.0."
 
+links:
+  homepage: "https://wiki.servarr.com/"
+  source: "https://github.com/Servarr"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/servarr
   version: 0.2.27

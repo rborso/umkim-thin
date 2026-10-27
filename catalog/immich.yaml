@@ -7,6 +7,10 @@ license:
   application: "AGPL-3.0"
   url: "https://github.com/immich-app/immich/blob/main/LICENSE"
 
+links:
+  homepage: "https://immich.app/"
+  source: "https://github.com/immich-app/immich"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/immich
   version: 0.1.9

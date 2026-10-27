@@ -7,6 +7,10 @@ license:
   application: "AGPL-3.0"
   url: "https://github.com/sysadminsmedia/homebox/blob/main/LICENSE"
 
+links:
+  homepage: "https://homebox.software/"
+  source: "https://github.com/sysadminsmedia/homebox"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/homebox
   version: 0.1.0

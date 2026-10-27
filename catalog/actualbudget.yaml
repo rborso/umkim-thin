@@ -7,6 +7,10 @@ license:
   application: "MIT"
   url: "https://github.com/actualbudget/actual/blob/master/LICENSE.txt"
 
+links:
+  homepage: "https://actualbudget.org/"
+  source: "https://github.com/actualbudget/actual"
+
 chart:
   ref: oci://ghcr.io/rborso/charts/actualbudget
   version: 0.1.0

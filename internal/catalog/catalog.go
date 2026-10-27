@@ -67,6 +67,14 @@ type License struct {
 	Note string `yaml:"note,omitempty" json:"Note,omitempty"`
 }
 
+// Links points at the upstream application. Homepage is the official project
+// site; Source is the upstream source repository. At least one is required so
+// the console can always offer the operator a way back to the original app.
+type Links struct {
+	Homepage string `yaml:"homepage,omitempty" json:"Homepage,omitempty"`
+	Source   string `yaml:"source,omitempty" json:"Source,omitempty"`
+}
+
 // OIDC is present when the app authenticates against Authelia itself.
 type OIDC struct {
 	ClientID     string   `yaml:"clientId"`
@@ -94,6 +102,7 @@ type Entry struct {
 	Routes      []Route        `yaml:"routes,omitempty"`
 	Auth        Auth           `yaml:"auth"`
 	License     *License       `yaml:"license"`
+	Links       *Links         `yaml:"links"`
 	OIDC        *OIDC          `yaml:"oidc,omitempty"`
 	Exposure    map[string]any `yaml:"exposure,omitempty"`
 	Values      map[string]any `yaml:"values,omitempty"`
@@ -185,6 +194,17 @@ func (e Entry) Validate() error {
 	}
 	if e.License.Application == "" {
 		return fmt.Errorf("%s: license.application is required", e.Name)
+	}
+	if e.Links == nil || (e.Links.Homepage == "" && e.Links.Source == "") {
+		return fmt.Errorf("%s: links.homepage or links.source is required", e.Name)
+	}
+	for field, value := range map[string]string{"links.homepage": e.Links.Homepage, "links.source": e.Links.Source} {
+		if value == "" {
+			continue
+		}
+		if !strings.HasPrefix(value, "https://") && !strings.HasPrefix(value, "http://") {
+			return fmt.Errorf("%s: %s must be an http(s) URL", e.Name, field)
+		}
 	}
 	switch e.Auth.Kind {
 	case "forward_auth", "oidc", "none":
