@@ -22,7 +22,7 @@ in how the hosts are prepared.
 No Kubernetes or Helm knowledge is required. You will need a terminal and
 `sudo`.
 
-A timed clean-VM run that installs the platform, all six catalog apps and the
+A timed clean-VM run that installs the platform, all six catalog apps measured at the time and the
 first household user is in [`../manual-install-timed.md`](../manual-install-timed.md)
 (**24 m 36 s** wall clock, **21 m 20 s** of install stages; the platform alone
 was 4 m 55 s).

@@ -170,7 +170,7 @@ a screen needs a paragraph of explanation, it is the wrong screen.
 Pre-1.0, working end to end on the project's single-node and HA lab. Both
 topologies pass the same gate (42/42 acceptance checks and 18/18 functional
 user journeys on each, plus the platform conformance checks); a clean-VM single-node install of the
-platform, all six apps and the first ordinary user was measured at **22 m 28 s**
+platform, the six apps used at the time and the first ordinary user was measured at **22 m 28 s**
 before the app fixes and **24 m 36 s** after them (21 m 20 s of install stages;
 the rest is verification and hand-off) — see
 [`docs/manual-install-timed.md`](docs/manual-install-timed.md); the lab base
