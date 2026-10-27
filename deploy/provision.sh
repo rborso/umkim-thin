@@ -200,7 +200,7 @@ On the primary (${VHOST}):
   sudo sed -n 's/^secret_lldap_admin_password: "\(.*\)"/\1/p' /etc/umkim-thin/secrets.yml
   sudo sed -n 's/^secret_console_localadmin_password: "\(.*\)"/\1/p' /etc/umkim-thin/secrets.yml
 
-The directory admin is `admin` in the portal and console; `localadmin` is the
+The directory admin is admin in the portal and console; localadmin is the
 console breakglass account.
 EOF
 }
