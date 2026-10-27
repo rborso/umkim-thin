@@ -273,6 +273,47 @@ func TestKnownAccessModes(t *testing.T) {
 	}
 }
 
+func TestAccessModesFor(t *testing.T) {
+	cases := []struct {
+		name       string
+		sc         StorageClass
+		observed   map[string][]string
+		configured map[string][]string
+		wantModes  string
+		wantSource string
+	}{
+		{
+			name:      "NFS convention wins over a RWO PVC on the same class",
+			sc:        StorageClass{Name: "nfs-external-nfs", Provisioner: "cluster.local/nfs-external-nfs-nfs-subdir-external-provisioner"},
+			observed:  map[string][]string{"nfs-external-nfs": {"ReadWriteOnce"}},
+			wantModes: "RWX", wantSource: "known",
+		},
+		{
+			name:      "observed mode is used for an unknown class",
+			sc:        StorageClass{Name: "custom", Provisioner: "example.com/thing"},
+			observed:  map[string][]string{"custom": {"ReadWriteOnce"}},
+			wantModes: "RWO", wantSource: "observed",
+		},
+		{
+			name:       "explicit configuration wins",
+			sc:         StorageClass{Name: "nfs-external-nfs", Provisioner: "cluster.local/nfs-subdir-external-provisioner"},
+			configured: map[string][]string{"nfs-external-nfs": {"RWO"}},
+			wantModes:  "RWO", wantSource: "configured",
+		},
+		{
+			name:       "unknown",
+			sc:         StorageClass{Name: "custom", Provisioner: "example.com/thing"},
+			wantSource: "unknown",
+		},
+	}
+	for _, c := range cases {
+		gotModes, gotSource := accessModesFor(c.sc, c.observed, c.configured)
+		if modeStr := strings.Join(gotModes, ","); modeStr != c.wantModes || gotSource != c.wantSource {
+			t.Errorf("%s: got %q (%s), want %q (%s)", c.name, modeStr, gotSource, c.wantModes, c.wantSource)
+		}
+	}
+}
+
 func TestContextVPN(t *testing.T) {
 	in := testInstaller()
 	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{

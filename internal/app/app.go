@@ -610,11 +610,11 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 // the cluster marks it default, and the access modes we can vouch for.
 //
 // Kubernetes does not declare access modes on a StorageClass (they are a PVC
-// property), so this is a best-effort answer: modes observed on bound
-// PersistentVolumes win, then an explicit platform mapping (the media class
-// must be RWX), then a small knowledge base for the classes this platform
-// creates. An empty list means "unknown", and the console warns rather than
-// inventing a guarantee.
+// property), so this is a best-effort answer. An explicit platform mapping wins,
+// then the conventions for classes this platform creates (an NFS class is RWX
+// even if a particular PVC asked for RWO), then modes observed on bound
+// PersistentVolumes for unknown classes. An empty list means "unknown", and the
+// console warns rather than inventing a guarantee.
 type StorageClass struct {
 	Name         string   `json:"name"`
 	Default      bool     `json:"default"`
@@ -639,21 +639,40 @@ func (in *Installer) StorageClasses() ([]StorageClass, error) {
 	configured := accessModeMap(os.Getenv("UMKIM_THIN_STORAGE_ACCESS_MODES"))
 	for i := range classes {
 		sc := &classes[i]
-		if m := modes[sc.Name]; len(m) > 0 {
-			sc.AccessModes, sc.AccessSource = m, "observed"
-			continue
-		}
-		if m := configured[sc.Name]; len(m) > 0 {
-			sc.AccessModes, sc.AccessSource = m, "configured"
-			continue
-		}
-		if m := knownAccessModes(sc.Name, sc.Provisioner); len(m) > 0 {
-			sc.AccessModes, sc.AccessSource = m, "known"
-			continue
-		}
-		sc.AccessSource = "unknown"
+		sc.AccessModes, sc.AccessSource = accessModesFor(*sc, modes, configured)
 	}
 	return classes, nil
+}
+
+func accessModesFor(sc StorageClass, observed, configured map[string][]string) ([]string, string) {
+	if m := configured[sc.Name]; len(m) > 0 {
+		return shortAccessModes(m), "configured"
+	}
+	if m := knownAccessModes(sc.Name, sc.Provisioner); len(m) > 0 {
+		return m, "known"
+	}
+	if m := observed[sc.Name]; len(m) > 0 {
+		return shortAccessModes(m), "observed"
+	}
+	return nil, "unknown"
+}
+
+func shortAccessModes(modes []string) []string {
+	out := make([]string, 0, len(modes))
+	for _, mode := range modes {
+		switch mode {
+		case "ReadWriteMany":
+			mode = "RWX"
+		case "ReadWriteOnce":
+			mode = "RWO"
+		case "ReadOnlyMany":
+			mode = "ROX"
+		case "ReadWriteOncePod":
+			mode = "RWOP"
+		}
+		out = append(out, mode)
+	}
+	return out
 }
 
 func parseStorageClasses(out string) ([]StorageClass, error) {
