@@ -92,7 +92,8 @@ done
 for v in "claimName: umkim-thin-state" "mountPath: /data" \
          "mountPath: /etc/umkim-thin" "name: umkim-thin-config" \
          "secretName: umkim-thin-secrets" "name: umkim-thin-mirror" \
-         "serviceAccountName: umkim-thin-console"; do
+         "serviceAccountName: umkim-thin-console" \
+         "name: umkim-thin-home" "home.example.com" "containerPort: 8081"; do
   if ! printf '%s\n' "$console_render" | grep -F "$v" >/dev/null; then
     echo "console chart is missing $v" >&2
     exit 1

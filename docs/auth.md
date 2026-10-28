@@ -27,6 +27,7 @@ trust a proxy identity header.
 | qBittorrent | local WebUI password | no |
 | Seerr | Jellyfin login (LDAP-backed) | no |
 | Console | own admin/breakglass login | no (deliberate) |
+| Home | Authelia forward-auth only | **yes** |
 | WireGuard | keys | n/a |
 
 ## Gitea SSH (dedicated port)

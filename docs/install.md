@@ -58,7 +58,7 @@ Create these names (a wildcard is easiest):
 *.<zone>               -> ingress address
 ```
 
-That covers `auth.<zone>`, `console.<zone>`, `lldap.<zone>`, `gitea.<zone>`,
+That covers `auth.<zone>`, `console.<zone>`, `home.<zone>`, `lldap.<zone>`, `gitea.<zone>`,
 `nextcloud.<zone>`, `immich.<zone>`, `paperless.<zone>`, `jellyfin.<zone>`,
 `sonarr.<zone>`, and so on. The installer reads `<zone>` from the environment
 file; it does not create DNS records.
@@ -142,7 +142,7 @@ The important fields:
 |---|---|
 | `JUMP`, `JUMP_PORT`, `VSSH_KEY` | how the script reaches the provisioner; the key is the one that logs into the jumphost |
 | `VHOST`, `VUSER`, `servers` | the primary server and the full server list (primary first) |
-| `zone`, `portal_host`, `console_host` | the public names; `auth.<zone>` and `console.<zone>` are conventional |
+| `zone`, `portal_host`, `console_host` | the public names; `auth.<zone>` and `console.<zone>` are conventional. The home page is `home.<zone>` by default; set chart `homeHost` for a custom name. |
 | `base_dn`, `admin_email`, `acme_email` | directory DN and the addresses used for the admin/ACME account |
 | `lab_cidr` | your node/management network (the firewall trusts it) |
 | `public_ip` | optional **fixed** public/NAT address for the DNS preflight; leave blank for dynamic DNS (the current common public address is accepted) |
@@ -264,12 +264,12 @@ kubectl -n kube-system get pods           # calico, coredns, traefik (plus kube-
 kubectl -n identity get pods              # authelia, lldap, invite-signup
 kubectl -n umkim-thin get deploy,pod      # umkim-thin-console 1/1 Running
 kubectl get storageclass                  # local-path and umkim-thin-nfs (or legacy nfs)
-kubectl get ingress -A                    # auth.<zone> and console.<zone>
+kubectl get ingress -A                    # auth.<zone>, console.<zone>, home.<zone>
 ```
 
 Expected: one `Ready` node, the console pod `1/1 Running`, both storage classes
-present, and two Ingresses for the portal and console. The first app install adds
-more.
+present, and three Ingresses for the portal, console and home page. The first app
+install adds more.
 
 From your workstation:
 

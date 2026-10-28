@@ -29,6 +29,7 @@ export UMKIM_THIN_PORTAL_USER="$portal_user" UMKIM_THIN_PORTAL_PASSWORD="$portal
 mask "$portal_pw"
 
 apps="${ci_apps:-gitea}"
+home_host="${UMKIM_THIN_HOME_HOST:-home.$ZONE}"
 
 # "full" is an on-demand profile: it exercises ACME with staging certificates
 # for real (no production Let's Encrypt), verifies TLS strictly, and builds the
@@ -68,7 +69,7 @@ PY
     *" nextcloud "*) extra_hosts="collabora.$ZONE" ;;
   esac
   # shellcheck disable=SC2086
-  pin_hosts "$k3s_control_plane_vip" "$PORTAL_HOST" "$CONSOLE_HOST" $app_hosts $extra_hosts
+  pin_hosts "$k3s_control_plane_vip" "$PORTAL_HOST" "$CONSOLE_HOST" "$home_host" $app_hosts $extra_hosts
 fi
 
 # The private chart repos are cloned with this key (provision.sh inherits it).
@@ -221,6 +222,7 @@ EOS
 fi
 
 export UMKIM_THIN_ZONE="$ZONE" \
+  UMKIM_THIN_HOME_HOST="$home_host" \
   UMKIM_THIN_APPS="$(cat tests/playwright/apps.json)" \
   UMKIM_THIN_USER=admin \
   UMKIM_THIN_PASSWORD="$pw" \
@@ -237,7 +239,7 @@ cd tests/playwright
 # Acceptance gate: routes/auth challenge, the directory-login matrix, TLS and
 # the console browser flow. These gate the pipeline; the deep functional user
 # journeys stay informational.
-npx playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts
+npx playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
 
 # Functional user journeys (client simulation): INFORMATIONAL. A failure here
 # must not fail the pipeline; it is written to a report for review instead.

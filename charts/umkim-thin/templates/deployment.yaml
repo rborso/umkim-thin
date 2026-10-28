@@ -104,10 +104,12 @@ spec:
                   context: {cluster: in-cluster, user: sa}
               current-context: sa
               EOF
-              exec /usr/local/bin/umkim-thin serve --addr :8080 --catalog /opt/umkim-thin/catalog
+              exec /usr/local/bin/umkim-thin serve --addr :8080 --home-addr :{{ .Values.homePort | default 8081 }} --catalog /opt/umkim-thin/catalog
           ports:
             - name: http
               containerPort: 8080
+            - name: home
+              containerPort: {{ .Values.homePort | default 8081 }}
           readinessProbe:
             httpGet:
               path: /readyz

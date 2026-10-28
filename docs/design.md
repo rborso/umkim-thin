@@ -13,7 +13,9 @@ umkim-thin turns an existing Kubernetes cluster into a self-hosted app platform:
    client.
 3. **Onboard people** — an operator issues an invitation; the invitee sets their
    own password in the directory. No shared credentials, no manual LDAP edits.
-4. **Reach it privately (optional)** — create WireGuard clients self-service and
+4. **Use it** — household users open `home.<zone>`, a read-only app launcher
+   with availability and links, without getting the admin console.
+5. **Reach it privately (optional)** — create WireGuard clients self-service and
    keep the apps off the public internet, or publish them with auth in front.
 
 ## Non-goals

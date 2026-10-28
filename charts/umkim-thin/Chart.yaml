@@ -2,7 +2,7 @@ apiVersion: v2
 name: umkim-thin
 description: umkim-thin console/API — the single binary that drives the catalog, directory and WireGuard
 type: application
-version: 0.1.3
+version: 0.1.4
 appVersion: "1.0"
 
 home: https://github.com/rborso/umkim-thin

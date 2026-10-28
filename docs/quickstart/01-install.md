@@ -92,6 +92,7 @@ umkim-thin is installed.
 
   Portal     https://auth.example.com
   Console    https://console.example.com
+  Home       https://home.example.com
   Directory  https://lldap.example.com  (admin / ...)
   Breakglass localadmin / ...
 

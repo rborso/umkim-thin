@@ -3,7 +3,9 @@
 The console/API chart: one Deployment for the `umkim-thin` binary, its
 ServiceAccount, ConfigMap, Secret seed and a PersistentVolumeClaim for state.
 The binary drives the catalog, directory, app routes, storage and the optional
-WireGuard gateway.
+WireGuard gateway. It also serves a separate read-only home page on its internal
+`home` port; the home Ingress is gated by Authelia and does not require the
+console login.
 
 ## License
 

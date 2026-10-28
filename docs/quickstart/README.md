@@ -14,7 +14,7 @@ in how the hosts are prepared.
 - A fresh **Rocky Linux 9** or **10** server (a VPS or a spare machine), 4 GB
   RAM, 2 vCPU, 20 GB disk. Minimal install is enough.
 - A **domain** you control (for example `example.com`). You will point three
-  DNS records at the server: `auth`, `console`, and a wildcard for apps.
+  DNS records at the server: `auth`, `console`, `home`, and a wildcard for apps.
 - Ports **80** and **443** reachable from the internet (for certificates).
   Port **51820/UDP** only if you want WireGuard.
 - An email address for the certificate authority and the directory admin.
@@ -60,6 +60,7 @@ console.
 | LLDAP UI | The directory admin page at `lldap.<zone>`, behind the portal (resets, removals) |
 | Authelia | The login portal, forward-auth, and OIDC provider |
 | umkim-thin console | The browser UI and API for installing apps and inviting people |
+| Home page | Read-only app launcher for household users at `home.<zone>` |
 | local-path | Storage for the database and config volumes |
 
 The apps you install later come from the catalog. Each one gets a hostname, a
@@ -94,6 +95,7 @@ server's public IPv4 address):
 |---|---|---|
 | A | `auth` | `203.0.113.10` |
 | A | `console` | `203.0.113.10` |
+| A | `home` | `203.0.113.10` |
 | A | `*` | `203.0.113.10` |
 
 The wildcard covers app hostnames such as `nextcloud.example.com` **and**

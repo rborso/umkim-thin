@@ -57,7 +57,9 @@ PY
 fi
 : "${UMKIM_THIN_PORTAL_USER:=${portal_user:-}}"
 : "${UMKIM_THIN_PORTAL_PASSWORD:=${portal_pw:-}}"
+: "${UMKIM_THIN_HOME_HOST:=home.$UMKIM_THIN_ZONE}"
 export UMKIM_THIN_ZONE UMKIM_THIN_CONSOLE_HOST UMKIM_THIN_AUTH_HOST \
+  UMKIM_THIN_HOME_HOST \
   UMKIM_THIN_USER UMKIM_THIN_PASSWORD UMKIM_THIN_APPS \
   UMKIM_THIN_PORTAL_USER UMKIM_THIN_PORTAL_PASSWORD \
   UMKIM_THIN_GITEA_SSH_PORT="${UMKIM_THIN_GITEA_SSH_PORT:-2222}"
@@ -111,7 +113,7 @@ run_pw() {
 }
 
 acceptance() {
-  run_pw apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts
+  run_pw apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
 }
 
 platform() {

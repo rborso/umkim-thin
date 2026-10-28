@@ -21,6 +21,11 @@ identityNamespace: identity
 # Where the app is published (Authelia gates it, then the console's own login).
 # Required: no default, so an install cannot accidentally claim a real hostname.
 consoleHost: ""
+# User-facing read-only home page. Empty derives home.<rest> from consoleHost
+# (console.example.com -> home.example.com). Set explicitly for a custom host.
+homeHost: ""
+# Internal listener for the home page; the console's main API stays on 8080.
+homePort: 8081
 forwardAuthMiddleware: identity-authelia@file
 
 # The console always runs cluster-style: state and the chart mirror live on a

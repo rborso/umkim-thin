@@ -1,0 +1,40 @@
+{{- $consoleHost := required "consoleHost is required (e.g. console.example.com)" .Values.consoleHost -}}
+{{- $homeHost := .Values.homeHost -}}
+{{- if not $homeHost -}}
+{{- if hasPrefix "console." $consoleHost -}}
+{{- $homeHost = replace "console." "home." $consoleHost -}}
+{{- else -}}
+{{- $homeHost = printf "home.%s" $consoleHost -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $homeHost $consoleHost -}}
+{{- fail "homeHost must differ from consoleHost" -}}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: umkim-thin-home
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    # The home page has no console login. Authelia is the only gate; it also
+    # supplies Remote-User, which the home listener requires.
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.forwardAuthMiddleware | quote }}
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ $homeHost | quote }}
+  rules:
+    - host: {{ $homeHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: umkim-thin-console
+                port:
+                  number: {{ .Values.homePort | default 8081 }}

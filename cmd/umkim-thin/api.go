@@ -33,7 +33,7 @@ var uiFS embed.FS
 //
 // The endpoints mirror the CLI: the console is a client of the same API, not a
 // second implementation of the same logic.
-func serveAPI(catalogDir, addr string) error {
+func serveAPI(catalogDir, addr, homeAddr string) error {
 	entries, err := catalog.Load(catalogDir)
 	if err != nil {
 		return err
@@ -892,12 +892,153 @@ func serveAPI(catalogDir, addr string) error {
 	}
 	mux.Handle("/", http.FileServer(http.FS(static)))
 
+	if homeAddr != "" {
+		homePage, err := fs.ReadFile(uiFS, "ui/home.html")
+		if err != nil {
+			return err
+		}
+		homeMux := http.NewServeMux()
+		homeMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte("ok\n"))
+		})
+		homeMux.HandleFunc("GET /api/home", homeAPIHandler(installer, entries))
+		homeMux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Robots-Tag", "noindex")
+			_, _ = w.Write(homePage)
+		})
+		homeSrv := newHTTPServer(homeAddr, securityHeaders(requireRemoteUser(homeMux)))
+		go func() {
+			log.Printf("home listening on %s", homeAddr)
+			if err := homeSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("home server stopped: %v", err)
+			}
+		}()
+	}
+
 	fmt.Printf("umkim-thin listening on %s (%d catalog entries)\n", addr, len(entries))
 	srv := newHTTPServer(addr, securityHeaders(auth.requireAuth(mux)))
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// requireRemoteUser keeps the home port from being a direct cluster-internal
+// bypass. The home Ingress attaches Authelia's forward-auth middleware, which
+// adds Remote-User; a request straight to the ClusterIP does not carry it.
+func requireRemoteUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.TrimSpace(r.Header.Get("Remote-User")) == "" {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// homeApp is the deliberately small, user-facing view of an installed app.
+// Namespaces, Helm phases, pod counts and mutations stay in the admin console.
+type homeApp struct {
+	Name        string         `json:"name"`
+	DisplayName string         `json:"displayName"`
+	Description string         `json:"description,omitempty"`
+	URL         string         `json:"url"`
+	Status      string         `json:"status"` // available | starting | unavailable
+	VPN         bool           `json:"vpn,omitempty"`
+	Links       *catalog.Links `json:"links,omitempty"`
+}
+
+type homeResponse struct {
+	User string    `json:"user,omitempty"`
+	Apps []homeApp `json:"apps"`
+}
+
+// homeAPIHandler returns installed catalog apps with their public routes. It is
+// cached because Helm/kubectl status calls are far too expensive for a page
+// that every household user refreshes.
+func homeAPIHandler(installer *app.Installer, entries []catalog.Entry) http.HandlerFunc {
+	var mu sync.Mutex
+	var at time.Time
+	var cached []homeApp
+	return func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if at.IsZero() || time.Since(at) > 45*time.Second {
+			cached = buildHomeApps(installer, entries)
+			at = time.Now()
+		}
+		apps := append([]homeApp(nil), cached...)
+		mu.Unlock()
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, homeResponse{
+			User: strings.TrimSpace(r.Header.Get("Remote-User")),
+			Apps: apps,
+		})
+	}
+}
+
+func buildHomeApps(installer *app.Installer, entries []catalog.Entry) []homeApp {
+	installed, err := installer.List()
+	if err != nil {
+		log.Printf("home: listing installed apps: %v", err)
+		return []homeApp{}
+	}
+	byName := make(map[string]app.Result, len(installed))
+	for _, a := range installed {
+		byName[a.Name] = a
+	}
+
+	out := make([]homeApp, 0, len(entries))
+	for _, e := range entries {
+		a, ok := byName[e.Name]
+		if !ok || len(a.Routes) == 0 {
+			continue
+		}
+		st, err := installer.Status(a.Name, &e)
+		if err != nil {
+			log.Printf("home: status for %s: %v", e.Name, err)
+		}
+		status := "unavailable"
+		if err == nil {
+			switch {
+			case st.Ready:
+				status = "available"
+			case strings.HasPrefix(st.HelmStatus, "pending"):
+				status = "starting"
+			}
+		}
+		vpn := false
+		for _, route := range e.EffectiveRoutes() {
+			if route.Mode == "site" && route.DefaultExposure() == "vpn" {
+				vpn = true
+				break
+			}
+		}
+		displayName := e.DisplayName
+		if displayName == "" {
+			displayName = e.Name
+		}
+		out = append(out, homeApp{
+			Name:        e.Name,
+			DisplayName: displayName,
+			Description: e.Description,
+			URL:         "https://" + a.Routes[0],
+			Status:      status,
+			VPN:         vpn,
+			Links:       e.Links,
+		})
+	}
+	return out
 }
 
 // newHTTPServer sets the timeouts explicitly. Without them a slow or stuck

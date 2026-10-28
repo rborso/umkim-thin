@@ -18,6 +18,7 @@ path below is not HA.
 - A domain. Create `A` records for:
   - `auth.<zone>`
   - `console.<zone>`
+  - `home.<zone>`
   - `*.<zone>` (covers `lldap.<zone>` and every app hostname)
 - Ports **80** and **443** reachable from the internet (ACME HTTP-01). Add
   **51820/UDP** only if you want WireGuard.
@@ -88,6 +89,7 @@ Wait for the summary:
 umkim-thin is installed.
   Portal     https://auth.example.com
   Console    https://console.example.com
+  Home       https://home.example.com
   Directory  https://lldap.example.com
 ```
 
@@ -187,6 +189,6 @@ using `--acme-staging`, the self-signed warning is expected; use
 - No per-app access lists: every directory user is trusted with the family apps.
   Each app's own login is the second gate (see `PROJECT_GOAL.md`).
 - No email/SMTP: password reset is manual from `lldap.<zone>`.
-- No self-service console for family members; the console is the admin's.
+- The console is the admin's; family members get the read-only app launcher at `https://home.<zone>`.
 - Only the verified catalog apps are installable. An entry is accepted only
   after it passes the verification suite; do not add one by hand.

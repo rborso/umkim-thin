@@ -49,6 +49,7 @@ Known gaps, deliberately not hidden:
 | **Invitations** | Self-service onboarding: an operator issues a link, the invitee sets their own password |
 | **Directory UI** | `lldap.<zone>` behind the portal, for the occasional password reset or removal |
 | **WireGuard** | Optional private access: per-client configs created self-service, so apps can stay off the public internet entirely |
+| **Home** | A read-only app launcher for household users: installed apps, live availability and links, without console access |
 | **Console + CLI** | The same operations from a browser or a terminal |
 
 ## Non-goals

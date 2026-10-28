@@ -439,10 +439,11 @@ func wgCmd(args []string) error {
 func serve(dir string, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := fs.String("addr", ":8080", "listen address")
+	homeAddr := fs.String("home-addr", ":8081", "user-facing home listen address (empty disables)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return serveAPI(dir, *addr)
+	return serveAPI(dir, *addr, *homeAddr)
 }
 
 func fatal(err error) {

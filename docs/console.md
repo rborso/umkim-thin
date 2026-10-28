@@ -5,6 +5,20 @@ their routes, shows live status, and can build and run the media stack's
 one-shot configuration Job. It is one Go binary (Helm and kubectl included)
 served behind Authelia and its own login.
 
+## Home page
+
+The platform also publishes a separate read-only `home.<zone>` page for ordinary
+directory users. It is gated only by Authelia forward-auth and never asks for the
+console login. It lists installed catalog apps with their display name,
+description, launch URL and a coarse `Available` / `Starting` / `Unavailable`
+status. The home listener refuses requests without Authelia's `Remote-User`
+header, so the ClusterIP port is not a second unauthenticated surface.
+
+The home page is deliberately not the console: it has no namespaces, Helm
+status, version details, installs, upgrades, uninstall, invite or storage
+controls. Its `GET /api/home` response is cached for 45 seconds because the
+status calculation shells out to Helm and kubectl.
+
 ## Layout
 
 The console is split into tabs so unrelated operations are not stacked on one

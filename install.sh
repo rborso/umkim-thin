@@ -943,6 +943,7 @@ umkim-thin is installed.
 
   Portal     https://auth.$ZONE
   Console    https://console.$ZONE
+  Home       https://home.$ZONE
   Directory  https://lldap.$ZONE  (admin / the password below)
   Breakglass localadmin / (the password printed by the installer)
 
@@ -1079,7 +1080,7 @@ do_doctor() {
   if [ -z "$ZONE" ]; then
     bad "no zone in $STATE_DIR/config.env"
   else
-    local h code hosts="auth.$ZONE console.$ZONE"
+    local h code hosts="auth.$ZONE console.$ZONE home.$ZONE"
     if kubectl -n "$IDENTITY_NAMESPACE" get ingress lldap-portal >/dev/null 2>&1; then
       hosts="$hosts lldap.$ZONE"
     fi
