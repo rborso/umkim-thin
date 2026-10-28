@@ -880,6 +880,10 @@ func (in *Installer) List() ([]Result, error) {
 	if err := json.Unmarshal([]byte(out), &releases); err != nil {
 		return nil, fmt.Errorf("parsing helm list: %w", err)
 	}
+	// Fetch every Ingress once. The old per-release call turned a list of ten
+	// apps into eleven kubectl processes; the home page consumes this list on
+	// every cache refresh.
+	routes := in.routesByNamespace()
 	var results []Result
 	for _, r := range releases {
 		results = append(results, Result{
@@ -888,11 +892,46 @@ func (in *Installer) List() ([]Result, error) {
 			Chart:      chartVersion(r.Name, r.Chart),
 			AppVersion: r.AppVersion,
 			HelmStatus: r.Status,
-			Routes:     in.routes(r.Namespace),
+			Routes:     routes[r.Namespace],
 		})
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
 	return results, nil
+}
+
+// routesByNamespace returns every Ingress host, grouped by namespace. It is one
+// kubectl call regardless of the number of installed apps.
+func (in *Installer) routesByNamespace() map[string][]string {
+	out, err := in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig,
+		"get", "ingress", "--all-namespaces", "-o", "json")
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Items []struct {
+			Metadata struct {
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Spec struct {
+				Rules []struct {
+					Host string `json:"host"`
+				} `json:"rules"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal([]byte(out), &doc) != nil {
+		return nil
+	}
+	routes := map[string][]string{}
+	for _, item := range doc.Items {
+		for _, rule := range item.Spec.Rules {
+			if rule.Host == "" {
+				continue
+			}
+			routes[item.Metadata.Namespace] = append(routes[item.Metadata.Namespace], rule.Host)
+		}
+	}
+	return routes
 }
 
 // routes returns the hosts published by the Ingresses in a namespace. The

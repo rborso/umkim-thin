@@ -964,27 +964,79 @@ type homeResponse struct {
 	Apps []homeApp `json:"apps"`
 }
 
-// homeAPIHandler returns installed catalog apps with their public routes. It is
-// cached because Helm/kubectl status calls are far too expensive for a page
-// that every household user refreshes.
+// homeAPIHandler returns installed catalog apps with their public routes. The
+// expensive Helm/kubectl work runs in the background: the first successful
+// build is shared by all users, and a stale snapshot is served immediately
+// while the next one is refreshed.
 func homeAPIHandler(installer *app.Installer, entries []catalog.Entry) http.HandlerFunc {
-	var mu sync.Mutex
-	var at time.Time
-	var cached []homeApp
+	store := &homeStore{
+		build: func() []homeApp { return buildHomeApps(installer, entries) },
+		ready: make(chan struct{}),
+	}
+	store.start()
 	return func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		if at.IsZero() || time.Since(at) > 45*time.Second {
-			cached = buildHomeApps(installer, entries)
-			at = time.Now()
+		// The first request waits for the initial warm-up; later requests use
+		// the snapshot and never block on Helm/kubectl.
+		select {
+		case <-store.ready:
+		default:
+			<-store.ready
 		}
-		apps := append([]homeApp(nil), cached...)
-		mu.Unlock()
+		apps := store.snapshot()
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, homeResponse{
 			User: strings.TrimSpace(r.Header.Get("Remote-User")),
 			Apps: apps,
 		})
 	}
+}
+
+type homeStore struct {
+	mu          sync.Mutex
+	build       func() []homeApp
+	apps        []homeApp
+	at          time.Time
+	refreshing  bool
+	ready       chan struct{}
+	initialized bool
+}
+
+func (s *homeStore) start() {
+	s.mu.Lock()
+	s.refreshing = true
+	s.mu.Unlock()
+	go func() {
+		s.refresh()
+		s.mu.Lock()
+		s.refreshing = false
+		s.mu.Unlock()
+		close(s.ready)
+	}()
+}
+
+func (s *homeStore) refresh() {
+	apps := s.build()
+	s.mu.Lock()
+	s.apps = apps
+	s.at = time.Now()
+	s.initialized = true
+	s.mu.Unlock()
+}
+
+func (s *homeStore) snapshot() []homeApp {
+	s.mu.Lock()
+	if s.initialized && time.Since(s.at) > 60*time.Second && !s.refreshing {
+		s.refreshing = true
+		go func() {
+			s.refresh()
+			s.mu.Lock()
+			s.refreshing = false
+			s.mu.Unlock()
+		}()
+	}
+	apps := append([]homeApp(nil), s.apps...)
+	s.mu.Unlock()
+	return apps
 }
 
 func buildHomeApps(installer *app.Installer, entries []catalog.Entry) []homeApp {
@@ -997,32 +1049,16 @@ func buildHomeApps(installer *app.Installer, entries []catalog.Entry) []homeApp 
 	for _, a := range installed {
 		byName[a.Name] = a
 	}
+	entryByName := make(map[string]catalog.Entry, len(entries))
+	for _, e := range entries {
+		entryByName[e.Name] = e
+	}
 
 	out := make([]homeApp, 0, len(entries))
 	for _, e := range entries {
 		a, ok := byName[e.Name]
 		if !ok || len(a.Routes) == 0 {
 			continue
-		}
-		st, err := installer.Status(a.Name, &e)
-		if err != nil {
-			log.Printf("home: status for %s: %v", e.Name, err)
-		}
-		status := "unavailable"
-		if err == nil {
-			switch {
-			case st.Ready:
-				status = "available"
-			case strings.HasPrefix(st.HelmStatus, "pending"):
-				status = "starting"
-			}
-		}
-		vpn := false
-		for _, route := range e.EffectiveRoutes() {
-			if route.Mode == "site" && route.DefaultExposure() == "vpn" {
-				vpn = true
-				break
-			}
 		}
 		displayName := e.DisplayName
 		if displayName == "" {
@@ -1033,11 +1069,43 @@ func buildHomeApps(installer *app.Installer, entries []catalog.Entry) []homeApp 
 			DisplayName: displayName,
 			Description: e.Description,
 			URL:         "https://" + a.Routes[0],
-			Status:      status,
-			VPN:         vpn,
 			Links:       e.Links,
 		})
 	}
+
+	// Each Status call shells out to Helm and kubectl. Run them concurrently;
+	// a household home page should not wait for six sequential process chains.
+	var wg sync.WaitGroup
+	for i := range out {
+		i := i
+		e := entryByName[out[i].Name]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			st, err := installer.Status(e.Name, &e)
+			status := "unavailable"
+			if err == nil {
+				switch {
+				case st.Ready:
+					status = "available"
+				case strings.HasPrefix(st.HelmStatus, "pending"):
+					status = "starting"
+				}
+			} else {
+				log.Printf("home: status for %s: %v", e.Name, err)
+			}
+			vpn := false
+			for _, route := range e.EffectiveRoutes() {
+				if route.Mode == "site" && route.DefaultExposure() == "vpn" {
+					vpn = true
+					break
+				}
+			}
+			out[i].Status = status
+			out[i].VPN = vpn
+		}()
+	}
+	wg.Wait()
 	return out
 }
 
