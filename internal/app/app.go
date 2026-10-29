@@ -1617,6 +1617,19 @@ func (in *Installer) run(name string, args ...string) (string, error) {
 	return string(out), nil
 }
 
+// runInput is run for commands that must receive a value on stdin. The value is
+// deliberately not repeated in the error: it can be a Secret.
+func (in *Installer) runInput(input, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+in.cfg.Kubeconfig)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w", filepath.Base(name), err)
+	}
+	return string(out), nil
+}
+
 // renderAny replaces templating tokens in strings, maps and lists.
 func renderAny(v any, repl map[string]string) any {
 	switch t := v.(type) {

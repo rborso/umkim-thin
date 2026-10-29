@@ -815,6 +815,24 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			return installer.SetupServarr(e, settings, progress)
 		}))
 	})
+	// Optional, explicit integration: create a Mealie API token and register a
+	// global Mealie food provider in SparkyFitness. It is one click: the console
+	// reads the two release Secrets, encrypts the token with SparkyFitness's own
+	// key, and writes the provider row. Running it again is a no-op when the
+	// provider already points at this Mealie release.
+	mutating(mux, "POST /api/apps/{name}/integrations/mealie", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("name") != "sparkyfitness" {
+			http.Error(w, "integration is only available for SparkyFitness", http.StatusNotFound)
+			return
+		}
+		audit(r, auth, "mealie-sparkyfitness", "sparkyfitness", "")
+		res, err := installer.ConnectMealieToSparky()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, res)
+	})
 	mutating(mux, "DELETE /api/apps/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		e, ok := byName[name]

@@ -257,6 +257,38 @@ app stays installed and the Applications section shows `failed` with a retry. A
 successful run records the image tag, so clicking setup again with the same
 image is a no-op (the chart's Jellyfin wizard step cannot be re-run).
 
+## Optional Mealie → SparkyFitness integration
+
+When both Mealie and SparkyFitness are installed, the SparkyFitness row in
+**Applications** has a one-click **Connect Mealie** action. It is optional and
+does not run during either app's install.
+
+The action:
+
+1. creates a dedicated `sparkyfitness` API token in Mealie with the Mealie
+   admin account from the release Secret;
+2. encrypts that token with SparkyFitness's own
+   `SPARKY_FITNESS_API_ENCRYPTION_KEY`;
+3. creates (or updates) one **global** Mealie food provider in the
+   SparkyFitness database;
+4. adds two narrow NetworkPolicies so the console can reach both apps and
+   SparkyFitness can reach Mealie on an existing default-deny installation;
+5. grants the console `pods/exec` only in the SparkyFitness namespace, so it
+   can run `psql` in that release's PostgreSQL pod. The grant is a namespaced
+   Role/RoleBinding, not a cluster-wide exec permission.
+
+There is no manual key or dialog: SparkyFitness has no supported
+service-account/API-key handoff, so the console writes the single provider row
+with the same AES-256-GCM key and schema the application uses. The token never
+appears in argv, the console log, or a ConfigMap. A second click is a no-op
+when the provider already points at this Mealie Service; a failed database
+write removes the temporary Mealie token.
+
+The provider uses the in-cluster URL
+`http://mealie.<namespace>.svc.cluster.local:9000`. Recipes flow from Mealie
+into SparkyFitness; nothing is copied back. See the SparkyFitness chart README
+for the manual UI path and the private-network SSRF trade-off.
+
 ## Security
 
 - The console's own login (LDAP admin or breakglass `localadmin`) and Authelia
@@ -302,6 +334,7 @@ image is a no-op (the chart's Jellyfin wizard step cannot be re-run).
 | POST | `/api/storage/apply` | local format/RAID/export, or external NFS StorageClass |
 | DELETE | `/api/storage/{name}` | remove the export/StorageClass (data kept) |
 | POST | `/api/apps/servarr/setup` | build (if needed) and run the bootstrap |
+| POST | `/api/apps/{name}/integrations/mealie` | one-click optional SparkyFitness → Mealie provider |
 | GET | `/api/jobs`, `/api/jobs/{id}` | background job status/log |
 
 ## Placement and state

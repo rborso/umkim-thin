@@ -20,6 +20,18 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+        # The console performs optional app-to-app integrations (for example
+        # Mealie -> SparkyFitness) through the app Service.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: umkim-thin
+{% if ns == "mealie" %}
+        # SparkyFitness's Mealie food provider fetches recipes over the
+        # in-cluster Mealie Service.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sparkyfitness
+{% endif %}
         # WireGuard clients reach apps through the tunnel gateway.
         - ipBlock:
             cidr: {{ wg_subnet }}

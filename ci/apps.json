@@ -111,6 +111,18 @@
       "auth": "forward_auth"
     }
   ],
+  "mealie": [
+    {
+      "name": "mealie",
+      "host": "mealie.{zone}",
+      "auth": "oidc",
+      "admin": {
+        "namespace": "mealie",
+        "secret": "mealie-secrets",
+        "user": "changeme@example.com"
+      }
+    }
+  ],
   "sparkyfitness": [
     {
       "name": "sparkyfitness",

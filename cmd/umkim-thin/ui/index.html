@@ -199,7 +199,7 @@
         <div>
           <span class="eyebrow">Operations</span>
           <h2>Applications</h2>
-          <p class="sub">Health, links and setup actions for installed apps, plus installs and upgrades in progress.</p>
+          <p class="sub">Health, links and setup actions for installed apps, plus installs and upgrades in progress. When Mealie and SparkyFitness are both installed, <strong>Connect Mealie</strong> wires the recipe provider.</p>
         </div>
         <div><button id="apps-refresh">Refresh</button> <span id="apps-updated" class="muted"></span></div>
       </div>
@@ -1406,6 +1406,8 @@ async function loadApplications() {
           '<button data-setup>Run setup</button> ' +
           `<button data-indexers data-app="${esc(a.name)}" data-namespace="${esc(a.namespace)}">Indexers</button> ` +
           `<button data-profiles data-app="${esc(a.name)}" data-namespace="${esc(a.namespace)}">Profiles</button>`;
+      } else if (a.name === 'sparkyfitness' && appNames.has('mealie')) {
+        setup = '<button data-mealie-integration title="Create a Mealie API token and add a global Mealie food provider">Connect Mealie</button>';
       }
       const tr = document.createElement('tr');
       const lic = licenseParts(a);
@@ -1420,6 +1422,9 @@ async function loadApplications() {
       }
       for (const b of tr.querySelectorAll('[data-profiles]')) {
         b.onclick = () => openProfilesDialog(b.dataset.app, b.dataset.namespace);
+      }
+      for (const b of tr.querySelectorAll('[data-mealie-integration]')) {
+        b.onclick = () => runMealieIntegration(b, a);
       }
       for (const b of tr.querySelectorAll('[data-upgrade]')) b.onclick = () => upgradeApp(b.dataset.upgrade);
       rows.appendChild(tr);
@@ -1893,6 +1898,28 @@ async function startUpgrade() {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Upgrade';
+  }
+}
+
+async function runMealieIntegration(button, app) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Connecting…';
+  note('connecting Mealie to SparkyFitness…');
+  try {
+    const res = await fetch(`/api/apps/${encodeURIComponent(app.name)}/integrations/mealie`, {
+      method: 'POST',
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const out = JSON.parse(text);
+    note(out.alreadyConnected ? 'Mealie is already connected' : `Mealie connected at ${out.baseUrl}`, 'ok');
+    loadApplications();
+  } catch (err) {
+    note(String(err.message || err), 'err');
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
   }
 }
 

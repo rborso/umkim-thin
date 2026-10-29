@@ -57,6 +57,8 @@ netpol_app_namespaces:
   - nextcloud
   - paperless
   - servarr
+  - mealie
+  - sparkyfitness
 netpol_identity_namespace: identity
 netpol_wg_namespace: wireguard
 
