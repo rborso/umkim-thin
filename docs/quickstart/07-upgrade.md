@@ -12,7 +12,11 @@
 
 2. Take a VM snapshot if you can. Application data lives in PVCs (see
    [Backup](06-backup.md)).
-3. Read the release notes for breaking changes
+3. The console's header shows an **update X.Y.Z** chip when a newer release is
+   published; it links to that release's notes. It only reports — the upgrade is
+   still the run below. (It is read-only and cached; see
+   [`../console.md`](../console.md#update-check) to turn it off.)
+4. Read the release notes for breaking changes
    ([`../releases/`](../releases/)). App charts and the platform charts version
    independently.
 

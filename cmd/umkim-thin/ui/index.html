@@ -47,6 +47,7 @@
   .top-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end }
   .platform-links { color: var(--muted); font-size: .82rem; max-width: 38rem; text-align: right }
   .platform-links a { color: var(--muted); margin-left: .2rem }
+  .update-chip a { text-decoration: none }
   .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: .25rem; overflow-x: auto; background: rgba(244,246,250,.94); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); margin: 0 -1.25rem; padding: .35rem 1.25rem 0 }
   .tab { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: .75rem .85rem; font-weight: 650; border-radius: .5rem .5rem 0 0; cursor: pointer }
   .tab:hover { color: var(--ink); background: var(--accent-soft) }
@@ -161,10 +162,11 @@
     <div class="brand-mark">ut</div>
     <div>
       <div class="brand-name">umkim-thin</div>
-      <div class="brand-sub">Self-hosted app platform</div>
+      <div class="brand-sub" id="brand-sub">Self-hosted app platform</div>
     </div>
   </div>
   <div class="top-actions">
+    <span id="update-chip" class="update-chip"></span>
     <span id="platform-links" class="platform-links"></span>
     <a class="button" href="/logout">Sign out</a>
   </div>
@@ -194,6 +196,18 @@
         <li id="step-wg">Optional: connect a device with <strong>WireGuard</strong>. <a href="#access">Open access</a></li>
         <li id="step-backup">Back up from the host: <code>sudo ./install.sh --backup</code>.</li>
       </ul>
+    </div>
+
+    <div class="card" id="home-card" hidden>
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Shortcut</span>
+          <h2>Household home page</h2>
+          <p class="sub">A read-only launcher for directory users: installed apps, live availability and links, no console access. Share this address with the household.</p>
+        </div>
+        <a class="button" id="home-link" href="#" target="_blank" rel="noopener">Open home page</a>
+      </div>
+      <p class="hint" id="home-url-hint"></p>
     </div>
 
     <div class="card">
@@ -870,10 +884,46 @@ async function loadConfig() {
     Object.assign(CFG, await (await fetch('/api/config')).json());
   } catch (_) {}
   const links = [];
+  if (CFG.homeUrl) links.push(`<a href="${esc(CFG.homeUrl)}" target="_blank" rel="noopener">home</a>`);
   if (CFG.portalHost) links.push(`<a href="https://${esc(CFG.portalHost)}" target="_blank" rel="noopener">portal</a>`);
   links.push(`<a href="${esc(location.origin)}" target="_blank" rel="noopener">console</a>`);
   const el = document.getElementById('platform-links');
   if (el) el.innerHTML = 'Platform: ' + links.join(' · ');
+
+  // The household home page is a separate host; without it (an install that
+  // predates it, or an unknown host) the card and the top-bar link stay hidden.
+  const card = document.getElementById('home-card');
+  if (card && CFG.homeUrl) {
+    document.getElementById('home-link').href = CFG.homeUrl;
+    document.getElementById('home-url-hint').innerHTML =
+      `Share <a href="${esc(CFG.homeUrl)}" target="_blank" rel="noopener">${esc(CFG.homeUrl)}</a> — it is behind the portal, so household users sign in with their directory account.`;
+    card.hidden = false;
+  }
+  if (CFG.version) {
+    const sub = document.getElementById('brand-sub');
+    if (sub) sub.textContent = `Self-hosted app platform · v${CFG.version}`;
+  }
+}
+
+// The update check is read-only and runs in the background on the server, so
+// this never blocks: it renders the last answer, or nothing while unknown.
+async function loadVersion() {
+  const el = document.getElementById('update-chip');
+  if (!el) return;
+  try {
+    const v = await (await fetch('/api/version')).json();
+    if (v.available && v.latest) {
+      const url = v.url || 'https://github.com/rborso/umkim-thin/releases';
+      const checked = v.checkedAt ? new Date(v.checkedAt).toLocaleString() : 'unknown';
+      el.innerHTML = `<a class="chip warn" href="${esc(url)}" target="_blank" rel="noopener"` +
+        ` title="Checked ${esc(checked)}. Upgrade from the host: sudo ./install.sh --reuse-k3s">` +
+        `update ${esc(v.latest)}</a>`;
+    } else {
+      el.innerHTML = '';
+    }
+  } catch (_) {
+    el.innerHTML = '';
+  }
 }
 
 async function loadCatalog() {
@@ -2585,6 +2635,8 @@ document.getElementById('upgrade-dialog').addEventListener('close', () => {
 (async function () {
   activateTab(location.hash.slice(1) || 'overview', false);
   await loadConfig();
+  loadVersion();
+  setInterval(loadVersion, 60 * 60 * 1000);
   loadCatalog();
   loadInstalled();
   loadApplications();

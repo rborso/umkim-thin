@@ -81,6 +81,9 @@ spec:
             - { name: HELM_CACHE_HOME, value: /tmp/helm/cache }
             - { name: HELM_CONFIG_HOME, value: /tmp/helm/config }
             - { name: HELM_DATA_HOME, value: /tmp/helm/data }
+            # The console's home-page shortcut. Derived here (not in the
+            # config.env) so a custom homeHost reaches the UI too.
+            - { name: UMKIM_THIN_HOME_HOST, value: {{ include "umkim-thin.homeHost" . | quote }} }
           command: ["/bin/sh", "-c"]
           args:
             - |

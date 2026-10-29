@@ -612,6 +612,10 @@ UMKIM_THIN_WG_ENDPOINT=$WG_ENDPOINT:$WG_PORT
 UMKIM_THIN_WG_ALLOWED_IPS=10.42.0.0/16,10.43.0.0/16,192.168.168.0/24
 UMKIM_THIN_VPN_SUBNET=$WG_SUBNET
 UMKIM_THIN_VPN_DNS_IP=10.43.200.53
+# The console's read-only release check (it asks the public release metadata
+# for a newer umkim-thin). Cached and silent on failure; set false when the
+# console has no egress, e.g. an air-gapped install.
+UMKIM_THIN_UPDATE_CHECK=${UPDATE_CHECK:-true}
 UMKIM_THIN_TRUSTED_ACCESS_ENABLED=${TRUSTED_ACCESS_ENABLED:-false}
 UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=${TRUSTED_MANAGEMENT_ENABLED:-true}
 UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=${TRUSTED_MANAGEMENT_CIDRS:-}
@@ -743,7 +747,10 @@ build_or_import_image() {
     run dnf -y install podman >/dev/null
     builder=podman
   fi
-  run "$builder" build --build-arg "UMKIM_THIN_GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo novice)" -t "$IMAGE" .
+  run "$builder" build \
+    --build-arg "UMKIM_THIN_GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo novice)" \
+    --build-arg "UMKIM_THIN_VERSION=$VERSION" \
+    -t "$IMAGE" .
   log "importing $IMAGE into k3s"
   if [ "$DRY_RUN" -eq 1 ]; then
     info "+ $builder save $IMAGE | k3s ctr images import -"

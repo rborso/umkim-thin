@@ -19,6 +19,13 @@ status, version details, installs, upgrades, uninstall, invite or storage
 controls. Its `GET /api/home` response is cached for 45 seconds because the
 status calculation shells out to Helm and kubectl.
 
+The console links to it so an operator can find the household address without
+reading the installer output: the header carries a **home** link next to
+*portal* and *console*, and Overview has a **Household home page** card with the
+full URL to share. Both come from `homeUrl` in `GET /api/config`, which the
+chart fills from `homeHost` (derived from `consoleHost` when unset). An install
+that has no home host hides both.
+
 ## Layout
 
 The console is split into tabs so unrelated operations are not stacked on one
@@ -39,9 +46,10 @@ page:
   StorageClasses; see [`storage.md`](storage.md).
 - **Certificates** — manual TLS certificates and the default wildcard.
 
-The header keeps only the portal and console links; the tabs own everything
-else. Messages and job progress appear in a fixed status panel, so a long
-install does not disappear when the page is scrolled.
+The header keeps only the platform links (portal, home, console), the running
+version and the update chip; the tabs own everything else. Messages and job
+progress appear in a fixed status panel, so a long install does not disappear
+when the page is scrolled.
 
 **Applications** polls `/api/status` every two minutes (the server caches for
 45 s). Its Version column shows the installed chart and, when the catalog has a
@@ -51,6 +59,36 @@ button. **Versions…** shows the full catalogued list and the upgrade path runs
 the release's Helm metadata and the user-supplied values it was installed with
 (secrets redacted), including the storage classes and install choices. The CLI
 equivalent is `umkim-thin app options <name>`.
+
+## Update check
+
+The catalog and the version are baked into the console image, so a running
+console cannot know on its own that a newer release exists. `GET /api/version`
+answers that: the running version, the newest published release, whether it is
+newer, and the release page. When it is, the header shows an **update X.Y.Z**
+chip linking to the release notes.
+
+- The check reads the project's public release metadata
+  (`https://api.github.com/repos/rborso/umkim-thin/releases/latest` by default)
+  with `UMKIM_THIN_UPDATE_CHECK_URL` as the override for a mirror.
+- It is read-only. It never downloads, installs or changes anything; the
+  upgrade stays `sudo ./install.sh ... --reuse-k3s` (or the documented HA run).
+- It runs in the background and is cached for six hours, including across pod
+  restarts (`/data/update-check.json`), so a page load never waits on the
+  network and a restart loop cannot hammer the endpoint.
+- A failure (no egress, rate limit, an unparsable tag) is not an error the
+  operator has to clear: the last answer stays and the chip is simply absent.
+- A locally built image reports `dev`; the check stays off and
+  `GET /api/version` carries the reason. `UMKIM_THIN_UPDATE_CHECK=false` turns
+  it off on purpose (air-gapped installs); the Ansible default is
+  `update_check: true`.
+
+Application updates are separate: **Applications** compares each installed
+chart with the catalog in this image and shows **Upgrade to X** when the
+catalogued version is newer. The comparison is by version, so an install ahead
+of the catalog (a candidate) is not offered a downgrade. Discovering *newer
+upstream app releases* is maintainer work (a new tested catalog pin), not a
+console feature.
 
 ## Status
 
@@ -353,7 +391,8 @@ for the manual UI path and the private-network SSRF trade-off.
 | method | path | purpose |
 |---|---|---|
 | GET | `/api/catalog` | catalog entries, including chart/application licences and upstream links |
-| GET | `/api/config` | zone, portal, default classes and `mediaAccessMode` |
+| GET | `/api/config` | zone, portal, `homeUrl`, running `version`, default classes and `mediaAccessMode` |
+| GET | `/api/version` | running version, newest published release, `available`, release URL and the last check time |
 | GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence, upstream links) |
 | POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, `mediaAccessMode`, per-PVC `pvcs`, and per-container `resources` overrides (async job) |
 | GET | `/api/apps/{name}` | one app's health, chart/app version and routes |
@@ -399,6 +438,10 @@ The installer renders `/etc/umkim-thin/config.env`, then seeds it into the
 settings the console reads:
 
 ```env
+# Set by the chart and the image, not by hand
+UMKIM_THIN_HOME_HOST=home.example.com   # chart: derived from consoleHost
+UMKIM_THIN_VERSION=0.2.0                # image: the release tag it was built from
+
 # Storage defaults shown by the install form
 UMKIM_THIN_STORAGE_CONFIG_CLASS=local-path
 UMKIM_THIN_STORAGE_MEDIA_CLASS=local-path        # Ansible single: umkim-thin-nfs; HA: longhorn-rwx
@@ -412,6 +455,10 @@ UMKIM_THIN_BOOTSTRAP_CONTEXT=/opt/umkim-thin/bootstrap
 UMKIM_THIN_BUILDER_IMAGE=gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:...
 UMKIM_THIN_BUILD_NAMESPACE=umkim-thin-build
 UMKIM_THIN_BOOTSTRAP_NODE=<first server's hostname>
+
+# Console release check (read-only; false for an air-gapped install)
+UMKIM_THIN_UPDATE_CHECK=true
+UMKIM_THIN_UPDATE_CHECK_URL=https://api.github.com/repos/rborso/umkim-thin/releases/latest
 
 # Trusted access
 UMKIM_THIN_TRUSTED_ACCESS_ENABLED=false

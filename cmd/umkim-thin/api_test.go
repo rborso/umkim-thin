@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rborso/umkim-thin/internal/update"
 )
 
 func TestHTTPServerTimeouts(t *testing.T) {
@@ -101,5 +105,79 @@ func TestRedemptionRouteIsNotOriginChecked(t *testing.T) {
 	}
 	if strings.Contains(string(src), `mutating(mux, "POST /api/invites/redeem"`) {
 		t.Fatal("the redemption route is wrapped by mutating()")
+	}
+}
+
+func TestUpdateAvailableComparesVersions(t *testing.T) {
+	cases := []struct {
+		installed, catalogued string
+		want                  bool
+	}{
+		{"0.1.4", "0.1.5", true},
+		{"0.1.5", "0.1.5", false},
+		{"0.1.10", "0.1.9", false}, // ahead of the catalog: no downgrade
+		{"0.2.0-rc1", "0.1.9", false},
+		{"0.1.9", "0.2.0-rc1", true}, // a catalogued candidate is still newer
+		{"", "0.1.5", false},
+		{"0.1.4", "", false},
+		{"dev", "0.1.5", false},
+	}
+	for _, c := range cases {
+		if got := updateAvailable(c.installed, c.catalogued); got != c.want {
+			t.Errorf("updateAvailable(%q, %q) = %v, want %v", c.installed, c.catalogued, got, c.want)
+		}
+	}
+}
+
+func TestEnvBoolKeepsDefaultOnGarbage(t *testing.T) {
+	cases := []struct {
+		value string
+		def   bool
+		want  bool
+	}{
+		{"", true, true},
+		{"", false, false},
+		{"true", false, true},
+		{"1", false, true},
+		{"false", true, false},
+		{"0", true, false},
+		{"yes please", true, true},
+		{"yes please", false, false},
+	}
+	for _, c := range cases {
+		t.Setenv("UMKIM_THIN_TEST_BOOL", c.value)
+		if got := envBool("UMKIM_THIN_TEST_BOOL", c.def); got != c.want {
+			t.Errorf("envBool(%q, %v) = %v, want %v", c.value, c.def, got, c.want)
+		}
+	}
+}
+
+func TestVersionHandlerServesTheCachedCheck(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v0.3.0","html_url":"https://example.com/releases/v0.3.0"}`))
+	}))
+	defer srv.Close()
+
+	checker := update.New(update.Config{Current: "0.2.0", Enabled: true, Endpoint: srv.URL})
+	if err := checker.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	versionHandler(checker).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/version", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got struct {
+		Current   string `json:"current"`
+		Latest    string `json:"latest"`
+		Available bool   `json:"available"`
+		URL       string `json:"url"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if got.Current != "0.2.0" || got.Latest != "0.3.0" || !got.Available || got.URL == "" {
+		t.Fatalf("response = %+v", got)
 	}
 }

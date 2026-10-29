@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 	"github.com/rborso/umkim-thin/internal/cert"
 	"github.com/rborso/umkim-thin/internal/identity"
 	"github.com/rborso/umkim-thin/internal/storage"
+	"github.com/rborso/umkim-thin/internal/update"
 	"github.com/rborso/umkim-thin/internal/wg"
 )
 
@@ -123,6 +125,18 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	auth := newConsoleAuth()
 	jobs := newJobStore()
 	started := time.Now()
+
+	// The catalog and the version ship inside the image, so the console asks the
+	// public release metadata whether a newer one exists. Read-only, cached, and
+	// silent when it fails; UMKIM_THIN_UPDATE_CHECK=false disables it for an
+	// air-gapped install.
+	updates := update.New(update.Config{
+		Current:   cfg.Version,
+		Enabled:   envBool("UMKIM_THIN_UPDATE_CHECK", true),
+		Endpoint:  envOr("UMKIM_THIN_UPDATE_CHECK_URL", update.DefaultEndpoint),
+		StateFile: filepath.Join(cfg.StateDir, "update-check.json"),
+	})
+	go updates.Start(context.Background())
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -378,6 +392,8 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		writeJSON(w, map[string]any{
 			"zone":                          cfg.Zone,
 			"portalHost":                    cfg.PortalHost,
+			"homeUrl":                       cfg.HomeURL(),
+			"version":                       cfg.Version,
 			"configClass":                   cfg.ConfigClass,
 			"mediaClass":                    cfg.MediaClass,
 			"mediaAccessMode":               cfg.MediaAccessMode,
@@ -389,6 +405,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			"trustedManagementExcludeCIDRs": cfg.TrustedManagementExcludeCIDRs,
 		})
 	})
+	mux.HandleFunc("GET /api/version", versionHandler(updates))
 	mutating(mux, "POST /api/apps", func(w http.ResponseWriter, r *http.Request) {
 		var req installRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -796,7 +813,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 				Status:          st,
 				LatestChart:     entry.Chart.Version,
 				LatestApp:       latestApp,
-				UpdateAvailable: st.Chart != "" && st.Chart != entry.Chart.Version,
+				UpdateAvailable: updateAvailable(st.Chart, entry.Chart.Version),
 			}
 			if a.Name == app.ServarrApp {
 				se.Bootstrap = installer.ServarrBootstrapState()
@@ -1242,6 +1259,26 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// versionHandler serves the running version and the cached release check. The
+// check runs in the background, so this never waits on the network: it returns
+// the last answer and the UI shows nothing while it is unknown.
+func versionHandler(updates *update.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, updates.Status())
+	}
+}
+
+// updateAvailable reports whether the catalog offers a newer chart than the
+// installed release. The comparison is by version, not by string: an install
+// that is ahead of the catalog (a candidate, or a newer chart kept from an
+// earlier catalog) must not be offered a downgrade.
+func updateAvailable(installed, catalogued string) bool {
+	if installed == "" || catalogued == "" {
+		return false
+	}
+	return update.Compare(installed, catalogued) < 0
 }
 
 // appStatus is one row of the Applications section.

@@ -1,15 +1,4 @@
-{{- $consoleHost := required "consoleHost is required (e.g. console.example.com)" .Values.consoleHost -}}
-{{- $homeHost := .Values.homeHost -}}
-{{- if not $homeHost -}}
-{{- if hasPrefix "console." $consoleHost -}}
-{{- $homeHost = replace "console." "home." $consoleHost -}}
-{{- else -}}
-{{- $homeHost = printf "home.%s" $consoleHost -}}
-{{- end -}}
-{{- end -}}
-{{- if eq $homeHost $consoleHost -}}
-{{- fail "homeHost must differ from consoleHost" -}}
-{{- end }}
+{{- $homeHost := include "umkim-thin.homeHost" . -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

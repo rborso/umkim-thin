@@ -86,6 +86,14 @@ type Config struct {
 	BuildNamespace   string
 	BootstrapNode    string
 	GitSHA           string
+
+	// Version is the running platform release, from the image
+	// (/opt/umkim-thin/version) or UMKIM_THIN_VERSION. An untagged local build
+	// reports "dev", and the update check stays off.
+	Version string
+	// HomeHost is the public host of the household home page. The chart
+	// derives it from consoleHost; the console only uses it for its shortcut.
+	HomeHost string
 }
 
 // ConfigFile is read before the environment, so CLI use on the node does not
@@ -154,7 +162,28 @@ func ConfigFromEnv() Config {
 		BuildNamespace:   env("UMKIM_THIN_BUILD_NAMESPACE", "umkim-thin-build"),
 		BootstrapNode:    env("UMKIM_THIN_BOOTSTRAP_NODE", ""),
 		GitSHA:           firstNonEmpty(env("UMKIM_THIN_GIT_SHA", ""), readFileTrim("/opt/umkim-thin/git-sha")),
+		Version:          firstNonEmpty(env("UMKIM_THIN_VERSION", ""), readFileTrim("/opt/umkim-thin/version")),
+		HomeHost:         firstNonEmpty(env("UMKIM_THIN_HOME_HOST", ""), defaultHomeHost(zone)),
 	}
+}
+
+// defaultHomeHost mirrors the chart's derivation for the common case
+// (console.<zone> -> home.<zone>). A custom consoleHost is passed in explicitly
+// as UMKIM_THIN_HOME_HOST by the chart.
+func defaultHomeHost(zone string) string {
+	if zone == "" {
+		return ""
+	}
+	return "home." + zone
+}
+
+// HomeURL is the public address of the household home page, or "" when the
+// host is unknown. The console hides its shortcut in that case.
+func (c Config) HomeURL() string {
+	if c.HomeHost == "" {
+		return ""
+	}
+	return "https://" + c.HomeHost
 }
 
 // Installer performs installs against the cluster.

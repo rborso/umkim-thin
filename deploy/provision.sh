@@ -181,7 +181,12 @@ build_and_import_image() {
   fi
   echo ">> building the console image"
   sha="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
-  podman build -q --build-arg "UMKIM_THIN_GIT_SHA=${sha}" -t localhost/umkim-thin:dev . >/dev/null
+  # The last tag, not `git describe` (which appends -N-gSHA): the console's
+  # update check compares a plain release version.
+  version="$(git describe --tags --abbrev=0 2>/dev/null || echo dev)"
+  version="${version#v}"
+  podman build -q --build-arg "UMKIM_THIN_GIT_SHA=${sha}" \
+    --build-arg "UMKIM_THIN_VERSION=${version}" -t localhost/umkim-thin:dev . >/dev/null
   for h in ${servers:-$VHOST}; do
     echo ">> importing the image into k3s on $h"
     podman save --format docker-archive localhost/umkim-thin:dev | gzip -1 | "${SSH[@]}" \

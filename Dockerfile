@@ -35,6 +35,10 @@ RUN set -eux; \
     mkdir -p /opt/umkim-thin
 ARG UMKIM_THIN_GIT_SHA=dev
 RUN printf '%s\n' "$UMKIM_THIN_GIT_SHA" > /opt/umkim-thin/git-sha
+# The release tag the image was built from. The console compares it with the
+# published releases; an untagged local build stays "dev" and the check is off.
+ARG UMKIM_THIN_VERSION=dev
+RUN printf '%s\n' "$UMKIM_THIN_VERSION" > /opt/umkim-thin/version
 
 COPY --from=build /out/umkim-thin /usr/local/bin/umkim-thin
 COPY LICENSE NOTICE /usr/share/licenses/umkim-thin/

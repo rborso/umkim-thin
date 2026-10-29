@@ -40,6 +40,9 @@ wg_server_ip: 192.168.168.1
 wg_traefik_port: 30444
 traefik_node_ip: ""
 vpn_dns_ip: 10.43.200.53
+# The console's read-only release check (the update banner). Set false for an
+# air-gapped install with no egress.
+update_check: true
 # Trusted-network bypass for the management network. Disabled by default; set
 # trusted_access_enabled and an explicit management CIDR list to opt in.
 trusted_access_enabled: false

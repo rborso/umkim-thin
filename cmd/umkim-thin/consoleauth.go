@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -271,4 +272,18 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool reads a boolean env var. An unparsable value keeps the default, so a
+// typo in config.env cannot silently switch a feature on or off.
+func envBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }
