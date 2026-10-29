@@ -76,7 +76,10 @@ chip linking to the release notes.
 
 - The check reads the project's public release metadata
   (`https://api.github.com/repos/rborso/umkim-thin/releases/latest` by default)
-  with `UMKIM_THIN_UPDATE_CHECK_URL` as the override for a mirror.
+  with `UMKIM_THIN_UPDATE_CHECK_URL` as the override for a mirror. A repository
+  that tags a release without publishing a GitHub release answers 404 there, so
+  the check falls back to the tag list (`.../tags`) and links to the releases
+  page; a 5xx or a timeout is reported instead of masked by the fallback.
 - It is read-only. It never downloads, installs or changes anything; the
   upgrade stays `sudo ./install.sh ... --reuse-k3s` (or the documented HA run).
 - It runs in the background and is cached for six hours, including across pod

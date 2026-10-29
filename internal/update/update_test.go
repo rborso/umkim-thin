@@ -209,3 +209,64 @@ func TestStartStopsWithContext(t *testing.T) {
 		t.Fatal("endpoint was never called")
 	}
 }
+
+// A repository can tag a release without publishing a GitHub release; then
+// /releases/latest is 404 and the tag list is the only source.
+func TestRefreshFallsBackToTags(t *testing.T) {
+	var latestHits, tagHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			latestHits++
+			http.Error(w, "not found", http.StatusNotFound)
+		case "/tags":
+			tagHits++
+			_, _ = w.Write([]byte(`[{"name":"v0.2.0"},{"name":"v0.1.0"},{"name":"nightly"}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		Current: "0.1.0", Enabled: true,
+		Endpoint: srv.URL + "/releases/latest", FallbackEndpoint: srv.URL + "/tags",
+		ReleasesURL: "https://example.com/releases",
+	})
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	s := c.Status()
+	if !s.Available || s.Latest != "0.2.0" {
+		t.Fatalf("status = %+v, want 0.2.0 from the tag list", s)
+	}
+	if s.URL != "https://example.com/releases" {
+		t.Fatalf("url = %q", s.URL)
+	}
+	if latestHits != 1 || tagHits != 1 {
+		t.Fatalf("hits: latest=%d tags=%d", latestHits, tagHits)
+	}
+}
+
+func TestRefreshDoesNotFallBackOnOtherErrors(t *testing.T) {
+	var tagHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/tags" {
+			tagHits++
+			_, _ = w.Write([]byte(`[{"name":"v9.9.9"}]`))
+			return
+		}
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	c := New(Config{
+		Current: "0.1.0", Enabled: true,
+		Endpoint: srv.URL + "/releases/latest", FallbackEndpoint: srv.URL + "/tags",
+	})
+	if err := c.Refresh(context.Background()); err == nil {
+		t.Fatal("a 500 should be reported, not masked by the fallback")
+	}
+	if tagHits != 0 {
+		t.Fatalf("the fallback ran on a non-404 (%d hits)", tagHits)
+	}
+}

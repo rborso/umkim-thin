@@ -31,6 +31,15 @@ import (
 // the same shape (tag_name/html_url) at another URL.
 const DefaultEndpoint = "https://api.github.com/repos/rborso/umkim-thin/releases/latest"
 
+// DefaultFallbackEndpoint is tried when the release endpoint answers 404: a
+// repository can carry release tags before (or without) publishing a GitHub
+// release, and then /releases/latest never exists.
+const DefaultFallbackEndpoint = "https://api.github.com/repos/rborso/umkim-thin/tags"
+
+// DefaultReleasesURL is the page the console links to when the check fell back
+// to a tag (there is no per-release page in that case).
+const DefaultReleasesURL = "https://github.com/rborso/umkim-thin/releases"
+
 // DefaultInterval is how long a result is reused before the next check.
 const DefaultInterval = 6 * time.Hour
 
@@ -48,6 +57,11 @@ type Config struct {
 	Enabled bool
 	// Endpoint is the release metadata URL. Empty uses DefaultEndpoint.
 	Endpoint string
+	// FallbackEndpoint is tried when Endpoint answers 404 (tags but no
+	// releases). Empty uses DefaultFallbackEndpoint; "-" disables the fallback.
+	FallbackEndpoint string
+	// ReleasesURL is used for the link when the fallback produced the answer.
+	ReleasesURL string
 	// Interval is the cache lifetime. Zero uses DefaultInterval.
 	Interval time.Duration
 	// Timeout bounds one request. Zero uses DefaultTimeout.
@@ -97,6 +111,15 @@ type Checker struct {
 func New(cfg Config) *Checker {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = DefaultEndpoint
+		if cfg.FallbackEndpoint == "" {
+			cfg.FallbackEndpoint = DefaultFallbackEndpoint
+		}
+	}
+	if cfg.FallbackEndpoint == "-" {
+		cfg.FallbackEndpoint = ""
+	}
+	if cfg.ReleasesURL == "" {
+		cfg.ReleasesURL = DefaultReleasesURL
 	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultInterval
@@ -204,27 +227,68 @@ func (r release) tag() string { return strings.TrimSpace(firstNonEmpty(r.TagName
 func (r release) link() string { return firstNonEmpty(r.HTMLURL, r.URL) }
 
 func (c *Checker) fetch(ctx context.Context) (release, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.Endpoint, nil)
-	if err != nil {
+	rel, status, err := c.get(ctx, c.cfg.Endpoint, false)
+	if err == nil {
+		return rel, nil
+	}
+	if status != http.StatusNotFound || c.cfg.FallbackEndpoint == "" {
 		return release{}, err
+	}
+	// The project may tag a release without publishing a GitHub release; the
+	// tag list is then the only public source of the newest version.
+	rel, _, fallbackErr := c.get(ctx, c.cfg.FallbackEndpoint, true)
+	if fallbackErr != nil {
+		return release{}, err // report the primary failure, not the fallback's
+	}
+	rel.HTMLURL = c.cfg.ReleasesURL
+	return rel, nil
+}
+
+// get fetches one endpoint. With tags set the response is a list and the newest
+// version wins.
+func (c *Checker) get(ctx context.Context, url string, tags bool) (release, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return release{}, 0, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 	resp, err := c.cfg.HTTP.Do(req)
 	if err != nil {
-		return release{}, fmt.Errorf("release check failed: %w", err)
+		return release{}, 0, fmt.Errorf("release check failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		// Drain a little so the connection can be reused.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
-		return release{}, fmt.Errorf("release check failed: HTTP %d", resp.StatusCode)
+		return release{}, resp.StatusCode, fmt.Errorf("release check failed: HTTP %d", resp.StatusCode)
 	}
-	var rel release
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
-		return release{}, fmt.Errorf("release check failed: %w", err)
+	if !tags {
+		var rel release
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
+			return release{}, resp.StatusCode, fmt.Errorf("release check failed: %w", err)
+		}
+		return rel, resp.StatusCode, nil
 	}
-	return rel, nil
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&list); err != nil {
+		return release{}, resp.StatusCode, fmt.Errorf("release check failed: %w", err)
+	}
+	best := ""
+	for _, t := range list {
+		if !IsVersion(t.Name) {
+			continue
+		}
+		if best == "" || Compare(normalize(t.Name), normalize(best)) > 0 {
+			best = t.Name
+		}
+	}
+	if best == "" {
+		return release{}, resp.StatusCode, fmt.Errorf("release check failed: no version tags")
+	}
+	return release{TagName: best}, resp.StatusCode, nil
 }
 
 func (c *Checker) enabled() bool {
