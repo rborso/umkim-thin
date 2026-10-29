@@ -66,12 +66,12 @@ test.describe('actualbudget client', () => {
     // `user-token` asyncStorage key uses). Wait for the app to create that
     // database first: opening a missing `actual` database from the test would
     // create an empty v1 database and can race the client's own upgrade.
+    // The Actual web client can spend a while on "Initializing the connection
+    // to the local database…" before it writes the token. Poll; do not reload,
+    // which would restart that initialization.
     sessionToken = await readTokenFromPage(page);
-    if (!sessionToken) {
-      // A slow first paint can show the logged-in shell before the token write
-      // lands. Reloading lets the client finish the subscription once.
-      await page.waitForTimeout(5000);
-      await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    for (let i = 0; i < 60 && !sessionToken; i++) {
+      await page.waitForTimeout(1000);
       sessionToken = await readTokenFromPage(page);
     }
     expect(sessionToken, 'the OIDC login handed the client a sync token').toBeTruthy();
