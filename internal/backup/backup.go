@@ -275,11 +275,18 @@ func (m *Manager) stageTree(staging, prefix, dir string, skip map[string]bool, m
 		return err
 	}
 	for _, e := range entries {
-		if skip[e.Name()] {
+		// Kubernetes projects a ConfigMap/Secret as "..<timestamp>" plus the
+		// "..data" symlink; only the stable link names are worth archiving.
+		if skip[e.Name()] || strings.HasPrefix(e.Name(), "..") {
 			continue
 		}
 		src := filepath.Join(dir, e.Name())
-		if e.IsDir() {
+		// Stat (not the directory entry) so a mounted ConfigMap key, which is a
+		// symlink to ..data/<key>, is archived under its stable name.
+		if info, err := os.Stat(src); err != nil {
+			mf.Warnings = append(mf.Warnings, "reading "+src+": "+err.Error())
+			continue
+		} else if info.IsDir() {
 			err := filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
 				if err != nil {
 					mf.Warnings = append(mf.Warnings, "reading "+p+": "+err.Error())
@@ -301,15 +308,10 @@ func (m *Manager) stageTree(staging, prefix, dir string, skip map[string]bool, m
 			}
 			continue
 		}
-		if !e.Type().IsRegular() {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if err := stageFile(staging, prefix, dir, src, info, mf); err != nil {
-			return err
+		if info, err := os.Stat(src); err == nil && info.Mode().IsRegular() {
+			if err := stageFile(staging, prefix, dir, src, info, mf); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

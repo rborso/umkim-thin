@@ -387,3 +387,51 @@ func TestRestoreWithKeepOne(t *testing.T) {
 		t.Fatal("the safety archive reused the restored name")
 	}
 }
+
+// A ConfigMap mount is a directory of "..<timestamp>" entries plus a stable
+// symlink per key. The archive must carry the stable name, not the internals.
+func TestCreateFollowsConfigMapSymlinks(t *testing.T) {
+	m, _, seed := newTestManager(t)
+	// Replace the plain config.env with the projected shape Kubernetes uses.
+	if err := os.Remove(filepath.Join(seed, "config.env")); err != nil {
+		t.Fatal(err)
+	}
+	stamp := filepath.Join(seed, "..2026_11_02_12_00_00.000000000")
+	if err := os.MkdirAll(stamp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stamp, "config.env"), []byte("UMKIM_THIN_ZONE=example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(stamp), filepath.Join(seed, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..data/config.env", filepath.Join(seed, "config.env")); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := m.Create(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mf, _, err := scanArchive(filepath.Join(m.Dir(), a.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, f := range mf.Files {
+		paths = append(paths, f.Path)
+	}
+	found := false
+	for _, p := range paths {
+		if p == "seed/config.env" {
+			found = true
+		}
+		if strings.Contains(p, "..2026") || strings.Contains(p, "..data") {
+			t.Fatalf("archive contains ConfigMap internals: %v", paths)
+		}
+	}
+	if !found {
+		t.Fatalf("seed/config.env is missing: %v", paths)
+	}
+}

@@ -163,7 +163,7 @@ else
 fi
 
 echo "== upgrade: app chart N-1 (offline) =="
-app=$(cli app list 2>/dev/null | awk 'NR > 1 && $1 != "" {print $1; exit}')
+app=$(cli app list 2>/dev/null | awk 'NF {print $1; exit}')
 if [ -z "$app" ]; then
   skip "no catalog app is installed"
 else
