@@ -110,6 +110,11 @@ NFS server packages, see the
 Build tools are needed on the machine running `provision.sh`, not on every
 target node.
 
+If the single host is also the machine you are working on, the on-host
+`install.sh` path is simpler: it installs Helm and podman itself and needs no
+Go toolchain. `install-single.sh` is the workstation/Ansible wrapper, not an
+on-host installer.
+
 ### TLS: pick one
 
 | Mode | Env | Result | Use for |

@@ -90,7 +90,9 @@ three-node HA topology, and assumes a management/jump host.
 
 The supported path takes a minimal RHEL-family host to a running install:
 prerequisites, firewall, k3s, Traefik, the identity stack, the console, and
-storage.
+storage. Run these commands from a workstation with Go, Helm, podman and SSH;
+on the host itself use `sudo ./install.sh --zone ... --email ...` instead
+(that path installs Helm and podman and needs no Go toolchain).
 
 ```bash
 # single node: prompts, writes deploy/provision-single.env, verifies it, then runs

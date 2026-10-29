@@ -39,6 +39,10 @@ The prompts ask for the domain, the single server, the jump host, WireGuard
 and the TLS mode. Storage stays local-path plus the host storage agent; add
 external NFS later in the console if media must live on another host.
 
+Run this from a workstation with Go, Helm, podman and SSH, like install-ha.sh.
+On the target host itself use ./install.sh, which installs k3s, Helm and
+podman and needs no Go toolchain.
+
 To uninstall the host (removes k3s and cluster data):
   sudo ./teardown.sh
 EOF
@@ -62,13 +66,20 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$RUN" = true ] && [ "$DRY_RUN" = false ]; then
+  missing=()
   for tool in go helm podman ssh; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-      echo "error: $tool is required on the machine running install-single.sh" >&2
-      echo "       install the build/provisioning tools here, or use --no-run to only write the env" >&2
-      exit 1
-    fi
+    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "error: missing on the machine running install-single.sh: ${missing[*]}" >&2
+    echo "       this wrapper provisions a host from a workstation (like install-ha.sh);" >&2
+    echo "       it is not the on-host installer." >&2
+    echo "       On the target host itself, run:" >&2
+    echo "         sudo ./install.sh --zone <domain> --email <address>" >&2
+    echo "       install.sh installs k3s, helm and podman and needs no Go toolchain." >&2
+    echo "       Use --no-run to only write the environment file." >&2
+    exit 1
+  fi
 fi
 
 if [ "$DRY_RUN" = false ] && [ -e "$ENV_FILE" ] && [ "$FORCE" = false ]; then
