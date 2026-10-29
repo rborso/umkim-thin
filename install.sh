@@ -44,6 +44,10 @@ HELM=""
 BASE_DN="dc=umkim,dc=thin"
 CONSOLE_NAMESPACE="umkim-thin"
 IDENTITY_NAMESPACE="identity"
+# The console chart carries RBAC in this namespace so it can manage the
+# optional WireGuard gateway. The gateway chart may not be installed yet, so
+# the installer creates the namespace up front (the Ansible path does too).
+WG_NAMESPACE="wireguard"
 
 log()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -799,6 +803,7 @@ UNIT
 seed_console() {
   log "seeding the console state"
   kubectl create namespace "$CONSOLE_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl create namespace "$WG_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   local seed_args=(
     --from-file=secrets.yml="$STATE_DIR/secrets.yml"
     --from-file=identity-values.yml="$STATE_DIR/identity-values.yml"
