@@ -832,10 +832,25 @@ seed_console() {
 
 install_identity() {
   log "installing the identity stack (LLDAP + Authelia)"
+  local apps="$STATE_DIR/identity-apps.yml"
+  # The console owns the app OIDC clients and writes them to its PVC. Preserve
+  # them across a re-run: without this file the identity upgrade drops OIDC and
+  # every OIDC app fails at the issuer with a 404.
+  if kubectl -n "$CONSOLE_NAMESPACE" get deploy umkim-thin-console >/dev/null 2>&1; then
+    if kubectl -n "$CONSOLE_NAMESPACE" exec deploy/umkim-thin-console -- \
+         cat /data/identity-apps.yml >"$apps.tmp" 2>/dev/null && [ -s "$apps.tmp" ]; then
+      mv "$apps.tmp" "$apps"
+      chmod 600 "$apps"
+    else
+      rm -f "$apps.tmp"
+    fi
+  fi
+  local args=(--values "$STATE_DIR/identity-values.yml")
+  [ -s "$apps" ] && args+=(--values "$apps")
   run "$HELM" upgrade --install identity charts/identity \
     --namespace "$IDENTITY_NAMESPACE" --create-namespace \
     --kubeconfig /etc/rancher/k3s/k3s.yaml \
-    --values "$STATE_DIR/identity-values.yml" \
+    "${args[@]}" \
     --wait --timeout 10m
 }
 
