@@ -102,6 +102,24 @@ Create a shared folder, enable NFS, and allow the node network, pod CIDR and VPN
 subnet. Use the NAS's export path (for example `/volume1/media`) in the console;
 do not assume `/srv/nfs/...`.
 
+### NFSv4 pseudo-root (`fsid=0`)
+
+If the server exports the share with `fsid=0`, that directory is the NFSv4
+**pseudo-root**. Clients mount `server:/`, not `server:/mnt/.../share`, and
+child exports are addressed **relative to the pseudo-root**:
+
+```text
+server:/bck-hdd          # child export /mnt/.../share/bck-hdd
+```
+
+The console requires an export path other than `/`, so create a dedicated child
+directory/export and enter its client path (for example `/bck-hdd`). `showmount`
+prints the server path, which may be `/mnt/.../share/bck-hdd`; use the relative
+path in the console and verify it with a test mount. Mounting the full server
+path returns `No such file or directory` (mount exit status 32).
+
+If the server does not use `fsid=0`, use the export's full path instead.
+
 ## Verify from a cluster node
 
 Run this on one of the cluster nodes, not on your laptop:
@@ -190,6 +208,7 @@ class created by the console is `nfs-<name>`. They are different names; set
 | `does not advertise export …` | `sudo exportfs -v` on the server; the path must match exactly. |
 | `showmount` warning | Not fatal; verify the export with a test mount from a node. |
 | Mount hangs | Client CIDR missing the node or pod network (see above), or NFSv3 services blocked. |
+| `No such file or directory` / mount exit 32 | The export is an NFSv4 pseudo-root (`fsid=0`): use the child export's path relative to the pseudo-root (for example `/bck-hdd`), not the server path. |
 | PVC stays `Pending` | `sudo kubectl -n nfs-provisioner get pods,events`; check the class name. |
 | `Permission denied` on writes | Export ownership and `no_root_squash`; the app's UID must be able to write. |
 | NFSv4.2 unsupported | Set mount options to `nfsvers=4.1` or `nfsvers=4.0` and re-apply. |
