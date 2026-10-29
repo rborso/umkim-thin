@@ -50,6 +50,12 @@ That page includes prerequisite installation commands and a prompted
 pointing at the VIP; external NFS can be added during install or later in the
 console.
 
+The same Ansible path can provision one host from a workstation with a jump
+host: `./install-single.sh` prompts for the domain, server, jump host,
+WireGuard and TLS mode, writes `deploy/provision-single.env`, runs a read-only
+preflight and can start the provisioner. The on-host beginner path above
+(`install.sh`) needs no jump host or Ansible.
+
 ## What the installer puts on the server
 
 | Piece | What it is |

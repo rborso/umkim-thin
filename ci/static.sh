@@ -245,7 +245,7 @@ echo ">> novice installer"
 ./ci/novice-test.sh
 
 echo ">> shell syntax"
-for f in ci/*.sh deploy/provision.sh install.sh install-ha.sh verify-ha.sh teardown.sh uninstall-ha.sh tests/e2e/*.sh tests/e2e/migration/*.sh; do
+for f in ci/*.sh deploy/provision.sh install.sh install-single.sh install-ha.sh verify-ha.sh teardown.sh uninstall-ha.sh tests/e2e/*.sh tests/e2e/migration/*.sh; do
   bash -n "$f" || exit 1
 done
 echo "   ok"

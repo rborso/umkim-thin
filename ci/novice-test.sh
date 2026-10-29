@@ -42,6 +42,27 @@ if [ -x uninstall-ha.sh ]; then
 else
   fail "uninstall-ha.sh is missing or not executable"
 fi
+if [ -x install-single.sh ]; then
+  bash -n install-single.sh
+  ok "bash -n install-single.sh"
+  ./install-single.sh --help >/dev/null
+  ok "install-single --help"
+  # Exercise the prompts and env rendering without touching a host.
+  printf '%s\n' \
+    example.com \
+    192.0.2.10 \
+    '' \
+    '' \
+    admin@example.com \
+    '' \
+    '' \
+    1 \
+    '' '' '' '' '' '' '' |
+    ./install-single.sh --dry-run >/dev/null
+  ok "install-single dry-run"
+else
+  fail "install-single.sh is missing or not executable"
+fi
 
 echo "== render-only =="
 ./install.sh --render-only --zone example.com --email admin@example.com --out "$tmp/render" >/dev/null

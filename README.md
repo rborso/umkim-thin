@@ -81,8 +81,8 @@ k3s, run `sudo ./teardown.sh`; for HA use
 `./uninstall-ha.sh --env deploy/provision-ha.env` (see
 [`docs/quickstart/09-uninstall.md`](docs/quickstart/09-uninstall.md)).
 
-The Ansible path below is the advanced/HA path; it assumes a cluster and a
-management/jump host, and supports the three-node HA topology.
+The Ansible path below is the advanced path; it supports a single host or the
+three-node HA topology, and assumes a management/jump host.
 
 ## Install
 
@@ -93,7 +93,10 @@ prerequisites, firewall, k3s, Traefik, the identity stack, the console, and
 storage.
 
 ```bash
-# single node
+# single node: prompts, writes deploy/provision-single.env, verifies it, then runs
+./install-single.sh
+
+# or edit the environment by hand
 cp deploy/provision-single.env.example deploy/provision-single.env
 PROVISION_ENV=deploy/provision-single.env ./deploy/provision.sh
 
@@ -101,11 +104,13 @@ PROVISION_ENV=deploy/provision-single.env ./deploy/provision.sh
 ./install-ha.sh
 ```
 
-For the three-node HA path, `./install-ha.sh` prompts for the domain, server
-range, VIP, optional NFS export and TLS mode, writes
-`deploy/provision-ha.env`, and can start the same provisioner. To remove that site, use
-`./uninstall-ha.sh --env deploy/provision-ha.env`; it runs the teardown on every
-server with the primary last.
+`./install-single.sh` prompts for the domain, server address, jump host,
+WireGuard and TLS mode, writes `deploy/provision-single.env`, runs a read-only
+preflight, and can start the same provisioner. `./install-ha.sh` does the same
+for the three-node path (domain, server range, VIP, optional NFS export, TLS).
+To remove a single host, run `sudo ./teardown.sh` on it; for HA use
+`./uninstall-ha.sh --env deploy/provision-ha.env`, which runs the teardown on
+every server with the primary last.
 
 The target must be reachable from the machine named `JUMP` in the selected
 environment file. For the full walkthrough — prerequisites, DNS, ports, first

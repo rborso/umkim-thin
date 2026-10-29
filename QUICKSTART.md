@@ -5,8 +5,9 @@ one app behind the portal. About 30 minutes, most of it downloads. The detailed
 walkthrough is in [`docs/quickstart/`](docs/quickstart/README.md). For a
 three-node HA install, see
 [`docs/quickstart/11-ha-install.md`](docs/quickstart/11-ha-install.md) or run
-`./install-ha.sh` for a prompted environment. The single-server `install.sh`
-path below is not HA.
+`./install-ha.sh` for a prompted environment. For the prompted Ansible
+single-node path (provisioned from a workstation), run `./install-single.sh`.
+The single-server `install.sh` path below is not HA.
 
 > **Status:** alpha. One trusted household admin, one directory, one tenant. Read
 > [`docs/quickstart/10-security.md`](docs/quickstart/10-security.md) before

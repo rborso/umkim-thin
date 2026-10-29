@@ -15,13 +15,18 @@ the whole single-node section once before starting.
 > **TL;DR**
 >
 > ```bash
+> # single node: prompts, writes the env, verifies it, then runs
+> ./install-single.sh
+>
+> # or edit the environment by hand
 > cp deploy/provision-single.env.example deploy/provision-single.env
 > $EDITOR deploy/provision-single.env
 > PROVISION_ENV=deploy/provision-single.env ./deploy/provision.sh
 > ```
 >
-> For HA use `provision-ha.env` (three servers and a VIP). The rest of this
-> guide explains the prerequisites, verification and day-2 operations.
+> For HA run `./install-ha.sh` (three servers and a VIP), or use
+> `provision-ha.env` directly. The rest of this guide explains the
+> prerequisites, verification and day-2 operations.
 
 ---
 
@@ -128,7 +133,10 @@ certificates per registered domain per 7 days.
 git clone --recurse-submodules https://github.com/rborso/umkim-thin.git
 cd umkim-thin
 
-# single node
+# single node: prompted (writes the file; add --no-run to skip provisioning)
+./install-single.sh
+
+# or copy the example and edit it by hand
 cp deploy/provision-single.env.example deploy/provision-single.env
 # or, for HA
 cp deploy/provision-ha.env.example deploy/provision-ha.env
@@ -189,6 +197,15 @@ are not part of a normal install.
 ## 4. Provision
 
 ### Single node
+
+The prompted setup generates the single-node environment, runs the read-only
+preflight and then the provisioner:
+
+```bash
+./install-single.sh
+```
+
+Or edit the environment yourself and run it:
 
 ```bash
 PROVISION_ENV=deploy/provision-single.env ./deploy/provision.sh
