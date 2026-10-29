@@ -40,6 +40,11 @@ wg_server_ip: 192.168.168.1
 wg_traefik_port: 30444
 traefik_node_ip: ""
 vpn_dns_ip: 10.43.200.53
+# Console backups: one archive per run (state, seed, app inventory) plus a
+# storage snapshot per application PVC. "0" or "off" disables the schedule.
+backup_keep: 7
+backup_interval: 24h
+backup_snapshots: true
 # The console's read-only release check (the update banner). Set false for an
 # air-gapped install with no egress.
 update_check: true

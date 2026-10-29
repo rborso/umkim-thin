@@ -20,6 +20,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/rborso/umkim-thin/internal/app"
+	"github.com/rborso/umkim-thin/internal/backup"
 	"github.com/rborso/umkim-thin/internal/catalog"
 	"github.com/rborso/umkim-thin/internal/cert"
 	"github.com/rborso/umkim-thin/internal/identity"
@@ -137,6 +138,36 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		StateFile: filepath.Join(cfg.StateDir, "update-check.json"),
 	})
 	go updates.Start(context.Background())
+
+	// Backups: one archive per run (console state, installer seed, app
+	// inventory) plus a VolumeSnapshot per application PVC. The schedule runs
+	// in the background; a restart does not trigger an immediate backup.
+	backups := backup.New(backup.Config{
+		Dir:        cfg.BackupDir,
+		StateDir:   cfg.StateDir,
+		SeedDir:    cfg.BackupSeedDir,
+		Helm:       cfg.Helm,
+		Kubectl:    cfg.Kubectl,
+		Kubeconfig: cfg.Kubeconfig,
+		Version:    cfg.Version,
+		Zone:       cfg.Zone,
+		Keep:       cfg.BackupKeep,
+		Snapshots:  cfg.BackupSnapshots,
+	})
+	if cfg.BackupInterval > 0 {
+		go func() {
+			t := time.NewTicker(cfg.BackupInterval)
+			defer t.Stop()
+			for range t.C {
+				a, err := backups.Create(context.Background(), "scheduled")
+				if err != nil {
+					log.Printf("backup: scheduled run failed: %v", err)
+					continue
+				}
+				log.Printf("backup: wrote %s (%d files, %d snapshots)", a.Name, a.Files, a.Snapshots)
+			}
+		}()
+	}
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -745,6 +776,78 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	// Backups. The list is cheap (it reads each manifest), so it is not cached;
+	// a run and a restore are mutations and audited.
+	mux.HandleFunc("GET /api/backups", func(w http.ResponseWriter, r *http.Request) {
+		list, err := backups.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cfg := app.ConfigFromEnv()
+		resp := map[string]any{
+			"dir":       backups.Dir(),
+			"keep":      cfg.BackupKeep,
+			"snapshots": cfg.BackupSnapshots,
+			"enabled":   cfg.BackupInterval > 0,
+			"interval":  cfg.BackupInterval.String(),
+			"archives":  list,
+		}
+		if len(list) > 0 {
+			resp["last"] = list[0].Created
+			if cfg.BackupInterval > 0 {
+				resp["next"] = list[0].Created.Add(cfg.BackupInterval)
+			}
+		}
+		writeJSON(w, resp)
+	})
+	mutating(mux, "POST /api/backups", func(w http.ResponseWriter, r *http.Request) {
+		a, err := backups.Create(r.Context(), "manual")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		audit(r, auth, "backup-create", a.Name, fmt.Sprintf("%d files, %d snapshots", a.Files, a.Snapshots))
+		writeJSON(w, a)
+	})
+	mux.HandleFunc("GET /api/backups/{name}/download", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		p, err := backups.Path(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+		http.ServeFile(w, r, p)
+	})
+	mutating(mux, "POST /api/backups/{name}/restore", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Confirm bool `json:"confirm"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if !req.Confirm {
+			http.Error(w, "confirm the restore (it replaces the console state; a safety archive is written first)", http.StatusBadRequest)
+			return
+		}
+		name := r.PathValue("name")
+		rep, err := backups.Restore(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		audit(r, auth, "backup-restore", name, fmt.Sprintf("%d files, safety %s", len(rep.Restored), rep.SafetyArchive))
+		writeJSON(w, rep)
+	})
+	mutating(mux, "DELETE /api/backups/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if err := backups.Delete(name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		audit(r, auth, "backup-delete", name, "")
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {

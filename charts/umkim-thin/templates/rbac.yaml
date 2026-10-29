@@ -60,6 +60,15 @@ rules:
   - apiGroups: ["longhorn.io"]
     resources: [nodes, settings]
     verbs: [get, list, watch]
+  # Backups: one VolumeSnapshot per application PVC. The CRD comes from the
+  # CSI driver (Longhorn ships it); without it the console records a warning
+  # and the archive is metadata only.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: [volumesnapshots, volumesnapshotcontents]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: [volumesnapshotclasses]
+    verbs: [get, list, watch]
   - apiGroups: ["helm.cattle.io"]
     resources: [helmcharts, helmchartconfigs]
     verbs: [get, list, watch, create, update, patch, delete]

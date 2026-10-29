@@ -11,6 +11,8 @@ that tier.
 | Tier 2 | **Platform conformance** | The provisioned cluster is healthy: nodes, storage classes/PVCs, identity secrets, network policy, TLS, the storage agent and WireGuard. | `ci/assert.sh` / `tests/e2e/run.sh platform` |
 | Tier 2 | **Acceptance gate** | The deployment meets its required contract: route/auth challenge, TLS, console, and every installed app accepts a directory login. Gating. | `tests/e2e/run.sh acceptance` |
 | Tier 2 | **Functional user journeys** | A user or client can complete a real workflow. Informational, reported in full. | `tests/e2e/run.sh journeys` |
+| Tier 2 | **Backup and restore** | The console creates an archive, verifies it, lists it, restores it (state unchanged) and the console stays healthy. | `ci/backup-check.sh single|ha` |
+| Tier 2 | **Upgrade** | Re-runs the documented platform upgrade, then asserts the console rolled, the state survived, the new config landed and every app is ready. The app-chart N-1 path runs when the mirror carries the older tarball. | `ci/upgrade-check.sh single|ha` |
 | Tier 2 | **Existing-installation run** | The same platform, acceptance and optional journey checks run against an installation that is already deployed; no reset, provisioning or app install. | `ci/test-existing.sh single|ha` |
 | Tier 2 | **Migration / upgrade tests** | Existing single-node installer state moved to the console PVC intact. | `tests/e2e/run.sh migration` |
 | Tier 2 | **Security checks** | No secrets in the tree, logs or ConfigMaps; secret/security invariants. Split between static checks and platform conformance. | `ci/static.sh`, `ci/assert.sh` |

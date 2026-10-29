@@ -178,6 +178,7 @@
   <button class="tab" id="tab-access-label" data-tab="access" role="tab" aria-selected="false" aria-controls="tab-access">Access</button>
   <button class="tab" id="tab-storage-label" data-tab="storage" role="tab" aria-selected="false" aria-controls="tab-storage">Storage</button>
   <button class="tab" id="tab-certificates-label" data-tab="certificates" role="tab" aria-selected="false" aria-controls="tab-certificates">Certificates</button>
+  <button class="tab" id="tab-backups-label" data-tab="backups" role="tab" aria-selected="false" aria-controls="tab-backups">Backups</button>
 </nav>
 
 <main class="layout">
@@ -454,6 +455,27 @@
       </div>
     </div>
   </section>
+
+  <section id="tab-backups" class="tab-panel" role="tabpanel" aria-labelledby="tab-backups-label" hidden>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Recoverability</span>
+          <h2>Backups</h2>
+          <p class="sub">One archive per run: console state (invites, app state, WireGuard peers, per-app Helm values), the installer seed, the installed app inventory, and a storage snapshot per application PVC. The archive is metadata; the snapshot is the data.</p>
+        </div>
+        <div><button id="backup-now" class="primary">Back up now</button> <span id="backup-status" class="muted" role="status" aria-live="polite"></span></div>
+      </div>
+      <p class="hint" id="backup-schedule"></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Created</th><th>Version</th><th>Apps</th><th>Files</th><th>Snapshots</th><th>Size</th><th></th></tr></thead>
+          <tbody id="backups"><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="hint">A restore puts the console state back and writes a safety archive first; it never touches application data. Bring the data back from the snapshots listed for the archive, then reinstall the missing apps (<code>umkim-thin backup restore &lt;name&gt; --apps</code>).</p>
+    </div>
+  </section>
 </main>
 
 <div id="msg" class="msg" role="status" aria-live="polite"></div>
@@ -528,6 +550,22 @@
   </div>
 </dialog>
 
+<dialog id="restore-dialog" class="modal" aria-labelledby="restore-dialog-title">
+  <form method="dialog" class="modal-head">
+    <h3 id="restore-dialog-title">Restore console state</h3>
+    <button value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="modal-body">
+    <p id="restore-summary" class="muted"></p>
+    <p class="hint">This replaces the console's current state (invites, app state, WireGuard peers, per-app values) and the identity seed. A safety archive of the current state is written first. Application data is not touched: recreate the PVCs from the archive's snapshots first.</p>
+    <p id="restore-status" class="hint" role="status" aria-live="polite"></p>
+    <div class="modal-actions">
+      <button type="button" id="restore-cancel">Cancel</button>
+      <button type="button" id="restore-start" class="primary">Restore</button>
+    </div>
+  </div>
+</dialog>
+
 <dialog id="upgrade-dialog" class="modal" aria-labelledby="upgrade-dialog-title">
   <form method="dialog" class="modal-head">
     <h3 id="upgrade-dialog-title">Upgrade app</h3>
@@ -543,7 +581,11 @@
       <input type="checkbox" id="upgrade-backup">
       I have taken a backup or VM snapshot of this app's data.
     </label>
-    <p class="hint">The upgrade uses Helm's atomic mode. A database migration still requires the backup as the real rollback.</p>
+    <p class="row" style="margin:.4rem 0 0">
+      <button type="button" id="upgrade-backup-now">Back up now</button>
+      <span id="upgrade-backup-status" class="muted" role="status" aria-live="polite"></span>
+    </p>
+    <p class="hint">The backup archives the console state and the app inventory, and asks the storage for a snapshot of every application PVC — that snapshot is the data rollback. The upgrade uses Helm's atomic mode; a database migration still needs the snapshot.</p>
     <p id="upgrade-status" class="hint" role="status" aria-live="polite"></p>
     <div class="modal-actions">
       <button type="button" id="upgrade-cancel">Cancel</button>
@@ -599,7 +641,7 @@
 const CFG = { zone: '', portalHost: '', configClass: 'local-path', mediaClass: 'umkim-thin-nfs', mediaAccessMode: 'ReadWriteMany', storageClasses: [], storageClassInfo: [] };
 const ENTRIES = {};
 
-const TAB_NAMES = ['overview', 'catalog', 'access', 'storage', 'certificates'];
+const TAB_NAMES = ['overview', 'catalog', 'access', 'storage', 'certificates', 'backups'];
 
 function activateTab(name, updateHash = true) {
   if (!TAB_NAMES.includes(name)) name = 'overview';
@@ -924,6 +966,134 @@ async function loadVersion() {
   } catch (_) {
     el.innerHTML = '';
   }
+}
+
+
+let restoreArchive = null;
+
+function humanSize(bytes) {
+  if (!bytes) return '—';
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let n = bytes, i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+async function loadBackups() {
+  const rows = document.getElementById('backups');
+  const schedule = document.getElementById('backup-schedule');
+  try {
+    const data = await (await fetch('/api/backups')).json();
+    if (schedule) {
+      const bits = [];
+      bits.push(data.enabled ? `Automatic: every ${esc(data.interval)}` : 'Automatic backups are off');
+      if (data.keep) bits.push(`keep ${esc(String(data.keep))}`);
+      bits.push(data.snapshots ? 'storage snapshots on' : 'storage snapshots off');
+      if (data.last) bits.push(`last ${new Date(data.last).toLocaleString()}`);
+      if (data.next) bits.push(`next ${new Date(data.next).toLocaleString()}`);
+      bits.push(`<code>${esc(data.dir || '')}</code>`);
+      schedule.innerHTML = bits.join(' · ');
+    }
+    const list = data.archives || [];
+    if (!list.length) {
+      rows.innerHTML = '<tr><td colspan="7" class="muted">No backups yet. Use Back up now.</td></tr>';
+      return;
+    }
+    rows.innerHTML = '';
+    for (const a of list) {
+      const tr = document.createElement('tr');
+      const created = new Date(a.created).toLocaleString();
+      const snapshots = a.snapshots ? `${a.snapshots}${a.warnings && a.warnings.length ? ' ⚠' : ''}` : '—';
+      const warn = (a.warnings || []).length
+        ? ` title="${esc(a.warnings.join(' · '))}"` : '';
+      tr.innerHTML = `<td>${esc(created)}${a.note ? `<br><span class="muted">${esc(a.note)}</span>` : ''}${a.error ? `<br><span class="chip err">${esc(a.error)}</span>` : ''}</td>` +
+        `<td>${a.version ? `<code>${esc(a.version)}</code>` : '—'}</td>` +
+        `<td>${a.apps}</td><td>${a.files}</td><td${warn}>${snapshots}</td><td>${humanSize(a.size)}</td>`;
+      const td = document.createElement('td');
+      const dl = document.createElement('a');
+      dl.className = 'button';
+      dl.href = '/api/backups/' + encodeURIComponent(a.name) + '/download';
+      dl.textContent = 'Download';
+      td.appendChild(dl);
+      const restore = document.createElement('button');
+      restore.textContent = 'Restore';
+      restore.onclick = () => openRestore(a);
+      td.appendChild(document.createTextNode(' '));
+      td.appendChild(restore);
+      const del = document.createElement('button');
+      del.className = 'danger';
+      del.textContent = 'Delete';
+      del.onclick = () => deleteBackup(a.name);
+      td.appendChild(document.createTextNode(' '));
+      td.appendChild(del);
+      tr.appendChild(td);
+      rows.appendChild(tr);
+    }
+  } catch (err) {
+    rows.innerHTML = `<tr><td colspan="7" class="muted">${esc(String(err.message || err))}</td></tr>`;
+  }
+}
+
+async function createBackup() {
+  const btn = document.getElementById('backup-now');
+  const status = document.getElementById('backup-status');
+  btn.disabled = true;
+  status.textContent = 'Backing up…';
+  try {
+    const res = await fetch('/api/backups', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || res.statusText);
+    status.textContent = `Wrote ${body.name} (${body.files} files, ${body.snapshots} snapshots)`;
+    await loadBackups();
+  } catch (err) {
+    status.textContent = 'Backup failed: ' + String(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function openRestore(a) {
+  restoreArchive = a.name;
+  document.getElementById('restore-summary').textContent =
+    `Archive ${a.name} from ${new Date(a.created).toLocaleString()} (${a.apps} apps, ${a.snapshots} snapshots).`;
+  document.getElementById('restore-status').textContent = '';
+  const dialog = document.getElementById('restore-dialog');
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+}
+
+async function startRestore() {
+  if (!restoreArchive) return;
+  const status = document.getElementById('restore-status');
+  const btn = document.getElementById('restore-start');
+  btn.disabled = true;
+  status.textContent = 'Restoring…';
+  try {
+    const res = await fetch('/api/backups/' + encodeURIComponent(restoreArchive) + '/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || res.statusText);
+    status.textContent = `Restored ${body.restored.length} files; safety archive ${body.safetyArchive}.` +
+      (body.snapshots && body.snapshots.length ? ' Recreate the app PVCs from the listed snapshots before reinstalling.' : '');
+    await loadBackups();
+  } catch (err) {
+    status.textContent = 'Restore failed: ' + String(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function deleteBackup(name) {
+  if (!confirm(`Delete ${name}? Its storage snapshots are removed too.`)) return;
+  try {
+    const res = await fetch('/api/backups/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    note(`deleted ${name}`, 'ok');
+    await loadBackups();
+  } catch (err) { note(String(err.message || err), 'err'); }
 }
 
 async function loadCatalog() {
@@ -1984,6 +2154,7 @@ async function upgradeApp(name) {
     select.innerHTML = choices.map(v =>
       `<option value="${esc(v.Version)}">${esc(v.Version)}${v.Channel ? ' · ' + esc(v.Channel) : ''}</option>`).join('');
     document.getElementById('upgrade-backup').checked = false;
+    document.getElementById('upgrade-backup-status').textContent = '';
     document.getElementById('upgrade-status').textContent = '';
     syncUpgradeTarget();
     select.onchange = syncUpgradeTarget;
@@ -1991,6 +2162,25 @@ async function upgradeApp(name) {
     if (typeof dialog.showModal === 'function') dialog.showModal();
     else dialog.setAttribute('open', '');
   } catch (err) { note(String(err.message || err), 'err'); }
+}
+
+async function backupBeforeUpgrade() {
+  const status = document.getElementById('upgrade-backup-status');
+  const btn = document.getElementById('upgrade-backup-now');
+  btn.disabled = true;
+  status.textContent = 'Backing up…';
+  try {
+    const res = await fetch('/api/backups', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || res.statusText);
+    document.getElementById('upgrade-backup').checked = true;
+    status.textContent = `Wrote ${body.name} (${body.snapshots} snapshots)`;
+    loadBackups();
+  } catch (err) {
+    status.textContent = 'Backup failed: ' + String(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function startUpgrade() {
@@ -2626,6 +2816,11 @@ document.getElementById('indexer-submit').onclick = submitIndexer;
 document.getElementById('profile-add').onclick = addProfile;
 document.getElementById('upgrade-cancel').onclick = () => document.getElementById('upgrade-dialog').close();
 document.getElementById('upgrade-start').onclick = startUpgrade;
+document.getElementById('upgrade-backup-now').onclick = backupBeforeUpgrade;
+document.getElementById('backup-now').onclick = createBackup;
+document.getElementById('restore-cancel').onclick = () => document.getElementById('restore-dialog').close();
+document.getElementById('restore-start').onclick = startRestore;
+document.getElementById('restore-dialog').addEventListener('close', () => { restoreArchive = null; });
 document.getElementById('upgrade-dialog').addEventListener('close', () => {
   upgradeAppName = null;
   upgradeChoices = [];
@@ -2646,6 +2841,7 @@ document.getElementById('upgrade-dialog').addEventListener('close', () => {
   loadWg();
   loadCerts();
   loadStorage();
+  loadBackups();
   loadChecklist();
   setInterval(loadChecklist, 120000);
 })();

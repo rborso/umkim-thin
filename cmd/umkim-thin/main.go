@@ -3,14 +3,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rborso/umkim-thin/internal/app"
+	"github.com/rborso/umkim-thin/internal/backup"
 	"github.com/rborso/umkim-thin/internal/catalog"
 	"github.com/rborso/umkim-thin/internal/identity"
 	"github.com/rborso/umkim-thin/internal/wg"
@@ -32,6 +35,7 @@ Usage:
   umkim-thin app uninstall <name>      remove an installed app (--purge for data)
   umkim-thin storage disks|plan|apply|list|remove  single-node disks/RAID/NFS
   umkim-thin storage-agent             host storage agent (root, single node)
+  umkim-thin backup list|create|verify|restore|prune  console state + app inventory
   umkim-thin cert add/list/default/remove  manage manual TLS certificates
   umkim-thin invite create --email E   invite someone to the directory
   umkim-thin wg client create <name>   create a WireGuard client config
@@ -75,6 +79,10 @@ func main() {
 		}
 	case "storage-agent":
 		if err := storageAgentCmd(args[1:]); err != nil {
+			fatal(err)
+		}
+	case "backup":
+		if err := backupCmd(catalogDir, args[1:]); err != nil {
 			fatal(err)
 		}
 	case "cert":
@@ -544,5 +552,140 @@ func applyAllowLocal(e catalog.Entry, opts *app.Options, allow bool) {
 		if exp == "vpn" {
 			opts.AllowLocal[r.Key] = true
 		}
+	}
+}
+
+// backupCmd is the CLI half of the console's Backups section: the same manager,
+// the same directory. `restore --apps` is the disaster-recovery path: it puts
+// the console state back and reinstalls the catalog apps that are missing.
+func backupCmd(dir string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("backup needs a subcommand: list | create | verify | restore | prune")
+	}
+	cfg := app.ConfigFromEnv()
+	m := backup.New(backup.Config{
+		Dir:        cfg.BackupDir,
+		StateDir:   cfg.StateDir,
+		SeedDir:    cfg.BackupSeedDir,
+		Helm:       cfg.Helm,
+		Kubectl:    cfg.Kubectl,
+		Kubeconfig: cfg.Kubeconfig,
+		Version:    cfg.Version,
+		Zone:       cfg.Zone,
+		Keep:       cfg.BackupKeep,
+		Snapshots:  cfg.BackupSnapshots,
+	})
+	switch args[0] {
+	case "list":
+		list, err := m.List()
+		if err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			fmt.Printf("no backups in %s\n", m.Dir())
+			return nil
+		}
+		fmt.Printf("%-38s %-8s %-9s %-6s %s\n", "NAME", "VERSION", "APPS", "FILES", "SNAPSHOTS")
+		for _, a := range list {
+			fmt.Printf("%-38s %-8s %-9d %-6d %d\n", a.Name, a.Version, a.Apps, a.Files, a.Snapshots)
+		}
+		return nil
+	case "create":
+		a, err := m.Create(context.Background(), "cli")
+		if err != nil {
+			return err
+		}
+		fmt.Printf("wrote %s (%d files, %d snapshots)\n", a.Name, a.Files, a.Snapshots)
+		for _, w := range a.Warnings {
+			fmt.Printf("  warning: %s\n", w)
+		}
+		return nil
+	case "verify":
+		if len(args) < 2 {
+			return fmt.Errorf("backup verify needs an archive name")
+		}
+		a, err := m.Verify(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: ok (%d files, %d snapshots)\n", a.Name, a.Files, a.Snapshots)
+		return nil
+	case "restore":
+		if len(args) < 2 {
+			return fmt.Errorf("backup restore needs an archive name")
+		}
+		fs := flag.NewFlagSet("backup restore", flag.ContinueOnError)
+		apps := fs.Bool("apps", false, "also reinstall catalog apps that are missing")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		mf, err := m.Manifest(args[1])
+		if err != nil {
+			return err
+		}
+		rep, err := m.Restore(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("restored %d files; safety archive %s\n", len(rep.Restored), rep.SafetyArchive)
+		if len(rep.Snapshots) > 0 {
+			fmt.Printf("application data snapshots (create a PVC from them before reinstalling):\n")
+			for _, s := range rep.Snapshots {
+				if s.Snapshot == "" {
+					continue
+				}
+				fmt.Printf("  %s/%s -> %s\n", s.Namespace, s.PVC, s.Snapshot)
+			}
+		}
+		if !*apps {
+			return nil
+		}
+		entries, err := catalog.Load(dir)
+		if err != nil {
+			return err
+		}
+		byName := map[string]catalog.Entry{}
+		for _, e := range entries {
+			byName[e.Name] = e
+		}
+		in := app.New(cfg)
+		installed, err := in.List()
+		if err != nil {
+			return err
+		}
+		have := map[string]bool{}
+		for _, a := range installed {
+			have[a.Name] = true
+		}
+		for _, rec := range mf.Apps {
+			e, ok := byName[rec.Name]
+			if !ok || have[rec.Name] {
+				continue
+			}
+			fmt.Printf("reinstalling %s (chart %s)...\n", rec.Name, rec.ChartVersion)
+			res, err := in.Install(e, app.Options{ChartVersion: rec.ChartVersion, ConfirmBackup: true})
+			if err != nil {
+				return fmt.Errorf("reinstalling %s: %w", rec.Name, err)
+			}
+			fmt.Printf("  %s is back at chart %s\n", res.Name, res.Chart)
+		}
+		return nil
+	case "prune":
+		keep := cfg.BackupKeep
+		if len(args) > 1 {
+			n, err := strconv.Atoi(args[1])
+			if err != nil || n < 0 {
+				return fmt.Errorf("keep count must be a non-negative integer")
+			}
+			keep = n
+		}
+		removed, err := m.Prune(keep)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("kept %d, removed %d\n", keep, len(removed))
+		return nil
+	default:
+		return fmt.Errorf("unknown backup subcommand %q", args[0])
 	}
 }

@@ -27,6 +27,23 @@ storage (Longhorn snapshot, NFS copy, or a VM snapshot).
 - [ ] Write down the release tag and the zone. The restore must use the same
       release, or upgrade *after* the restore succeeds.
 
+## Console state without a full restore
+
+The console archives its own state daily (`docs/backup.md`). When the cluster is
+healthy and only the console state is wrong — a lost invite store, a bad app
+value, a deleted OIDC client — restore the newest archive instead of the whole
+host:
+
+```bash
+kubectl -n umkim-thin exec deploy/umkim-thin-console -- \
+  /usr/local/bin/umkim-thin backup list
+kubectl -n umkim-thin exec deploy/umkim-thin-console -- \
+  /usr/local/bin/umkim-thin backup restore umkim-thin-<stamp>.tar.gz
+```
+
+It writes a safety archive first, so a wrong choice is recoverable. This does
+not touch application PVCs; the archive's snapshots are the data step.
+
 ## Restore onto a fresh host
 
 1. **Fresh install, same zone, same release.** Follow

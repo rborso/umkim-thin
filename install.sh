@@ -612,6 +612,12 @@ UMKIM_THIN_WG_ENDPOINT=$WG_ENDPOINT:$WG_PORT
 UMKIM_THIN_WG_ALLOWED_IPS=10.42.0.0/16,10.43.0.0/16,192.168.168.0/24
 UMKIM_THIN_VPN_SUBNET=$WG_SUBNET
 UMKIM_THIN_VPN_DNS_IP=10.43.200.53
+# Backups: one archive per run on the console PVC plus a VolumeSnapshot per
+# application PVC when the storage driver provides a snapshot class.
+UMKIM_THIN_BACKUP_DIR=/data/backups
+UMKIM_THIN_BACKUP_KEEP=${BACKUP_KEEP:-7}
+UMKIM_THIN_BACKUP_INTERVAL=${BACKUP_INTERVAL:-24h}
+UMKIM_THIN_BACKUP_SNAPSHOTS=${BACKUP_SNAPSHOTS:-true}
 # The console's read-only release check (it asks the public release metadata
 # for a newer umkim-thin). Cached and silent on failure; set false when the
 # console has no egress, e.g. an air-gapped install.

@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rborso/umkim-thin/internal/catalog"
 	"github.com/rborso/umkim-thin/internal/route"
@@ -94,6 +95,15 @@ type Config struct {
 	// HomeHost is the public host of the household home page. The chart
 	// derives it from consoleHost; the console only uses it for its shortcut.
 	HomeHost string
+
+	// Backups. The console writes one archive per run (state, seed, app
+	// inventory) and asks the storage for a VolumeSnapshot per app PVC.
+	// Interval 0 disables the schedule; Keep 0 keeps every archive.
+	BackupDir       string
+	BackupSeedDir   string
+	BackupKeep      int
+	BackupInterval  time.Duration
+	BackupSnapshots bool
 }
 
 // ConfigFile is read before the environment, so CLI use on the node does not
@@ -164,6 +174,12 @@ func ConfigFromEnv() Config {
 		GitSHA:           firstNonEmpty(env("UMKIM_THIN_GIT_SHA", ""), readFileTrim("/opt/umkim-thin/git-sha")),
 		Version:          firstNonEmpty(env("UMKIM_THIN_VERSION", ""), readFileTrim("/opt/umkim-thin/version")),
 		HomeHost:         firstNonEmpty(env("UMKIM_THIN_HOME_HOST", ""), defaultHomeHost(zone)),
+
+		BackupDir:       env("UMKIM_THIN_BACKUP_DIR", stateDir+"/backups"),
+		BackupSeedDir:   env("UMKIM_THIN_SEED_DIR", "/etc/umkim-thin"),
+		BackupKeep:      atoi(env("UMKIM_THIN_BACKUP_KEEP", "7")),
+		BackupInterval:  duration(env("UMKIM_THIN_BACKUP_INTERVAL", "24h")),
+		BackupSnapshots: boolEnv("UMKIM_THIN_BACKUP_SNAPSHOTS", true),
 	}
 }
 
@@ -1701,6 +1717,33 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// duration parses a Go duration; "0", "off" and "" disable the schedule. An
+// unparsable value falls back to the default so a typo cannot silently stop
+// backups.
+func duration(s string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "off", "none", "disabled":
+		return 0
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 24 * time.Hour
+	}
+	return d
+}
+
+func boolEnv(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 func atoi(s string) int {

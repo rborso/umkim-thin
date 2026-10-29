@@ -139,6 +139,12 @@ if [ "$TARGET" = "single" ]; then
   ./tests/e2e/migration/migrate-single.sh
 fi
 
+echo "==== $TARGET: backups ===="
+# Create, verify and restore through the console's own CLI (the same code the
+# schedule and the Backups tab use). Apps are installed by now, so app values
+# and PVC snapshots are part of the archive.
+./ci/backup-check.sh "$TARGET"
+
 echo "==== $TARGET: regular portal user ===="
 cleanup() { (cd "$repo_root" && ./ci/cleanup-ci.sh "$TARGET" "$run_id" >/dev/null 2>&1) || true; }
 trap cleanup EXIT

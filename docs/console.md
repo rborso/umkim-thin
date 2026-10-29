@@ -45,11 +45,17 @@ page:
 - **Storage** — local-host disks/RAID/NFS exports and external NFS
   StorageClasses; see [`storage.md`](storage.md).
 - **Certificates** — manual TLS certificates and the default wildcard.
+- **Backups** — the schedule, the archives, "Back up now", download, restore
+  and delete; see [`backup.md`](backup.md).
 
 The header keeps only the platform links (portal, home, console), the running
 version and the update chip; the tabs own everything else. Messages and job
 progress appear in a fixed status panel, so a long install does not disappear
 when the page is scrolled.
+
+The **Upgrade** dialog offers **Back up now**, which writes an archive (and the
+PVC snapshots) and ticks the backup confirmation for you; the archive is the
+metadata half, the snapshot is the data rollback.
 
 **Applications** polls `/api/status` every two minutes (the server caches for
 45 s). Its Version column shows the installed chart and, when the catalog has a
@@ -393,6 +399,11 @@ for the manual UI path and the private-network SSRF trade-off.
 | GET | `/api/catalog` | catalog entries, including chart/application licences and upstream links |
 | GET | `/api/config` | zone, portal, `homeUrl`, running `version`, default classes and `mediaAccessMode` |
 | GET | `/api/version` | running version, newest published release, `available`, release URL and the last check time |
+| GET | `/api/backups` | schedule, retention and the archives with their manifests |
+| POST | `/api/backups` | write an archive now (state, seed, app inventory, PVC snapshots) |
+| GET | `/api/backups/{name}/download` | the archive itself |
+| POST | `/api/backups/{name}/restore` | `{confirm:true}`; restores state and seed after writing a safety archive |
+| DELETE | `/api/backups/{name}` | delete an archive and the snapshots it recorded |
 | GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence, upstream links) |
 | POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, `mediaAccessMode`, per-PVC `pvcs`, and per-container `resources` overrides (async job) |
 | GET | `/api/apps/{name}` | one app's health, chart/app version and routes |
@@ -455,6 +466,12 @@ UMKIM_THIN_BOOTSTRAP_CONTEXT=/opt/umkim-thin/bootstrap
 UMKIM_THIN_BUILDER_IMAGE=gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:...
 UMKIM_THIN_BUILD_NAMESPACE=umkim-thin-build
 UMKIM_THIN_BOOTSTRAP_NODE=<first server's hostname>
+
+# Backups: one archive per run on the console PVC, plus a snapshot per app PVC
+UMKIM_THIN_BACKUP_DIR=/data/backups
+UMKIM_THIN_BACKUP_KEEP=7                 # 0 keeps everything
+UMKIM_THIN_BACKUP_INTERVAL=24h           # 0 or off disables the schedule
+UMKIM_THIN_BACKUP_SNAPSHOTS=true
 
 # Console release check (read-only; false for an air-gapped install)
 UMKIM_THIN_UPDATE_CHECK=true

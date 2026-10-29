@@ -26,6 +26,19 @@ It writes:
 
 Everything is written with mode 0600 in a 0700 directory.
 
+## The console backs up every day
+
+After the first install the console takes a backup every 24 hours and keeps the
+last seven: the console state, the installer seed, the installed app inventory
+and the Helm values each app was installed with, plus a storage snapshot per
+application PVC where the driver supports it. **Backups** in the console lists
+them, takes one now, downloads it, and restores it. See
+[`../backup.md`](../backup.md) for what is in an archive and what is not.
+
+The host-side `install.sh --backup` below is still the only thing that captures
+the **etcd** datastore. Keep using it (and copy its output off the host) before a
+platform upgrade.
+
 ## What it does **not** back up
 
 **Application data in PersistentVolumeClaims.** Nextcloud files, Immich photos,

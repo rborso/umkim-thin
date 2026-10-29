@@ -18,9 +18,16 @@ pull request or merge. The lab tiers are manual too. Two tiers:
   cluster.
 - **Tier 2 (lab runner, serialised, manual):** `ci/e2e.sh single|ha` — reset a
   target to its clean base, provision it with `deploy/provision.sh`, install the
-  catalog apps, and run `ci/assert.sh` plus the Playwright gate. Run
-  `verify-ha.sh` manually before a production HA provision; `ci/assert.sh` now
-  also checks that `sudo kubectl` works without the full path.
+  catalog apps, and run `ci/assert.sh` plus the Playwright gate. The run also
+  creates, verifies and restores a console backup (`ci/backup-check.sh`) before
+  the gate. Run `verify-ha.sh` manually before a production HA provision;
+  `ci/assert.sh` now also checks that `sudo kubectl` works without the full
+  path.
+- **Tier 2 extras (lab runner, manual):** `ci/test-existing.sh single|ha` against
+  a live install, `ci/backup-check.sh single|ha` on its own, and
+  `ci/upgrade-check.sh single|ha`, which re-runs the documented platform
+  upgrade and asserts the console rolled, the state survived, the new config
+  landed and every app is still ready.
 
 ## Two targets
 
