@@ -48,6 +48,9 @@ If you use a cloud load balancer instead of a router, point it at the
 `30080`/`30443` NodePorts (or the server's `80`/`443` if the k3s service
 load-balancer is publishing them).
 
+Shared media can live on a separate NFS host; see
+[Use an NFS server on another host](docs/quickstart/12-external-nfs.md).
+
 The installer pins those NodePorts and now fails if Traefik does not expose
 them (a random NodePort makes the forward hit a closed port). Before switching
 to production ACME, run the read-only check:

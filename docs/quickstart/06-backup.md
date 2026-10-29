@@ -30,7 +30,9 @@ Everything is written with mode 0600 in a 0700 directory.
 
 **Application data in PersistentVolumeClaims.** Nextcloud files, Immich photos,
 Paperless documents, Gitea repositories and the media stack live in PVCs. The
-single-node path uses `local-path`, which has no snapshot support.
+beginner single-node path uses `local-path`, which has no snapshot support; the
+Ansible single path uses an NFS media class, and HA uses Longhorn plus optional
+external NFS.
 
 For those, use one of:
 
@@ -39,6 +41,10 @@ For those, use one of:
 - **Your storage's volume snapshots** if you replace `local-path` with a CSI
   driver that supports them (Longhorn, NFS with snapshots, cloud volumes).
 - **Application-native export/backup** for the apps that provide one.
+
+If media lives on an external NFS server, back up that host separately; the
+cluster only holds the PVC definitions. See
+[Use an NFS server on another host](12-external-nfs.md).
 
 A backup you have never restored is a hypothesis. Test it once.
 

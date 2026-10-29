@@ -47,7 +47,10 @@ install does not disappear when the page is scrolled.
 45 s). Its Version column shows the installed chart and, when the catalog has a
 different stable version, the new chart/app version plus an **Upgrade to …**
 button. **Versions…** shows the full catalogued list and the upgrade path runs
-`helm upgrade --atomic` after a backup confirmation.
+`helm upgrade --atomic` after a backup confirmation. **Install options** shows
+the release's Helm metadata and the user-supplied values it was installed with
+(secrets redacted), including the storage classes and install choices. The CLI
+equivalent is `umkim-thin app options <name>`.
 
 ## Status
 
@@ -96,6 +99,20 @@ a PVC property), so the API uses the first source that knows:
 The media picker warns when the chosen class does not advertise RWX. It never
 hides a class.
 
+The install form has a **Media access mode** select next to the media class. It
+defaults to the site's mode and follows the selected class: a class that
+advertises RWX selects `ReadWriteMany`, an RWO class selects `ReadWriteOnce`.
+The install request carries the value explicitly, so choosing an NFS class on a
+single-node install switches the media PVC to RWX even though the site default
+is RWO.
+
+The defaults come from `UMKIM_THIN_STORAGE_CONFIG_CLASS`,
+`UMKIM_THIN_STORAGE_MEDIA_CLASS` and `UMKIM_THIN_STORAGE_MEDIA_ACCESS_MODE`.
+The on-host `install.sh` path sets media to `local-path`/`ReadWriteOnce`; the
+Ansible single path sets `umkim-thin-nfs`/`ReadWriteMany`, and HA sets
+`longhorn-rwx`/`ReadWriteMany`. The warning on `local-path` is expected: a
+single node can run media on RWO, but an HA cluster needs a shared class.
+
 ## External NFS
 
 The Storage tab has two separate paths:
@@ -109,9 +126,22 @@ The Storage tab has two separate paths:
   format, mount or manage the remote export. Apply can take up to five minutes;
   the form and plan output show that it is running.
 
+The External NFS form's settings:
+
+| Setting | Default | Validation |
+|---|---|---|
+| Storage name | — | 2–31 lowercase letters, digits or hyphens; unique across local and external exports |
+| NFS server | — | Hostname or IP address; must accept TCP/2049 from the console pod |
+| Export path | — | Absolute path, not `/`, no `..`, spaces or commas |
+| StorageClass | `nfs-<name>` | 2–31 characters; lowercase letters, digits, hyphens and dots |
+| Mount options | `nfsvers=4.2,rw,nolock` | Comma-separated; `rw`/`ro`/`sync`/`async`/`hard`/`soft`/`lock`/`nolock`/`noatime`/`relatime`, plus numeric `nfsvers=`/`vers=`/`port=`/`mountport=`/`timeo=`/`retrans=`/`rsize=`/`wsize=`/`actimeo=` |
+
 External NFS state is kept on the console PVC and is merged into
 `GET /api/storage` with the host exports. The name must be unique across both
 paths because each maps to one Helm release.
+
+The server-side setup — exports, firewall, client CIDRs and verification — is in
+[Use an NFS server on another host](quickstart/12-external-nfs.md).
 
 ## Media stack: setup
 
@@ -318,10 +348,11 @@ for the manual UI path and the private-network SSRF trade-off.
 | method | path | purpose |
 |---|---|---|
 | GET | `/api/catalog` | catalog entries, including chart/application licences and upstream links |
-| GET | `/api/config` | zone, portal, default + classes |
+| GET | `/api/config` | zone, portal, default classes and `mediaAccessMode` |
 | GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence, upstream links) |
-| POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, per-PVC `pvcs`, and per-container `resources` overrides (async job) |
+| POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, `mediaAccessMode`, per-PVC `pvcs`, and per-container `resources` overrides (async job) |
 | GET | `/api/apps/{name}` | one app's health, chart/app version and routes |
+| GET | `/api/apps/{name}/release` | Helm metadata plus user-supplied values, with secret-looking values redacted |
 | GET | `/api/apps/{name}/storage` | render the chart and list its PVCs/classes/sizes |
 | GET | `/api/apps/{name}/plan` | render the chart's PVCs and workload containers |
 | POST | `/api/apps/{name}/validate` | preflight storage/resource fit for the same install options |
@@ -359,18 +390,43 @@ The console is a single cluster-mode Deployment in both single and HA:
 ## Configuration
 
 The installer renders `/etc/umkim-thin/config.env`, then seeds it into the
-`umkim-thin-config` ConfigMap. The same config is used by both targets; the
-console-specific keys:
+`umkim-thin-config` ConfigMap. The same config is used by both targets. The
+settings the console reads:
 
-```
+```env
+# Storage defaults shown by the install form
+UMKIM_THIN_STORAGE_CONFIG_CLASS=local-path
+UMKIM_THIN_STORAGE_MEDIA_CLASS=local-path        # Ansible single: umkim-thin-nfs; HA: longhorn-rwx
+UMKIM_THIN_STORAGE_MEDIA_ACCESS_MODE=ReadWriteOnce  # Ansible/HA: ReadWriteMany
+UMKIM_THIN_STORAGE_ACCESS_MODES=class=RWX+RWO,...   # optional access-mode override
+
+# On-demand bootstrap
 UMKIM_THIN_CONSOLE_IMAGE=localhost/umkim-thin:dev
 UMKIM_THIN_BOOTSTRAP_IMAGE=localhost/umkim-thin/servarr-bootstrap
 UMKIM_THIN_BOOTSTRAP_CONTEXT=/opt/umkim-thin/bootstrap
 UMKIM_THIN_BUILDER_IMAGE=gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:...
 UMKIM_THIN_BUILD_NAMESPACE=umkim-thin-build
 UMKIM_THIN_BOOTSTRAP_NODE=<first server's hostname>
-UMKIM_THIN_STORAGE_ACCESS_MODES=class=RWX+RWO,...   # optional override
+
+# Trusted access
+UMKIM_THIN_TRUSTED_ACCESS_ENABLED=false
+UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=true
+UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=
+UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=
+
+# WireGuard gateway
+UMKIM_THIN_WG_NAMESPACE=wireguard
+UMKIM_THIN_WG_SUBNET=192.168.168.0/24            # HA default: 192.168.169.0/24
+UMKIM_THIN_WG_SERVER_IP=192.168.168.1
+UMKIM_THIN_WG_PORT=51820
+UMKIM_THIN_WG_ENDPOINT=<public-address>:51820
 ```
+
+`install.sh` writes the first storage block with `local-path` and
+`ReadWriteOnce`; the Ansible path writes `umkim-thin-nfs`/`ReadWriteMany` on
+single and `longhorn-rwx`/`ReadWriteMany` on HA. The console does not accept
+storage-class or trusted-CIDR values from a browser request; they come from
+this ConfigMap.
 
 ## Credentials
 

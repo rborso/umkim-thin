@@ -144,29 +144,15 @@ If the first server cannot SSH to itself, use a separate management host for
 ### External NFS server (optional)
 
 Skip this if you will add NFS from the console later. The NFS server can be a
-NAS or a separate Linux host. It must already have a shared export and allow the
-cluster nodes. For a small Linux NFS server:
+NAS or a separate Linux host. It must have a shared export and allow the cluster
+nodes, the pod CIDR and the WireGuard subnet. The full setup — exports,
+firewall, ownership, verification and NAS notes — is in
+[Use an NFS server on another host](12-external-nfs.md).
 
-```bash
-sudo dnf install -y nfs-utils
-sudo mkdir -p /srv/nfs/umkim-thin
-sudo tee -a /etc/exports >/dev/null <<'EOF'
-/srv/nfs/umkim-thin 10.0.0.0/24(rw,sync,no_subtree_check,no_root_squash)
-/srv/nfs/umkim-thin 10.244.0.0/16(rw,sync,no_subtree_check,no_root_squash)
-EOF
-```
-
-Use the actual node/management CIDR and pod CIDR, then:
-
-```bash
-sudo exportfs -rav
-sudo systemctl enable --now nfs-server
-sudo firewall-cmd --permanent --add-service=nfs
-sudo firewall-cmd --reload
-```
-
-The installer uses NFSv4.2 by default and creates its own subdirectories under
-this export.
+If the export is ready before provisioning, set `nfs_mode=external`,
+`nfs_server` and `nfs_export` in the environment (or let `install-ha.sh` prompt
+for the server and path). The installer uses NFSv4.2 by default and creates its
+own subdirectories under the export.
 
 ### Optional WireGuard client tools
 
@@ -320,7 +306,9 @@ Expected:
 - Calico, CoreDNS, Traefik and kube-vip healthy;
 - Longhorn healthy with 3 replicas (or 2 if selected);
 - `longhorn-rwo` and `longhorn-rwx`; the external NFS class (`umkim-thin-nfs`,
-  or `nfs` on an older environment) appears only after NFS is configured;
+  or `nfs` on an older environment) appears only after NFS is configured.
+  Exports added from the console's **External NFS** form appear as
+  `nfs-<name>` instead;
 - before NFS, media PVCs use `longhorn-rwx`; after adding NFS, new installs
   should select the NFS class. Small config/database PVCs stay on Longhorn;
 - console Running with a Bound PVC.
@@ -373,11 +361,14 @@ PROVISION_ENV=deploy/provision-ha.env ./deploy/provision.sh --tags netpol
 
 ### Add external NFS after installation
 
-This is the normal path when the export is not ready at install time:
+This is the normal path when the export is not ready at install time. Create the
+export first if needed: [Use an NFS server on another host](12-external-nfs.md).
 
 1. Console → **Storage** → **External NFS**.
-2. Enter a name, the NFS server and the export path. Plan first, then apply.
-   The console creates `nfs-<name>` and a ReadWriteMany, Retain StorageClass.
+2. Enter a name, the NFS server, the export path and, if needed, a StorageClass
+   name and mount options. The defaults are `nfs-<name>` and
+   `nfsvers=4.2,rw,nolock`. Plan first, then apply. The console creates
+   `nfs-<name>` and a ReadWriteMany, Retain StorageClass.
 3. Install new apps with that class as the **media** class in the Catalog form.
 4. Existing apps keep their current PVC class. To switch an existing media
    volume, reinstall it with the new class or migrate the PVC; changing a PVC's

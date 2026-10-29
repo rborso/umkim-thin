@@ -21,10 +21,14 @@ From the checkout:
 
 ```bash
 git pull
-sudo ./install.sh --zone example.com --email you@example.com
+sudo ./install.sh --zone example.com --email you@example.com --reuse-k3s
 ```
 
-Use the **same flags** as the first install. The installer builds the console
+Use the **same flags** as the first install, plus `--reuse-k3s`: k3s is already
+installed, and without that flag the installer refuses to touch it. The same
+applies when resuming after a failed install that already reached k3s.
+
+The installer builds the console
 image locally by default; the installer:
 
 - keeps `/etc/umkim-thin/secrets.yml` and every existing secret;
@@ -75,7 +79,8 @@ reverse a schema migration.
 - **Certificate errors after an upgrade:** the ACME resolver needs port 80 and
   DNS; check `kubectl -n kube-system logs deploy/traefik`.
 - **Roll back:** check out the previous tag, re-run the installer with the same
-  flags, and restore app data from the pre-upgrade backup if a migration ran.
+  flags (including `--reuse-k3s`), and restore app data from the pre-upgrade
+  backup if a migration ran.
 
 Do not “fix” a stuck rollout by deleting the PVC. That is the data.
 

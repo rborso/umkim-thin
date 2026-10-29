@@ -41,6 +41,9 @@ was 4 m 55 s).
 9. [Uninstall](09-uninstall.md) — what is removed and what is kept.
 10. [First-week security checklist](10-security.md).
 
+**Optional storage:** [Use an NFS server on another host](12-external-nfs.md) —
+create the export and connect it as a shared ReadWriteMany class for app media.
+
 ## Advanced: three-node HA
 
 The beginner path is single-node. If you need a control-plane VIP, Longhorn and
@@ -55,6 +58,9 @@ host: `./install-single.sh` prompts for the domain, server, jump host,
 WireGuard and TLS mode, writes `deploy/provision-single.env`, runs a read-only
 preflight and can start the provisioner. The on-host beginner path above
 (`install.sh`) needs no jump host or Ansible.
+
+Shared media can live on a separate NFS host in either topology; see
+[Use an NFS server on another host](12-external-nfs.md).
 
 ## What the installer puts on the server
 

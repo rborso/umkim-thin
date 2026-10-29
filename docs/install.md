@@ -160,9 +160,12 @@ The important fields:
 | `lab_cidr` | your node/management network (the firewall trusts it) |
 | `public_ip` | optional **fixed** public/NAT address for the DNS preflight; leave blank for dynamic DNS (the current common public address is accepted) |
 | `wg_endpoint`, `wg_subnet`, `wg_server_ip` | WireGuard's public endpoint and tunnel network |
-| `storage_backend` | empty: local-path + NFS (single); `longhorn` for HA |
-| `storage_class_media` | Media class. HA defaults to `longhorn-rwx` until NFS is configured; an NFS install uses `umkim-thin-nfs` (legacy `nfs`). |
-| `nfs_storage_class` | Name of the provisioned NFS class; default `umkim-thin-nfs`. |
+| `storage_backend` | empty keeps the explicit classes (single: `local-path` config + `umkim-thin-nfs` media; HA: `longhorn-rwo`/`longhorn-rwx`); `local`, `nfs` or `longhorn` pick both |
+| `storage_class_media` | Media class; defaults to `umkim-thin-nfs` on the Ansible single path and `longhorn-rwx` on HA. The console's external NFS classes are `nfs-<name>`. |
+| `storage_media_access_mode` | Media PVC access mode; default `ReadWriteMany`. Use `ReadWriteOnce` only with a single-node local class. |
+| `nfs_mode` | `host` (default) exports from the node itself; `external` uses `nfs_server`/`nfs_export` |
+| `nfs_server`, `nfs_export` | Existing NFS server and absolute export path for `nfs_mode=external`; see [Use an NFS server on another host](quickstart/12-external-nfs.md) |
+| `nfs_storage_class` | Name of the provisioned NFS class; default `umkim-thin-nfs` (legacy `nfs`) |
 | `longhorn_replica_count` | Longhorn replicas per volume: `3` default, `2` optional for small labs. |
 | `longhorn_storage_over_provisioning_percentage` | Longhorn's thin nominal-capacity ceiling; default `100` |
 | `storage_agent` | `true` on single (host disks/RAID/NFS); `false` on HA |
@@ -215,6 +218,10 @@ Or edit the environment yourself and run it:
 ```bash
 PROVISION_ENV=deploy/provision-single.env ./deploy/provision.sh
 ```
+
+The Ansible single path starts with `local-path` config and `umkim-thin-nfs`
+media (`nfs_mode=host` exports from the node). To use an export on another
+host, see [Use an NFS server on another host](quickstart/12-external-nfs.md).
 
 ### HA
 
@@ -753,12 +760,14 @@ password and the generated OIDC client secrets.
 3. `k3s` — install the server(s), kube-vip on HA, join the extra servers, install
    Helm.
 4. `calico` — pin the IP pool to `pod_cidr`, native routing, wait for nodes.
-5. storage classes — `nfs` for a single-node or external shared export;
-   `longhorn` + `longhorn_host` for HA (3 replicas by default, or 2). External
-   NFS is optional for HA and can be added later in the console; until then the
-   media class is `longhorn-rwx`. Single-node installs also get the host storage
-   agent (`docs/storage.md`) for blank disks/RAID/multiple NFS exports and
-   per-export StorageClasses.
+5. storage classes — `umkim-thin-nfs` for the Ansible single node (host or
+   external export); `longhorn` + `longhorn_host` for HA (3 replicas by default,
+   or 2). External NFS is optional for HA and can be added later in the console;
+   until then the media class is `longhorn-rwx`. Single-node installs also get
+   the host storage agent (`docs/storage.md`) for blank disks/RAID/multiple NFS
+   exports and per-export StorageClasses. The on-host `install.sh` path starts
+   with `local-path` for config and media and can add a host or external export
+   from the console (`nfs-<name>`).
 6. `identity` — LLDAP, Authelia, Traefik middleware, invite page, generated
    secrets and OIDC signing material.
 7. `traefik` — NodePorts, ACME, the lab CA/default cert, the CA bundle for

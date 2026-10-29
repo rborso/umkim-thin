@@ -9,10 +9,18 @@ in front of it.
 2. Find **Nextcloud** and click **Install**.
 3. The form offers:
    - **Host**: `nextcloud.<zone>` by default. Leave it unless you have a reason.
-   - **Config storage class**: `local-path` on the single-node path.
-   - **Media storage class**: `local-path` is the only class on this path. The
-     warning about ReadWriteMany is expected; a single node can run the media
-     stack on an RWO class, but an HA cluster needs NFS or Longhorn.
+   - **Config storage class**: `local-path` on the `install.sh` single-node
+     path, `umkim-thin-nfs` on the Ansible single path, and `longhorn-rwo` on
+     HA.
+   - **Media storage class**: `local-path` on the `install.sh` path,
+     `umkim-thin-nfs` on the Ansible single path, and `longhorn-rwx` on HA until
+     an external NFS class is added. The ReadWriteMany warning is expected on
+     `local-path`; a single node can run media on RWO, but an HA cluster needs
+     NFS or Longhorn RWX.
+   - **Media access mode**: follows the selected class (`ReadWriteMany` for an
+     RWX NFS/Longhorn class, `ReadWriteOnce` for `local-path`).
+   - To keep media on a separate host, create the export first and select its
+     `nfs-<name>` class ([Use an NFS server on another host](12-external-nfs.md)).
 4. Click **Install** and keep the page open. The job shows Helm's progress.
 5. When the app is ready, **Applications** shows a green status and a link.
 

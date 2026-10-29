@@ -75,7 +75,10 @@ imports the console image locally by default; `--image` is only for an
 already-available image. The
 walkthrough — DNS, first login, invitations, the first app, WireGuard, backups,
 troubleshooting and uninstall — is in
-[`docs/quickstart/`](docs/quickstart/README.md). `--dry-run` checks the host and
+[`docs/quickstart/`](docs/quickstart/README.md). For shared media on a separate
+host, see
+[Use an NFS server on another host](docs/quickstart/12-external-nfs.md).
+`--dry-run` checks the host and
 prints the plan without changing anything. To remove the install, including
 k3s, run `sudo ./teardown.sh`; for HA use
 `./uninstall-ha.sh --env deploy/provision-ha.env` (see

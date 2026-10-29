@@ -7,9 +7,20 @@ The console has two storage paths:
 - **External NFS** (single and HA): connect an existing NFS server/export and
   create a StorageClass for it.
 
+What a fresh install starts with:
+
+| Path | Config class | Media class | NFS |
+|---|---|---|---|
+| `install.sh` single node | `local-path` | `local-path` | Host storage agent; add a local or external export from **Storage** |
+| Ansible single node | `local-path` | `umkim-thin-nfs` | `nfs_mode=host` exports from the node by default |
+| Ansible HA | `longhorn-rwo` | `longhorn-rwx` | Optional; add an external export at install time or later |
+
 HA does **not** use the host-disk layer. It uses Longhorn for RWO/RWX volumes
 (3 replicas by default; set `longhorn_replica_count=2` for a small lab) and can
 add external NFS for media before or after the platform install.
+
+For the server-side setup — exports, firewall, client CIDRs and verification —
+see [Use an NFS server on another host](quickstart/12-external-nfs.md).
 
 ## How it is wired
 
@@ -53,16 +64,32 @@ confirmation box; type `FORMAT` there to enable the destructive apply. An
 existing-directory install never formats anything: it validates the directory
 and exports it.
 
-External NFS asks for a name, server and export path, then optionally a
-StorageClass name and mount options. **Plan** probes TCP/2049 from the console
-and uses `showmount -e` when available to confirm the export is advertised;
-`showmount` failures are warnings because NFSv4 pseudo-roots do not always
-enumerate. **Apply** repeats the check, installs the provisioner and waits for
-the StorageClass; the UI shows `Checking…`/`Applying…` and the plan output
-while it runs (up to five minutes). There is no `FORMAT` step and no host
+External NFS asks for these settings:
+
+| Setting | Default | Rules |
+|---|---|---|
+| **Storage name** | — | 2–31 lowercase letters, digits or hyphens. Names must be unique across local and external exports because both use the `nfs-<name>` Helm release. |
+| **NFS server** | — | Hostname or IP address. The console probes it on TCP/2049. |
+| **Export path** | — | Absolute path, not `/`, no `..`, spaces or commas. |
+| **StorageClass** | `nfs-<name>` | 2–31 characters; lowercase letters, digits, hyphens and dots. |
+| **Mount options** | `nfsvers=4.2,rw,nolock` | Comma-separated. Supported: `rw`, `ro`, `sync`, `async`, `hard`, `soft`, `lock`, `nolock`, `noatime`, `relatime`, and `nfsvers=`/`vers=`/`port=`/`mountport=`/`timeo=`/`retrans=`/`rsize=`/`wsize=`/`actimeo=` with numeric values. |
+
+**Plan** probes TCP/2049 from the console and uses `showmount -e` when
+available to confirm the export is advertised; `showmount` failures are
+warnings because NFSv4 pseudo-roots do not always enumerate. **Apply** repeats
+the check, installs `nfs-subdir-external-provisioner` as release `nfs-<name>`
+in the `nfs-provisioner` namespace, and waits for a `ReadWriteMany`, `Retain`
+StorageClass (up to five minutes). There is no `FORMAT` step and no host
 export. The console records the export on the PVC at
-`/data/storage-external.yml`; names must be unique across local and external
-exports because both use the `nfs-<name>` Helm release.
+`/data/storage-external.yml`.
+
+The server-side export, firewall and client-CIDR setup is in
+[Use an NFS server on another host](quickstart/12-external-nfs.md).
+
+When installing an app, choose the new class as **media** and set **Media
+access mode** to `ReadWriteMany`. The install form derives the mode from the
+class's advertised access modes, so an RWX NFS class switches it automatically;
+the value is sent with the install request and recorded in the release values.
 
 ## CLI
 
@@ -112,6 +139,12 @@ The console uses the socket for local host operations. External NFS is handled
 by the console itself so it also works on HA; the CLI external path targets the
 node's Helm/kubeconfig and is intended for a single-node host.
 
+External NFS defaults: `--storage-class nfs-<name>` and
+`--mount-options nfsvers=4.2,rw,nolock`. `--name` and `--storage-class` use the
+same 2–31 character rule, and `--export` must be an absolute path other than
+`/` without `..`, spaces or commas. `plan` probes TCP/2049 and `apply` installs
+the provisioner; neither needs `--confirm FORMAT`.
+
 ## Safety rules
 
 - Only `/dev/disk/by-id/...` or `/dev/disk/by-path/...` are recommended; the
@@ -127,8 +160,20 @@ node's Helm/kubeconfig and is intended for a single-node host.
   `root_squash` or `ro` for ordinary external clients.
 - NFS clients are limited to the supplied CIDRs. The default is the lab LAN,
   pod and VPN networks; never `0.0.0.0/0`.
+- External NFS is not formatted, mounted or managed by the platform. Its
+  exports, firewall, ownership and backups remain the NFS server's
+  responsibility; restrict clients and test the export from a cluster node.
 
 ## StorageClasses and app installation
+
+Class names depend on the path:
+
+| Path | Class |
+|---|---|
+| `install.sh` single node | `local-path` for config and media until you add a host or external export |
+| Ansible single node | `local-path` config + `umkim-thin-nfs` media |
+| Ansible HA | `longhorn-rwo` config + `longhorn-rwx` media |
+| Console **External NFS** | `nfs-<name>` (or the name you choose) |
 
 The shared NFS class created by `provision.sh` is named `umkim-thin-nfs`; the
 older name was the generic `nfs`. Environments written before the rename that
@@ -139,10 +184,12 @@ StorageClass names are immutable, so renaming a class on a live cluster means
 recreating the PVCs (or keeping the old name in the environment); the installer
 does not migrate bound claims.
 
-For every export the agent installs a provisioner release named
+For every local host export the agent installs a provisioner release named
 `nfs-<name>` and a StorageClass named by `--storage-class` (default
-`nfs-<name>`). The class appears in the console's storage-class picker; use it
-for the **media** class of an app when you want that export.
+`nfs-<name>`). External NFS uses the same release/class convention but is
+installed by the console (or the CLI). The class appears in the console's
+storage-class picker; use it for the **media** class of an app when you want
+that export.
 
 Catalog entries bind their database/config volumes to
 `{{ .storage.configClass }}` and their large media volumes to

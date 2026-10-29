@@ -78,11 +78,24 @@ Useful flags:
    `/etc/umkim-thin/secrets.yml` (mode 0600).
 7. Installs LLDAP + Authelia, then configures Traefik for ACME and the
    forward-auth middleware.
-8. Seeds the console's state in the cluster and installs the console.
-9. Prints the portal, console and directory URLs and the first-login passwords.
+8. Seeds the console's state in the cluster, creates the console and
+   `wireguard` namespaces, and installs the console.
+9. Installs the host storage agent (`umkim-thin-storage`) for local disks, RAID
+   and NFS exports.
+10. Prints the portal, console and directory URLs and the first-login passwords.
 
-Re-running the same command is the upgrade path: it keeps the secrets and
-upgrades the charts.
+Re-running is the upgrade path, but k3s is already installed: pass
+`--reuse-k3s` so the installer keeps the existing cluster instead of refusing
+to touch it. It keeps the secrets and upgrades the charts:
+
+```bash
+sudo ./install.sh --zone example.com --email you@example.com --reuse-k3s
+```
+
+This path uses `local-path` for both config and media. For shared media on a
+separate host, add an NFS class from **Storage → External NFS** (see
+[Use an NFS server on another host](12-external-nfs.md)); the Ansible
+single-node path starts with an NFS media class instead.
 
 ## What you should see
 

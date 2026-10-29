@@ -134,7 +134,14 @@ local port-forward (see [First login](02-first-login.md#the-breakglass-account))
 
 ### Storage is Pending
 
-The single-node path uses `local-path`. Check:
+Which class is expected depends on the path:
+
+- `install.sh` single node: `local-path` for config and media;
+- Ansible single node: `local-path` for config, `umkim-thin-nfs` for media;
+- HA: `longhorn-rwo`/`longhorn-rwx`, or `nfs-<name>` after external NFS is
+  added.
+
+Check:
 
 ```bash
 sudo kubectl get storageclass
@@ -144,6 +151,24 @@ sudo kubectl -n <app> describe pvc
 
 `local-path` binds on the node that runs the pod. If the node is full, free
 space or add a disk. Do not delete a PVC to “reset” an app; that is the data.
+
+For an NFS class, check the provisioner and its events:
+
+```bash
+sudo kubectl -n nfs-provisioner get pods,events
+sudo kubectl get storageclass <class> -o yaml
+```
+
+### NFS mounts hang or writes fail
+
+The NFS server must allow the cluster's source addresses. The Ansible path uses
+Calico native routing, so the server sees **pod** addresses and needs the pod
+CIDR; the on-host `install.sh` path uses k3s's default flannel, which
+masquerades pod egress to the node address. Allowing both the node subnet and
+the pod CIDR covers both. A mount that hangs is usually a firewall or
+client-CIDR problem, and `Permission denied` is usually export ownership or
+`no_root_squash`. See [Use an NFS server on another host](12-external-nfs.md)
+for the export and firewall setup, then test with a mount from a cluster node.
 
 ### HA pod Pending with `FailedAttachVolume`
 
