@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installed, hostOf, oidcLogin, USER, PASS } from '../lib/session';
+import { installed, hostOf, AUTH_HOST, USER, PASS } from '../lib/session';
 
 // Actual Budget client journey: create a real budget through the sync server,
 // add an account and a transaction, sync it, then download the same budget into
@@ -44,28 +44,62 @@ test.describe('actualbudget client', () => {
         })
         .catch(() => '');
 
-    const startLogin = () =>
-      oidcLogin(browser, host, {
-        credentials: { username: USER, password: PASS },
-        onPage: (p) => {
-          p.on('framenavigated', (frame) => capture(frame.url()));
-          p.on('response', (response) => {
-            if (response.url().includes('/openid/callback')) {
-              capture(response.headers()['location'] ?? '');
-            }
-          });
-        },
-        // The login page itself is not proof of a session. Keep the helper
-        // clicking the provider until the client has actually stored its token.
-        ready: async (p) => Boolean(sessionToken) || Boolean(await readTokenFromPage(p)),
+    const loginActual = async () => {
+      const context = await browser.newContext({
+        ignoreHTTPSErrors: process.env.UMKIM_THIN_STRICT_TLS !== '1',
       });
+      const page = await context.newPage();
+      page.on('framenavigated', (frame) => capture(frame.url()));
+      page.on('response', (response) => {
+        if (response.url().includes('/openid/callback')) {
+          capture(response.headers()['location'] ?? '');
+        }
+      });
+      await page.goto(base);
+      await page.waitForTimeout(3000);
 
-    const { context, page } = await startLogin();
+      // A fresh browser context has no server URL in Actual's IndexedDB and
+      // lands on the welcome page. Point it at this instance first.
+      const connectServer = page.getByRole('button', { name: 'Connect to a sync server' });
+      if (await connectServer.count()) {
+        await connectServer.click();
+        const url = page.locator('input[placeholder="https://example.com"]');
+        await url.waitFor({ state: 'visible', timeout: 10_000 });
+        await url.fill(base);
+        await page.getByRole('button', { name: 'Connect', exact: true }).click();
+        await page.waitForTimeout(5000);
+      }
 
-    // The web client keeps the sync token in IndexedDB (the same store its
-    // `user-token` asyncStorage key uses). Wait for the app to create that
-    // database first: opening a missing `actual` database from the test would
-    // create an empty v1 database and can race the client's own upgrade.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const openid = page.getByRole('button', { name: /OpenID/i });
+        if (await openid.count()) {
+          await openid.first().click();
+          await page.waitForTimeout(3000);
+        }
+        if (page.url().includes(AUTH_HOST)) {
+          const username = page
+            .locator('#username-textfield, input[autocomplete="username"]')
+            .first();
+          await username.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
+          if (await username.count()) {
+            await username.fill(USER);
+            const password = page
+              .locator('#password-textfield, input[autocomplete="current-password"]')
+              .first();
+            await password.fill(PASS);
+            await password.press('Enter');
+            await page.waitForTimeout(5000);
+          }
+        }
+        const token = await readTokenFromPage(page);
+        if (token) return { context, page, token };
+        await page.waitForTimeout(3000);
+      }
+      return { context, page, token: '' };
+    };
+
+    const { context, page, token: loginToken } = await loginActual();
+    sessionToken = loginToken;
     // The Actual web client can spend a while on "Initializing the connection
     // to the local database…" before it writes the token. Poll; do not reload,
     // which would restart that initialization.
