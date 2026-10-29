@@ -183,7 +183,55 @@ func (in *Installer) RenderPlan(e catalog.Entry, opts Options) (InstallPlan, err
 	if err != nil {
 		return InstallPlan{}, fmt.Errorf("rendering install plan: %w\n%s", err, out)
 	}
-	return parseInstallPlan(out, e.Namespace), nil
+	manifests := []byte(out)
+	// Apply the same overrides the install's post-renderer will apply, so a
+	// plan/storage preview shows the class, size and resources that will exist.
+	if len(opts.PVCs) > 0 || len(opts.Resources) > 0 {
+		manifests, err = applyPostRender(bytes.NewReader(manifests), postRenderOverrides{
+			PVCs: opts.PVCs, Resources: opts.Resources,
+		})
+		if err != nil {
+			return InstallPlan{}, err
+		}
+	}
+	plan := parseInstallPlan(string(manifests), e.Namespace)
+	// A typo in a PVC or container name must not look like a successful
+	// install: the override would silently do nothing.
+	if err := plan.checkOverrides(opts.PVCs, opts.Resources); err != nil {
+		return InstallPlan{}, err
+	}
+	return plan, nil
+}
+
+// checkOverrides rejects an override that matches nothing in the render.
+func (p InstallPlan) checkOverrides(pvcs map[string]PVCOverride, resources map[string]ContainerResources) error {
+	if len(pvcs) > 0 {
+		names := make([]string, 0, len(p.PVCs))
+		known := map[string]bool{}
+		for _, c := range p.PVCs {
+			names = append(names, c.Name)
+			known[c.Name] = true
+		}
+		for name := range pvcs {
+			if !known[name] {
+				return fmt.Errorf("no PVC named %q in this chart (rendered: %s)", name, strings.Join(names, ", "))
+			}
+		}
+	}
+	if len(resources) > 0 {
+		keys := make([]string, 0, len(p.Containers))
+		known := map[string]bool{}
+		for _, c := range p.Containers {
+			keys = append(keys, c.Key)
+			known[c.Key] = true
+		}
+		for key := range resources {
+			if !known[key] {
+				return fmt.Errorf("no container %q in this chart (rendered: %s)", key, strings.Join(keys, ", "))
+			}
+		}
+	}
+	return nil
 }
 
 // storagePostRenderer writes a tiny Helm post-renderer. Helm invokes the
@@ -262,14 +310,26 @@ func PostRender(overridesFile string) error {
 	if err := json.Unmarshal(raw, &overrides); err != nil {
 		return fmt.Errorf("parsing post-render overrides: %w", err)
 	}
-	if err := validatePVCOverrides(overrides.PVCs); err != nil {
+	out, err := applyPostRender(os.Stdin, overrides)
+	if err != nil {
 		return err
+	}
+	_, err = os.Stdout.Write(out)
+	return err
+}
+
+// applyPostRender rewrites rendered manifests with the install's PVC and
+// container-resource overrides. Helm calls it through PostRender; the install
+// plan calls it directly so a preview shows what Helm will actually create.
+func applyPostRender(in io.Reader, overrides postRenderOverrides) ([]byte, error) {
+	if err := validatePVCOverrides(overrides.PVCs); err != nil {
+		return nil, err
 	}
 	if err := validateResourceOverrides(overrides.Resources); err != nil {
-		return err
+		return nil, err
 	}
 	var docs bytes.Buffer
-	dec := yaml.NewDecoder(os.Stdin)
+	dec := yaml.NewDecoder(in)
 	for {
 		var doc map[string]any
 		err := dec.Decode(&doc)
@@ -277,28 +337,25 @@ func PostRender(overridesFile string) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("parsing rendered manifest: %w", err)
+			return nil, fmt.Errorf("parsing rendered manifest: %w", err)
 		}
 		if len(doc) == 0 {
 			continue
 		}
 		if err := applyPVCOverride(doc, overrides.PVCs); err != nil {
-			return err
+			return nil, err
 		}
 		if err := applyContainerOverrides(doc, overrides.Resources); err != nil {
-			return err
+			return nil, err
 		}
 		out, err := yaml.Marshal(doc)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		docs.WriteString("---\n")
 		docs.Write(out)
 	}
-	if _, err := os.Stdout.Write(docs.Bytes()); err != nil {
-		return err
-	}
-	return nil
+	return docs.Bytes(), nil
 }
 
 func applyPVCOverride(doc map[string]any, overrides map[string]PVCOverride) error {

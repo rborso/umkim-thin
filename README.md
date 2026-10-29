@@ -52,7 +52,7 @@ Known gaps, deliberately not hidden:
 | **WireGuard** | Optional private access: per-client configs created self-service, so apps can stay off the public internet entirely |
 | **Home** | A read-only app launcher for household users: installed apps, live availability and links, without console access |
 | **Backups** | Daily archives of console state, seed and app inventory, plus a storage snapshot per app PVC; restore from the console |
-| **Console + CLI** | The same operations from a browser or a terminal |
+| **Console + CLI** | The same operations from a browser or a terminal: every console action has a CLI command (`docs/console.md#cli-parity`) |
 
 ## Non-goals
 

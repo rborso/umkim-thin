@@ -98,3 +98,37 @@ func TestValidateNamespaceAndPVCs(t *testing.T) {
 		t.Fatal("invalid size accepted")
 	}
 }
+
+// An override that names nothing in the render is an error: a typo must not
+// silently install the chart defaults (the console's advanced form and the CLI
+// both feed this).
+func TestPlanCheckOverrides(t *testing.T) {
+	plan := InstallPlan{
+		PVCs: []PVCPlan{
+			{Name: "gitea-data", StorageClass: "local-path", Size: "5Gi"},
+			{Name: "gitea-postgres", StorageClass: "local-path", Size: "2Gi"},
+		},
+		Containers: []ContainerPlan{
+			{Key: "Deployment/gitea/gitea"},
+			{Key: "Job/gitea-bootstrap/bootstrap"},
+		},
+	}
+	ok := map[string]PVCOverride{"gitea-data": {StorageClass: "fast", Size: "20Gi"}}
+	if err := plan.checkOverrides(ok, nil); err != nil {
+		t.Fatalf("a known PVC was rejected: %v", err)
+	}
+	if err := plan.checkOverrides(nil, map[string]ContainerResources{
+		"Deployment/gitea/gitea": {CPURequest: "200m"},
+	}); err != nil {
+		t.Fatalf("a known container was rejected: %v", err)
+	}
+
+	err := plan.checkOverrides(map[string]PVCOverride{"data": {Size: "20Gi"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no PVC named") || !strings.Contains(err.Error(), "gitea-data") {
+		t.Fatalf("unknown PVC error = %v, want the rendered names listed", err)
+	}
+	err = plan.checkOverrides(nil, map[string]ContainerResources{"gitea": {CPURequest: "1"}})
+	if err == nil || !strings.Contains(err.Error(), "no container") {
+		t.Fatalf("unknown container error = %v", err)
+	}
+}

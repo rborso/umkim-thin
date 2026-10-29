@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -26,6 +27,11 @@ Usage:
   umkim-thin catalog list              list installable apps
   umkim-thin catalog show <name>       show one entry, with its verification
   umkim-thin app install <name>        install an app from the catalog
+  umkim-thin app plan <name>           render the chart's PVCs and containers
+  umkim-thin app storage <name>        render the chart's PVCs and classes
+  umkim-thin app validate <name>       preflight the install options
+  umkim-thin app setup <name>          run the media stack's bootstrap
+  umkim-thin app integrate mealie      connect SparkyFitness to Mealie
   umkim-thin app versions <name>       show installed and available versions
   umkim-thin app upgrade <name> --to V upgrade to a catalogued chart version
   umkim-thin app reconcile <name>      republish routes without running Helm
@@ -37,8 +43,12 @@ Usage:
   umkim-thin storage-agent             host storage agent (root, single node)
   umkim-thin backup list|create|verify|restore|prune  console state + app inventory
   umkim-thin cert add/list/default/remove  manage manual TLS certificates
-  umkim-thin invite create --email E   invite someone to the directory
+  umkim-thin invite create|list|revoke|groups|redeem  invitations and directory groups
   umkim-thin wg client create <name>   create a WireGuard client config
+  umkim-thin servarr settings|indexers|profiles  the media stack's settings
+  umkim-thin version                   running version and the latest release
+  umkim-thin config                    effective configuration
+  umkim-thin status                    every installed app, ready state and routes
 
 Global flags:
   --catalog string   catalog directory (default "catalog")
@@ -71,6 +81,22 @@ func main() {
 		}
 	case "app":
 		if err := appCmd(catalogDir, args[1:]); err != nil {
+			fatal(err)
+		}
+	case "version":
+		if err := versionCmd(args[1:]); err != nil {
+			fatal(err)
+		}
+	case "config":
+		if err := configCmd(args[1:]); err != nil {
+			fatal(err)
+		}
+	case "status":
+		if err := statusCmd(catalogDir, args[1:]); err != nil {
+			fatal(err)
+		}
+	case "servarr":
+		if err := servarrCmd(catalogDir, args[1:]); err != nil {
 			fatal(err)
 		}
 	case "storage":
@@ -113,8 +139,27 @@ func main() {
 }
 
 func appCmd(dir string, args []string) error {
+	if wantsHelp(args) {
+		fmt.Print(`usage: umkim-thin app <command> [flags]
+
+  install <name>     install a catalog app (see app install --help)
+  plan <name>        render the chart's PVCs and containers
+  storage <name>     render the chart's PVCs and classes
+  validate <name>    preflight the install options
+  setup <name>       run the media stack's bootstrap
+  integrate mealie   connect SparkyFitness to Mealie
+  versions <name>    installed and available chart versions
+  upgrade <name>     upgrade to a catalogued chart version (--to)
+  reconcile <name>   republish routes without running Helm
+  list               installed apps
+  status <name>      one app's workloads and routes
+  options <name>     the values an app was installed with
+  uninstall <name>   remove an app (--purge for data)
+`)
+		return nil
+	}
 	if len(args) == 0 {
-		return fmt.Errorf("app needs a subcommand: install | reconcile | versions | upgrade | list | status | uninstall")
+		return fmt.Errorf("app needs a subcommand: install | plan | storage | validate | setup | integrate | versions | upgrade | reconcile | list | status | options | uninstall")
 	}
 	entries, err := catalog.Load(dir)
 	if err != nil {
@@ -145,25 +190,12 @@ func appCmd(dir string, args []string) error {
 			return fmt.Errorf("no catalog entry named %q", args[1])
 		}
 		fs := flag.NewFlagSet("app install", flag.ContinueOnError)
-		configClass := fs.String("config-class", "", "RWO storage class (default: site's config class)")
-		mediaClass := fs.String("media-class", "", "RWX storage class (default: site's media class)")
-		mediaAccessMode := fs.String("media-access-mode", "", "media access mode: ReadWriteOnce|ReadWriteMany (default: site's mode)")
-		namespace := fs.String("namespace", "", "namespace for a new install (default: catalog namespace)")
-		version := fs.String("version", "", "catalogued chart version (default: stable)")
-		allowLocal := fs.Bool("allow-local", false, "also allow the site LAN on VPN routes")
-		var hosts hostFlags
-		fs.Var(&hosts, "host", "route host; for multi-route apps use key=host (repeatable)")
-		var exposures, certificates hostFlags
-		fs.Var(&exposures, "exposure", "public|authelia|vpn; multi-route key=value (repeatable)")
-		fs.Var(&certificates, "certificate", "acme|default|secret:<name>; multi-route key=value")
+		f := addInstallFlags(fs)
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
-		opts := app.Options{Hosts: hosts.m, ConfigClass: *configClass, MediaClass: *mediaClass,
-			MediaAccessMode: *mediaAccessMode,
-			Namespace:       *namespace, Exposure: exposures.m, Certificate: certificates.m, ChartVersion: *version}
-		applyAllowLocal(e, &opts, *allowLocal)
-		fmt.Printf("installing %s (chart %s)...\n", e.Name, choose(*version, e.Chart.Version))
+		opts := f.options(e)
+		fmt.Printf("installing %s (chart %s)...\n", e.Name, choose(opts.ChartVersion, e.Chart.Version))
 		res, err := in.Install(e, opts)
 		if err != nil {
 			return err
@@ -173,6 +205,44 @@ func appCmd(dir string, args []string) error {
 			fmt.Printf("  https://%s\n", h)
 		}
 		return nil
+	case "plan", "storage", "validate":
+		// Flags may precede the name so `--help` works without inventing one.
+		fs := flag.NewFlagSet("app "+args[0], flag.ContinueOnError)
+		f := addInstallFlags(fs)
+		asJSON := fs.Bool("json", false, "print JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() < 1 {
+			return fmt.Errorf("app %s needs a name", args[0])
+		}
+		e, ok := byName[fs.Arg(0)]
+		if !ok {
+			return fmt.Errorf("no catalog entry named %q", fs.Arg(0))
+		}
+		switch args[0] {
+		case "plan":
+			return appPlanCmd(e, in, f, *asJSON)
+		case "storage":
+			return appStorageCmd(e, in, f, *asJSON)
+		default:
+			return appValidateCmd(e, in, f, *asJSON)
+		}
+	case "setup":
+		fs := flag.NewFlagSet("app setup", flag.ContinueOnError)
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() < 1 {
+			return fmt.Errorf("app setup needs a name")
+		}
+		e, ok := byName[fs.Arg(0)]
+		if !ok {
+			return fmt.Errorf("no catalog entry named %q", fs.Arg(0))
+		}
+		return appSetupCmd(e, in)
+	case "integrate":
+		return appIntegrateCmd(in, args[1:])
 	case "reconcile":
 		if len(args) < 2 {
 			return fmt.Errorf("app reconcile needs a name")
@@ -331,6 +401,10 @@ func appCmd(dir string, args []string) error {
 }
 
 func catalogCmd(dir string, args []string) error {
+	if wantsHelp(args) {
+		fmt.Print("usage: umkim-thin catalog list|show <name>\n")
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("catalog needs a subcommand: list | show")
 	}
@@ -406,8 +480,19 @@ func (h *hostFlags) Set(v string) error {
 }
 
 func inviteCmd(args []string) error {
+	if wantsHelp(args) {
+		fmt.Print(`usage: umkim-thin invite <command>
+
+  create --email E [--name N] [--group G]   issue an invitation
+  list                                      pending and used invitations
+  revoke <token>                            revoke an invitation
+  groups                                    directory groups for --group
+  redeem --token T --username U --password P  accept an invitation
+`)
+		return nil
+	}
 	if len(args) == 0 {
-		return fmt.Errorf("invite needs a subcommand: create | list")
+		return fmt.Errorf("invite needs a subcommand: create | list | revoke | groups | redeem")
 	}
 	d := identity.New(identity.ConfigFromEnv())
 	switch args[0] {
@@ -447,6 +532,10 @@ func inviteCmd(args []string) error {
 		fmt.Printf("  link:    %s\n", link)
 		fmt.Printf("  expires: %s\n", inv.Expires.Format(time.RFC3339))
 		return nil
+	case "groups":
+		return inviteGroupsCmd(d)
+	case "redeem":
+		return inviteRedeemCmd(d, args[1:])
 	case "revoke":
 		if len(args) < 2 {
 			return fmt.Errorf("invite revoke needs a token")
@@ -469,11 +558,15 @@ func readyWord(ready bool) string {
 }
 
 func wgCmd(args []string) error {
+	if wantsHelp(args) {
+		fmt.Print("usage: umkim-thin wg client create <name> | list | delete <name>\n")
+		return nil
+	}
 	if len(args) == 0 || args[0] != "client" {
-		return fmt.Errorf("wg needs 'client': wg client create <name> | wg client list")
+		return fmt.Errorf("wg needs 'client': wg client create|list|delete")
 	}
 	if len(args) < 2 {
-		return fmt.Errorf("wg client needs a subcommand: create | list")
+		return fmt.Errorf("wg client needs a subcommand: create | list | delete")
 	}
 	m := wg.New(wg.ConfigFromEnv())
 	switch args[1] {
@@ -521,8 +614,20 @@ func serve(dir string, args []string) error {
 }
 
 func fatal(err error) {
+	// `--help` on a subcommand is a request, not a failure: flag.Parse prints
+	// the usage and returns ErrHelp.
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
+}
+
+// wantsHelp reports a top-level --help for a command group that has no flag
+// set of its own (app, invite, servarr, ...). The subcommand help itself comes
+// from flag.Parse, which prints the flags.
+func wantsHelp(args []string) bool {
+	return len(args) > 0 && (args[0] == "-h" || args[0] == "--help")
 }
 
 func choose(vals ...string) string {
@@ -559,6 +664,17 @@ func applyAllowLocal(e catalog.Entry, opts *app.Options, allow bool) {
 // the same directory. `restore --apps` is the disaster-recovery path: it puts
 // the console state back and reinstalls the catalog apps that are missing.
 func backupCmd(dir string, args []string) error {
+	if wantsHelp(args) {
+		fmt.Print(`usage: umkim-thin backup <command>
+
+  list                       archives in the backup directory
+  create                     write one now (state, seed, app inventory, snapshots)
+  verify <name>              recompute every checksum
+  restore <name> [--apps]    restore state (+ reinstall missing apps)
+  prune [n]                  keep the newest n (default: the configured keep)
+`)
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("backup needs a subcommand: list | create | verify | restore | prune")
 	}

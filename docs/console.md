@@ -369,6 +369,38 @@ The provider uses the in-cluster URL
 into SparkyFitness; nothing is copied back. See the SparkyFitness chart README
 for the manual UI path and the private-network SSRF trade-off.
 
+## CLI parity
+
+Every console action has a CLI command. Both call the same installer, directory
+and backup code, so a feature cannot exist in only one of them.
+
+| Console | CLI |
+|---|---|
+| Overview → Applications | `umkim-thin status` |
+| Catalog → Install (the whole form) | `umkim-thin app install <name>` with `--host`, `--exposure`, `--certificate`, `--namespace`, `--version`, `--config-class`, `--media-class`, `--media-access-mode`, `--pvc name=class:size`, `--resource key=cpu=500m,memory=1Gi`, `--language`, `--ocr-language`, `--media-language`, `--quality-cutoff`, `--extra-language`, `--allow-local` |
+| Advanced → PVC/container preview | `umkim-thin app plan <name>` / `app storage <name>` (same flags) |
+| Install → validate | `umkim-thin app validate <name>` (same flags) |
+| Applications → Upgrade (+ Back up now) | `umkim-thin app upgrade <name> --to V --yes` |
+| Applications → Setup (media stack) | `umkim-thin app setup servarr` |
+| Applications → Connect Mealie | `umkim-thin app integrate mealie` |
+| Installed apps → Uninstall | `umkim-thin app uninstall <name> [--purge]` |
+| Media stack settings | `umkim-thin servarr settings [--media-language L] [--quality-cutoff Q]` |
+| Media stack indexers | `umkim-thin servarr indexers list\|search <q>\|add --definition D` |
+| Media stack profiles | `umkim-thin servarr profiles list\|add --language L\|delete --profile P` |
+| Access → Invitations | `umkim-thin invite create\|list\|revoke\|redeem` |
+| Access → directory groups | `umkim-thin invite groups` |
+| Access → WireGuard | `umkim-thin wg client create\|list\|delete` |
+| Storage | `umkim-thin storage disks\|plan\|apply\|list\|remove` |
+| Certificates | `umkim-thin cert add\|list\|default\|remove` |
+| Backups | `umkim-thin backup list\|create\|verify\|restore\|prune` |
+| Header version + update chip | `umkim-thin version [--offline] [--json]` |
+| Effective config | `umkim-thin config [--json]` |
+
+Only the browser session (`/login`, `/logout`), the invitee's sign-up page, the
+home page and the asynchronous job log (`/api/jobs`) are console-only. The CLI
+runs those operations synchronously and prints progress, so there is no job id
+to poll; a long install or upgrade blocks the terminal instead.
+
 ## Security
 
 - The console's own login (LDAP admin or breakglass `localadmin`) and Authelia

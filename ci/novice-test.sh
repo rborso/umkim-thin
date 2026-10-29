@@ -64,6 +64,26 @@ else
   fail "install-single.sh is missing or not executable"
 fi
 
+echo "== CLI parity =="
+# Every console surface has a CLI command. These run without a cluster, so they
+# catch a command that no longer builds or parses its flags.
+if [ -x ./umkim-thin ]; then
+  bin=./umkim-thin
+else
+  bin="go run ./cmd/umkim-thin"
+fi
+$bin version --offline >/dev/null && ok "version --offline"
+$bin version --json --offline >/dev/null && ok "version --json"
+$bin config >/dev/null && ok "config"
+$bin config --json >/dev/null && ok "config --json"
+for sub in "app plan --help" "app storage --help" "app validate --help" "servarr settings --help" \
+           "servarr indexers --help" "servarr profiles --help" "invite --help" "status --help" \
+           "version --help" "config --help"; do
+  # shellcheck disable=SC2086
+  $bin $sub >/dev/null || fail "$sub exited non-zero"
+done
+ok "new subcommands parse their flags"
+
 echo "== render-only =="
 ./install.sh --render-only --zone example.com --email admin@example.com --out "$tmp/render" >/dev/null
 for f in identity-values.yml console-values.yml config.env traefik-config.yaml; do
