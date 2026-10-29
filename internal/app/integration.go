@@ -447,8 +447,8 @@ func mealieCreateAPIToken(client *http.Client, base, accessToken string) (string
 		"integrationId": "sparkyfitness",
 	}
 	var out struct {
-		ID    string `json:"id"`
-		Token string `json:"token"`
+		ID    json.RawMessage `json:"id"`
+		Token string          `json:"token"`
 	}
 	if err := jsonRequest(client, http.MethodPost, base+"/api/users/api-tokens",
 		map[string]string{"Authorization": "Bearer " + accessToken}, body, &out); err != nil {
@@ -457,7 +457,28 @@ func mealieCreateAPIToken(client *http.Client, base, accessToken string) (string
 	if out.Token == "" {
 		return "", "", fmt.Errorf("Mealie returned no API token")
 	}
-	return out.Token, out.ID, nil
+	id, err := mealieTokenID(out.ID)
+	if err != nil {
+		return "", "", err
+	}
+	return out.Token, id, nil
+}
+
+// mealieTokenID accepts both shapes Mealie has used for the token id: a UUID
+// string on newer releases and a numeric primary key on older ones.
+func mealieTokenID(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n.String(), nil
+	}
+	return "", fmt.Errorf("Mealie returned an unexpected API token id")
 }
 
 func mealieDeleteAPIToken(client *http.Client, base, accessToken, tokenID string) error {

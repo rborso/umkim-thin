@@ -172,6 +172,26 @@ func TestMealieTokenFlow(t *testing.T) {
 	}
 }
 
+func TestMealieTokenNumericID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/users/api-tokens" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(t, w, map[string]any{"id": 42, "token": "mealie-token"})
+	}))
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	token, id, err := mealieCreateAPIToken(client, server.URL, "session")
+	if err != nil {
+		t.Fatalf("mealieCreateAPIToken: %v", err)
+	}
+	if token != "mealie-token" || id != "42" {
+		t.Fatalf("token = %q, id = %q", token, id)
+	}
+}
+
 func writeTestJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
