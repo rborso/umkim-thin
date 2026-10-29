@@ -12,8 +12,9 @@
 
 2. Take a VM snapshot if you can. Application data lives in PVCs (see
    [Backup](06-backup.md)).
-3. Read the release notes for breaking changes. App charts and the platform
-   charts version independently.
+3. Read the release notes for breaking changes
+   ([`../releases/`](../releases/)). App charts and the platform charts version
+   independently.
 
 ## Upgrade the platform
 

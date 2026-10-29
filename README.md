@@ -13,6 +13,7 @@ and nothing else.
 ## Status
 
 Pre-1.0, but working end to end on single-node and three-node HA k3s test clusters.
+Release notes: [`docs/releases/`](docs/releases/).
 
 Implemented today:
 
