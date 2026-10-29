@@ -3,6 +3,7 @@
   "private": true,
   "description": "Per-app verification suites for the umkim-thin catalog",
   "devDependencies": {
+    "@actual-app/api": "^26.10.0",
     "@playwright/test": "^1.48.2"
   },
   "scripts": {

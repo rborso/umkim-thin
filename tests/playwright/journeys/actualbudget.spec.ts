@@ -1,41 +1,183 @@
 import { test, expect } from '@playwright/test';
-import { installed, hostOf, portalSession, anon } from '../lib/session';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { installed, hostOf, oidcLogin, USER, PASS } from '../lib/session';
 
-// Actual Budget's own login is OIDC; the route also sits behind Authelia by
-// default. The real browser flow is in auth.spec.ts.
-test.describe('actualbudget', () => {
+// Actual Budget client journey: create a real budget through the sync server,
+// add an account and a transaction, sync it, then download the same budget into
+// a second client directory and verify the transaction survived the round trip.
+// The OIDC session token is captured from the browser login and handed to the
+// official @actual-app/api client.
+test.describe('actualbudget client', () => {
   test.skip(!installed('actualbudget'), 'actualbudget is not installed');
+  test.skip(!PASS, 'UMKIM_THIN_PASSWORD not set');
 
   const host = hostOf('actualbudget');
-  const url = (path = '/') => `https://${host}${path}`;
+  const base = `https://${host}`;
 
-  test('route is challenged by the portal', async ({ request }) => {
-    const res = await request.get(url(), { maxRedirects: 0 });
-    expect(res.status()).not.toBe(200);
-    expect([301, 302, 303, 307, 308, 401, 403]).toContain(res.status());
-  });
+  test('creates, syncs and downloads a budget', async ({ browser }) => {
+    test.setTimeout(180_000);
 
-  test('authenticated request reaches the sync server', async () => {
-    const ctx = await portalSession();
-    const page = await ctx.get(url('/'));
-    expect(page.status(), 'the app shell').toBeLessThan(500);
-    const health = await ctx.get(url('/health'));
-    expect(health.status(), 'the sync server health endpoint').toBe(200);
-    await ctx.dispose();
-  });
+    let sessionToken = '';
+    const capture = (url: string) => {
+      const match = url.match(/[?&]token=([^&#]+)/);
+      if (match) sessionToken = decodeURIComponent(match[1]);
+    };
 
-  test('the OIDC login entry point is present', async () => {
-    const ctx = await portalSession();
-    const page = await ctx.get(url('/'));
-    expect(page.status()).toBe(200);
-    expect(await page.text()).toMatch(/Actual|OpenID|login/i);
-    await ctx.dispose();
-  });
+    const readTokenFromPage = async (p: any): Promise<string> =>
+      p
+        .evaluate(async () => {
+          const databases = await (indexedDB as any).databases?.();
+          if (databases && !databases.some((d: any) => d.name === 'actual')) return '';
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open('actual');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          return new Promise<string>((resolve, reject) => {
+            const tx = db.transaction(['asyncStorage'], 'readonly');
+            const request = tx.objectStore('asyncStorage').get('user-token');
+            request.onsuccess = () => resolve(String(request.result ?? ''));
+            request.onerror = () => reject(request.error);
+          });
+        })
+        .catch(() => '');
 
-  test('anonymous health request is not a direct app response', async () => {
-    const ctx = await anon();
-    const res = await ctx.get(url('/health'), { maxRedirects: 0 });
-    expect(res.status()).not.toBe(200);
-    await ctx.dispose();
+    const startLogin = () =>
+      oidcLogin(browser, host, {
+        credentials: { username: USER, password: PASS },
+        onPage: (p) => {
+          p.on('framenavigated', (frame) => capture(frame.url()));
+          p.on('response', (response) => {
+            if (response.url().includes('/openid/callback')) {
+              capture(response.headers()['location'] ?? '');
+            }
+          });
+        },
+        // The login page itself is not proof of a session. Keep the helper
+        // clicking the provider until the client has actually stored its token.
+        ready: async (p) => Boolean(sessionToken) || Boolean(await readTokenFromPage(p)),
+      });
+
+    const { context, page } = await startLogin();
+
+    // The web client keeps the sync token in IndexedDB (the same store its
+    // `user-token` asyncStorage key uses). Wait for the app to create that
+    // database first: opening a missing `actual` database from the test would
+    // create an empty v1 database and can race the client's own upgrade.
+    sessionToken = await readTokenFromPage(page);
+    if (!sessionToken) {
+      // A slow first paint can show the logged-in shell before the token write
+      // lands. Reloading lets the client finish the subscription once.
+      await page.waitForTimeout(5000);
+      await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+      sessionToken = await readTokenFromPage(page);
+    }
+    expect(sessionToken, 'the OIDC login handed the client a sync token').toBeTruthy();
+    const cookies = await context.cookies(base);
+    const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    expect(cookieHeader, 'the Authelia session cookie').toContain('authelia_session=');
+    await context.close();
+
+    // The Node API client has no browser cookie jar. Add the portal session to
+    // its requests so the forward-auth in front of Actual lets the sync calls
+    // through; the client's own server token still authenticates the budget.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: any, init: any = {}) => {
+      const headers = new Headers(init.headers ?? {});
+      if (!headers.has('cookie')) headers.set('cookie', cookieHeader);
+      return originalFetch(input, { ...init, headers });
+    }) as typeof fetch;
+
+    // Import after the fetch shim: the API package may capture the platform
+    // fetch implementation at module load time.
+    const actual: typeof import('@actual-app/api') = await import('@actual-app/api');
+    const dataDir = mkdtempSync(join(tmpdir(), 'umkim-actual-a-'));
+    const dataDir2 = mkdtempSync(join(tmpdir(), 'umkim-actual-b-'));
+    const marker = `ci-tx-${Date.now()}`;
+    const accountName = `CI Account ${marker}`;
+    const budgetName = `CI Budget ${marker}`;
+    let budget: any;
+    let api: any;
+    let groupId = '';
+    let cloudFileId = '';
+
+    try {
+      // init()'s returned send() is the supported path for handlers that the
+      // public API does not re-export (create-budget).
+      api = await actual.init({ dataDir, serverURL: base, sessionToken });
+      await api.send('create-budget', { budgetName });
+
+      const budgets = await actual.getBudgets();
+      budget = budgets.find((b) => b.name === budgetName);
+      expect(budget, 'the budget was created on the sync server').toBeTruthy();
+      expect(budget.cloudFileId, 'the budget has a sync id').toBeTruthy();
+
+      const accountId = await actual.createAccount(
+        { name: accountName, type: 'checking' } as any,
+        0,
+      );
+      await actual.addTransactions(accountId, [
+        {
+          date: '2026-01-15',
+          amount: 1234,
+          payee_name: marker,
+          notes: marker,
+        } as any,
+      ]);
+
+      // create-budget uploads best-effort and swallows upload errors. Make the
+      // upload explicit and verify the server has the file before downloading
+      // it into the second client.
+      const uploaded = await api.send('upload-budget');
+      expect(uploaded.error, 'the budget uploaded to the sync server').toBeUndefined();
+      const remote = await api.send('get-remote-files');
+      const remoteFile = (remote ?? []).find(
+        (f: any) =>
+          f.name === budgetName ||
+          f.fileId === budget.cloudFileId ||
+          f.cloudFileId === budget.cloudFileId,
+      );
+      expect(remoteFile, 'the sync server lists the uploaded budget').toBeTruthy();
+      groupId = remoteFile.groupId ?? budget.groupId;
+      cloudFileId = remoteFile.fileId ?? remoteFile.cloudFileId ?? budget.cloudFileId;
+      expect(groupId, 'the uploaded budget has a group id').toBeTruthy();
+      expect(cloudFileId, 'the uploaded budget has a cloud file id').toBeTruthy();
+      await actual.sync();
+
+      const transactions = await actual.getTransactions(accountId, '2026-01-01', '2026-01-31');
+      expect(
+        transactions.some((t) => t.notes === marker),
+        'the transaction is in the first client',
+      ).toBeTruthy();
+
+      await actual.shutdown();
+      api = await actual.init({ dataDir: dataDir2, serverURL: base, sessionToken });
+      await actual.downloadBudget(groupId);
+
+      const accounts = await actual.getAccounts();
+      const downloaded = accounts.find((a) => a.name === accountName);
+      expect(downloaded, 'the account came back from the server').toBeTruthy();
+      const downloadedTransactions = await actual.getTransactions(
+        downloaded!.id,
+        '2026-01-01',
+        '2026-01-31',
+      );
+      expect(
+        downloadedTransactions.some((t) => t.notes === marker),
+        'the transaction survived sync and download',
+      ).toBeTruthy();
+    } finally {
+      if (budget && api && cloudFileId) {
+        await api
+          .send('delete-budget', { id: budget.id, cloudFileId })
+          .catch(() => undefined);
+      }
+      await actual.shutdown().catch(() => undefined);
+      globalThis.fetch = originalFetch;
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(dataDir2, { recursive: true, force: true });
+    }
   });
 });

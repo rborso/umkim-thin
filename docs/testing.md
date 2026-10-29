@@ -43,10 +43,10 @@ tls.spec.ts console.spec.ts home.spec.ts`.
 ## Functional user journeys
 
 `tests/playwright/journeys/` (informational, but reported with pass/fail).
-All checks are run manually. Currently there are 18 for the default app set: one
-platform journey and 17 app journeys; the optional SparkyFitness, Actual Budget
-and HomeBox entries add three more when installed. They run serially because
-OCR/indexing is sensitive to concurrent load.
+All checks are run manually. The suite includes one platform journey and the
+per-app journeys; optional apps add their own when installed. Cross-app checks
+such as Mealie → SparkyFitness are opt-in with `--integrations`. Journeys run
+serially because OCR/indexing is sensitive to concurrent load.
 
 ### Platform
 
@@ -96,6 +96,24 @@ OCR/indexing is sensitive to concurrent load.
 | **Shared media root** | Creates an accessible root folder on the shared media volume. |
 | **Download client** | Reaches qBittorrent's API through the portal session. |
 
+### Actual Budget
+
+| Journey | What the user/client does |
+|---|---|
+| **Budget sync** | Logs in through OIDC, creates a budget, account and transaction with the official API client, syncs it, then downloads the same budget into a second client and verifies the transaction. |
+
+### HomeBox
+
+| Journey | What the user/client does |
+|---|---|
+| **Inventory CRUD** | Creates a location, item, tag and photo; reads them back; finds the item by search and in the CSV export. |
+
+### Cross-app (opt-in)
+
+| Journey | What the user/client does |
+|---|---|
+| **Mealie → SparkyFitness** | Creates a Mealie recipe, runs the console's one-click Mealie integration, and finds the recipe through SparkyFitness's Mealie provider. Requires `--integrations`. |
+
 ## Tier 2 runner
 
 `tests/e2e/run.sh` accepts one category:
@@ -125,6 +143,8 @@ runner to reset it, provision it, or install/upgrade apps:
 # also run the informational journeys and their media fixture
 ./ci/test-existing.sh single --journeys
 ./ci/test-existing.sh ha --env deploy/provision-ha.env --pin --journeys
+# cross-app checks are opt-in
+./ci/test-existing.sh ha --env deploy/provision-ha.env --pin --integrations
 ```
 
 What it does:
@@ -139,7 +159,8 @@ What it does:
    read-only or create/remove only `ci-*` test resources.
 3. Creates one temporary `ci-portal-<run-id>` tenant, runs the acceptance gate
    (`apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts`), and
-   runs the optional journeys serially. Temporary directory test accounts,
+   runs the optional journeys serially. `--integrations` also enables the
+   cross-app journey (Mealie → SparkyFitness). Temporary directory test accounts,
    Gitea test users, SSH keys and repositories are removed by
    `ci/cleanup-ci.sh`; the per-run media fixture and its Radarr root folder are
    removed as well. `--no-cleanup` leaves the accounts for inspection.

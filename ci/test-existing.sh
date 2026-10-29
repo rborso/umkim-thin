@@ -7,9 +7,11 @@
 #   ./ci/test-existing.sh ha --env deploy/provision-ha.env
 #   ./ci/test-existing.sh single --journeys
 #   ./ci/test-existing.sh ha --env deploy/provision-ha.env --pin
+#   ./ci/test-existing.sh ha --env deploy/provision-ha.env --pin --integrations
 #
-# Options: --env FILE, --report-dir DIR, --journeys, --no-platform,
-#          --with-restart, --pin, --apps "group ...", --no-cleanup.
+# Options: --env FILE, --report-dir DIR, --journeys, --integrations,
+#          --no-platform, --with-restart, --pin, --apps "group ...",
+#          --no-cleanup.
 # Reports land under tests/reports/<target>/<run-id>/ by default. The gate
 # creates a temporary ci-portal-* tenant and cleans up ci-* accounts on exit;
 # use --no-cleanup only when you want to inspect them.
@@ -28,6 +30,7 @@ shift
 PROVISION_ENV="${PROVISION_ENV:-deploy/provision-${TARGET}.env}"
 REPORT_DIR=""
 JOURNEYS=0
+INTEGRATIONS=0
 PLATFORM=1
 CLEANUP=1
 WITH_RESTART=0
@@ -40,6 +43,7 @@ while [ "$#" -gt 0 ]; do
     --report-dir) REPORT_DIR="${2:?--report-dir needs a directory}"; shift 2 ;;
     --report-dir=*) REPORT_DIR="${1#*=}"; shift ;;
     --journeys) JOURNEYS=1; shift ;;
+    --integrations) JOURNEYS=1; INTEGRATIONS=1; shift ;;
     --no-platform) PLATFORM=0; shift ;;
     --no-cleanup) CLEANUP=0; shift ;;
     --with-restart) WITH_RESTART=1; shift ;;
@@ -268,6 +272,9 @@ else
   ASSERT_SKIP_RESTART=1
 fi
 export ASSERT_SKIP_RESTART ASSERT_NO_INSTALL=1
+if [ "$INTEGRATIONS" = "1" ]; then
+  export UMKIM_THIN_INTEGRATIONS=1
+fi
 
 platform_rc=0
 if [ "$PLATFORM" = "1" ]; then
