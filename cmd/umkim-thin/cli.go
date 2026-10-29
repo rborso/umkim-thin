@@ -51,6 +51,16 @@ type installFlags struct {
 	allowLocal      *bool
 }
 
+// splitName takes the first non-flag token as the positional name, so a
+// command accepts `app plan <name> --flag` and `app plan --flag <name>` alike.
+// (Go's flag package stops parsing at the first positional argument.)
+func splitName(args []string) (string, []string) {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return args[0], args[1:]
+	}
+	return "", args
+}
+
 // addInstallFlags registers the shared flags on fs.
 func addInstallFlags(fs *flag.FlagSet) *installFlags {
 	f := &installFlags{}

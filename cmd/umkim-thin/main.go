@@ -206,19 +206,24 @@ func appCmd(dir string, args []string) error {
 		}
 		return nil
 	case "plan", "storage", "validate":
-		// Flags may precede the name so `--help` works without inventing one.
+		// The name may come before or after the flags: Go's flag package stops
+		// at the first positional, so take it out first.
+		name, rest := splitName(args[1:])
 		fs := flag.NewFlagSet("app "+args[0], flag.ContinueOnError)
 		f := addInstallFlags(fs)
 		asJSON := fs.Bool("json", false, "print JSON")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		if fs.NArg() < 1 {
+		if name == "" && fs.NArg() > 0 {
+			name = fs.Arg(0)
+		}
+		if name == "" {
 			return fmt.Errorf("app %s needs a name", args[0])
 		}
-		e, ok := byName[fs.Arg(0)]
+		e, ok := byName[name]
 		if !ok {
-			return fmt.Errorf("no catalog entry named %q", fs.Arg(0))
+			return fmt.Errorf("no catalog entry named %q", name)
 		}
 		switch args[0] {
 		case "plan":
