@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,21 @@ type Config struct {
 	Kubectl         string
 	StateDir        string
 
+	// Trusted access. The feature is off by default; routes only get the
+	// management/VPN bypass paths when it is enabled and the catalog route opts
+	// in. The CIDRs are source ranges for Traefik's ClientIP matcher, not
+	// client-supplied headers.
+	TrustedAccessEnabled          bool
+	TrustedManagementEnabled      bool
+	TrustedManagementCIDRs        []string
+	TrustedManagementExcludeCIDRs []string
+	VPNSubnet                     string
+	VPNServerIP                   string
+	WGTraefikPort                 int
+	TraefikNodeIP                 string
+	WGNamespace                   string
+	WGVPNDNSConfigMap             string
+
 	// Console and on-demand bootstrap. The console image is the source of the
 	// pinned bootstrap build context, so the builder never accepts one from a
 	// caller; the image is imported into the pinned node's containerd and the
@@ -86,6 +102,8 @@ func ConfigFromEnv() Config {
 	if portalHost == "" && zone != "" {
 		portalHost = "auth." + zone
 	}
+	trustedEnabled, _ := strconv.ParseBool(env("UMKIM_THIN_TRUSTED_ACCESS_ENABLED", "false"))
+	trustedMgmtEnabled, _ := strconv.ParseBool(env("UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED", "true"))
 	return Config{
 		Kubeconfig:      env("UMKIM_THIN_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"),
 		ChartMirror:     env("UMKIM_THIN_CHART_MIRROR", remoteDir+"/chart-mirror"),
@@ -117,6 +135,17 @@ func ConfigFromEnv() Config {
 		Helm:            env("UMKIM_THIN_HELM", "/usr/local/bin/helm"),
 		Kubectl:         env("UMKIM_THIN_KUBECTL", "/usr/local/bin/kubectl"),
 		StateDir:        stateDir,
+
+		TrustedAccessEnabled:          trustedEnabled,
+		TrustedManagementEnabled:      trustedMgmtEnabled,
+		TrustedManagementCIDRs:        splitList(env("UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS", "")),
+		TrustedManagementExcludeCIDRs: splitList(env("UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS", "")),
+		VPNSubnet:                     env("UMKIM_THIN_VPN_SUBNET", env("UMKIM_THIN_WG_SUBNET", "192.168.168.0/24")),
+		VPNServerIP:                   env("UMKIM_THIN_WG_SERVER_IP", "192.168.168.1"),
+		WGTraefikPort:                 atoi(env("UMKIM_THIN_WG_TRAEFIK_PORT", "30444")),
+		TraefikNodeIP:                 env("UMKIM_THIN_TRAEFIK_NODE_IP", ""),
+		WGNamespace:                   env("UMKIM_THIN_WG_NAMESPACE", "wireguard"),
+		WGVPNDNSConfigMap:             env("UMKIM_THIN_WG_VPN_DNS_CONFIGMAP", "wireguard-vpn-dns"),
 
 		ConsoleImage:     env("UMKIM_THIN_CONSOLE_IMAGE", "localhost/umkim-thin:dev"),
 		BootstrapImage:   env("UMKIM_THIN_BOOTSTRAP_IMAGE", "localhost/umkim-thin/servarr-bootstrap"),
@@ -154,6 +183,21 @@ type Options struct {
 	ConfigClass string            // RWO class for config/databases
 	MediaClass  string            // RWX class for shared media
 	Progress    func(string)      // optional progress sink (async installs)
+
+	// Namespace overrides the catalog's default namespace for a new install.
+	// An existing app keeps the namespace it was installed with; moving a live
+	// release is rejected rather than silently creating a second copy.
+	Namespace string
+
+	// PVCs overrides individual PersistentVolumeClaims by metadata.name. The
+	// chart is rendered normally and a Helm post-renderer applies the chosen
+	// class and size before Kubernetes sees the manifests.
+	PVCs map[string]PVCOverride
+
+	// Resources overrides CPU/memory requests and limits for a rendered
+	// workload container. The key is the ContainerPlan.Key returned by the
+	// install plan.
+	Resources map[string]ContainerResources
 
 	// Per-route exposure/certificate choices. Empty maps use the catalog
 	// defaults. The key is the route key ("" for a single-route app).
@@ -198,12 +242,17 @@ type siteContext struct {
 	configClass     string
 	mediaClass      string
 	mediaAccessMode string
-	hosts           map[string]string // route key -> effective host
+	publicHosts     map[string]string // route key -> public hostname
+	hosts           map[string]string // route key -> effective primary host
+	vpnHosts        map[string]string // route key -> host for the VPN path
 	primary         string
 	exposure        map[string]string
 	allowLocal      map[string]bool
 	certificate     map[string]string
 	certSecret      map[string]string
+	trustedMgmt     map[string]bool
+	trustedVPN      map[string]bool
+	trustedSameHost map[string]bool
 }
 
 func (in *Installer) context(e catalog.Entry, opts Options) (siteContext, error) {
@@ -243,11 +292,29 @@ func (in *Installer) context(e catalog.Entry, opts Options) (siteContext, error)
 		configClass:     firstNonEmpty(opts.ConfigClass, in.cfg.ConfigClass),
 		mediaClass:      firstNonEmpty(opts.MediaClass, in.cfg.MediaClass),
 		mediaAccessMode: mediaAccessMode,
+		publicHosts:     map[string]string{},
 		hosts:           map[string]string{},
+		vpnHosts:        map[string]string{},
 		exposure:        map[string]string{},
 		allowLocal:      map[string]bool{},
 		certificate:     map[string]string{},
 		certSecret:      map[string]string{},
+		trustedMgmt:     map[string]bool{},
+		trustedVPN:      map[string]bool{},
+		trustedSameHost: map[string]bool{},
+	}
+	if in.cfg.TrustedAccessEnabled {
+		if err := validateManagementCIDRs(in.cfg.TrustedManagementCIDRs); err != nil {
+			return siteContext{}, err
+		}
+		if err := validateManagementCIDRs(in.cfg.TrustedManagementExcludeCIDRs); err != nil {
+			return siteContext{}, fmt.Errorf("trusted management exclude: %w", err)
+		}
+		if in.cfg.VPNSubnet != "" {
+			if prefix, err := netip.ParsePrefix(in.cfg.VPNSubnet); err != nil || prefix.Bits() == 0 {
+				return siteContext{}, fmt.Errorf("invalid VPN subnet %q", in.cfg.VPNSubnet)
+			}
+		}
 	}
 	for _, r := range e.EffectiveRoutes() {
 		exp := opts.Exposure[r.Key]
@@ -275,35 +342,121 @@ func (in *Installer) context(e catalog.Entry, opts Options) (siteContext, error)
 			return siteContext{}, fmt.Errorf("%s: certificate secret needs a name", e.Name)
 		}
 
-		host := strings.ReplaceAll(r.Host, "{{ .zone }}", c.zone)
-		if exp == "vpn" {
-			if r.VPNHost != "" {
-				host = strings.ReplaceAll(r.VPNHost, "{{ .zone }}", c.zone)
-			} else {
-				host = vpnHost(host, c.zone)
+		trustedMgmt := in.cfg.TrustedAccessEnabled && in.cfg.TrustedManagementEnabled && r.TrustedManagement()
+		trustedVPN := in.cfg.TrustedAccessEnabled && r.TrustedVPN()
+		if (trustedMgmt || trustedVPN) && (r.AppAuth == nil || r.AppAuth.Kind == "") {
+			return siteContext{}, fmt.Errorf("%s: trusted access needs route appAuth.kind", e.Name)
+		}
+		if trustedMgmt || trustedVPN {
+			switch r.AppAuth.Kind {
+			case "ldap", "oidc", "local", "token":
+			default:
+				return siteContext{}, fmt.Errorf("%s: unknown or unsafe route appAuth.kind %q", e.Name, r.AppAuth.Kind)
 			}
 		}
+		if (trustedMgmt || trustedVPN) && exp == "public" {
+			return siteContext{}, fmt.Errorf("%s: trusted access requires authelia or vpn exposure, not public", e.Name)
+		}
+		if trustedMgmt && len(in.cfg.TrustedManagementCIDRs) == 0 {
+			return siteContext{}, fmt.Errorf("%s: trusted management access is enabled but no UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS are configured", e.Name)
+		}
+		sameHost := r.TrustedSameHost()
+
+		publicHost := strings.ReplaceAll(r.Host, "{{ .zone }}", c.zone)
+		vpnHostName := publicHost
+		if r.VPNHost != "" {
+			vpnHostName = strings.ReplaceAll(r.VPNHost, "{{ .zone }}", c.zone)
+		} else {
+			vpnHostName = vpnHost(publicHost, c.zone)
+		}
+
+		// The primary route is the public route, except for a legacy VPN-only
+		// exposure where it is the .vpn.<zone> host. Trusted VPN routes default
+		// to the same host as the public route.
+		primary := publicHost
+		if exp == "vpn" && !(trustedVPN && sameHost) {
+			primary = vpnHostName
+		}
+
 		// An explicit per-key override wins. The install form's hostname (the
 		// "" key) is the app's primary hostname: it applies to the first site
 		// route only, so an entry's extra routes (e.g. Collabora) keep the
 		// hostnames their catalog declares.
+		override := ""
 		if v, ok := opts.Hosts[r.Key]; ok && v != "" {
-			host = v
+			override = v
 		} else if v, ok := opts.Hosts[""]; ok && v != "" && c.primary == "" && r.Mode == "site" {
-			host = v
+			override = v
 		}
-		c.hosts[r.Key] = host
+		if override != "" {
+			primary = override
+		}
+
+		if trustedVPN && sameHost {
+			publicHost = primary
+			vpnHostName = primary
+		} else if exp == "vpn" {
+			// Keep the legacy behavior: a hostname override names the VPN host.
+			vpnHostName = primary
+			if override != "" {
+				publicHost = primary
+			}
+		} else if override != "" {
+			publicHost = primary
+			if r.VPNHost != "" {
+				vpnHostName = strings.ReplaceAll(r.VPNHost, "{{ .zone }}", c.zone)
+			} else {
+				vpnHostName = vpnHost(publicHost, c.zone)
+			}
+		}
+
+		c.publicHosts[r.Key] = publicHost
+		c.hosts[r.Key] = primary
+		c.vpnHosts[r.Key] = vpnHostName
 		c.exposure[r.Key] = exp
 		c.allowLocal[r.Key] = allowLocal
 		c.certificate[r.Key] = cert
+		c.trustedMgmt[r.Key] = trustedMgmt
+		c.trustedVPN[r.Key] = trustedVPN
+		c.trustedSameHost[r.Key] = sameHost
 		if strings.HasPrefix(cert, "secret:") {
 			c.certSecret[r.Key] = strings.TrimPrefix(cert, "secret:")
 		}
-		if c.primary == "" && r.Mode == "site" && host != "" {
-			c.primary = host
+		if c.primary == "" && r.Mode == "site" && primary != "" {
+			c.primary = primary
 		}
 	}
 	return c, nil
+}
+
+func splitList(raw string) []string {
+	var out []string
+	for _, item := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func firstNonZero(v, def int) int {
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+func validateManagementCIDRs(cidrs []string) error {
+	for _, raw := range cidrs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("invalid trusted management CIDR %q: %w", raw, err)
+		}
+		if prefix.Bits() == 0 {
+			return fmt.Errorf("trusted management CIDR %q is too broad (refusing /0)", raw)
+		}
+	}
+	return nil
 }
 
 // vpnHost derives a VPN-only name from the public name, e.g.
@@ -339,6 +492,9 @@ func (in *Installer) repl(e catalog.Entry, c siteContext) map[string]string {
 	return map[string]string{
 		"{{ .zone }}":                    c.zone,
 		"{{ .host }}":                    c.primary,
+		"{{ .vpnSubnet }}":               firstNonEmpty(in.cfg.VPNSubnet, "192.168.168.0/24"),
+		"{{ .traefikPort }}":             strconv.Itoa(firstNonZero(in.cfg.WGTraefikPort, 30444)),
+		"{{ .traefikNodeIP }}":           in.cfg.TraefikNodeIP,
 		"{{ .release }}":                 e.Name,
 		"{{ .namespace }}":               e.Namespace,
 		"{{ .storage.configClass }}":     c.configClass,
@@ -350,9 +506,131 @@ func (in *Installer) repl(e catalog.Entry, c siteContext) map[string]string {
 	}
 }
 
+// applyRoutes publishes the primary, management and same-host VPN routes for
+// one entry and removes stale bypass objects. It is shared by Install and
+// ReconcileRoutes so a route-only reconcile cannot drift from a full install.
+func (in *Installer) applyRoutes(e catalog.Entry, ctx siteContext, opts Options) ([]string, error) {
+	rc := route.Context{
+		Zone:                   ctx.zone,
+		Release:                e.Name,
+		Tenant:                 in.cfg.Tenant,
+		Middleware:             in.cfg.Middleware,
+		ManagementCIDRs:        in.cfg.TrustedManagementCIDRs,
+		ManagementExcludeCIDRs: in.cfg.TrustedManagementExcludeCIDRs,
+		VPNSubnet:              firstNonEmpty(in.cfg.VPNSubnet, "192.168.168.0/24"),
+	}
+	var hosts []string
+	for _, r := range e.EffectiveRoutes() {
+		r.Host = ctx.hosts[r.Key] // effective host, tokens already resolved
+		rc.Exposure = ctx.exposure[r.Key]
+		rc.AllowLocal = ctx.allowLocal[r.Key]
+		rc.Certificate = ctx.certificate[r.Key]
+		rc.CertSecret = ctx.certSecret[r.Key]
+		y, err := route.Render(e, r, rc)
+		if err != nil {
+			return nil, err
+		}
+		if y == "" {
+			continue
+		}
+		opts.step("publishing https://%s", ctx.hosts[r.Key])
+		if err := in.apply(y); err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, ctx.hosts[r.Key])
+
+		if ctx.trustedMgmt[r.Key] {
+			mgmtRoute := r
+			mgmtRoute.Host = ctx.publicHosts[r.Key]
+			mgmt, err := route.RenderTrustedManagement(e, mgmtRoute, rc)
+			if err != nil {
+				return nil, err
+			}
+			if mgmt != "" {
+				opts.step("trusting the management network for https://%s", mgmtRoute.Host)
+				if err := in.apply(mgmt); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if ctx.trustedVPN[r.Key] && ctx.exposure[r.Key] != "vpn" {
+			vpnRoute := r
+			vpnRoute.Host = ctx.vpnHosts[r.Key]
+			vpnCtx := rc
+			vpnCtx.Exposure = "vpn"
+			vpnCtx.NameSuffix = "trusted-vpn"
+			vpn, err := route.Render(e, vpnRoute, vpnCtx)
+			if err != nil {
+				return nil, err
+			}
+			if vpn != "" {
+				opts.step("trusting the VPN for https://%s", vpnRoute.Host)
+				if err := in.apply(vpn); err != nil {
+					return nil, err
+				}
+			}
+			// Remove the experimental websecure IngressRoute form.
+			vpnName := route.ObjectNameWithSuffix(e, r, "trusted-vpn")
+			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", e.Namespace,
+				"delete", "ingressroute", vpnName, "--ignore-not-found")
+		}
+
+		// Remove a stale bypass left by an earlier enablement. This is what makes
+		// turning UMKIM_THIN_TRUSTED_ACCESS_ENABLED off effective on the next
+		// install, rather than leaving a live no-Authelia route behind.
+		if !ctx.trustedMgmt[r.Key] {
+			mgmt := route.ObjectNameWithSuffix(e, r, "trusted-management")
+			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", e.Namespace,
+				"delete", "ingressroute", mgmt, "--ignore-not-found")
+		}
+		if !ctx.trustedVPN[r.Key] || ctx.exposure[r.Key] == "vpn" {
+			vpnName := route.ObjectNameWithSuffix(e, r, "trusted-vpn")
+			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", e.Namespace,
+				"delete", "ingressroute", vpnName, "--ignore-not-found")
+			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", e.Namespace,
+				"delete", "ingress", vpnName, "--ignore-not-found")
+		}
+	}
+	return hosts, nil
+}
+
+// ReconcileRoutes republishes an installed app's routes without running Helm.
+// It is for changing the exposure/trusted-network policy or repairing route
+// objects without risking PVC or chart-value churn.
+func (in *Installer) ReconcileRoutes(e catalog.Entry, opts Options) (Result, error) {
+	if err := e.Validate(); err != nil {
+		return Result{}, err
+	}
+	e.Namespace = in.installedNamespace(e.Name, e.Namespace)
+	ctxOpts := opts
+	ctxOpts.Upgrade = true // reuse the exposure/certificate choices on file
+	ctx, err := in.context(e, ctxOpts)
+	if err != nil {
+		return Result{}, err
+	}
+	hosts, err := in.applyRoutes(e, ctx, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := in.saveRoutes(e, ctx); err != nil {
+		return Result{}, err
+	}
+	if err := in.syncVPNDNS(); err != nil {
+		return Result{}, err
+	}
+	return Result{Name: e.Name, Namespace: e.Namespace, Routes: hosts}, nil
+}
+
 // Install installs or upgrades one catalog entry with the given overrides.
 func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 	if err := e.Validate(); err != nil {
+		return Result{}, err
+	}
+	if err := in.resolveNamespace(&e, &opts); err != nil {
+		return Result{}, err
+	}
+	if err := validatePVCOverrides(opts.PVCs); err != nil {
 		return Result{}, err
 	}
 	if opts.ChartVersion != "" {
@@ -389,6 +667,20 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 			return Result{}, fmt.Errorf("%s is already on chart %s", e.Name, e.Chart.Version)
 		}
 	}
+	// Run the same preflight the console exposes before Helm can create a
+	// pending release. Warnings are reported but do not block; hard failures
+	// (invalid quantities, impossible storage/resource requests) stop here.
+	validation, err := in.Validate(e, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	for _, w := range validation.Warnings {
+		opts.step("preflight warning [%s]: %s", w.Scope, w.Message)
+	}
+	if !validation.OK {
+		return Result{}, fmt.Errorf("preflight validation failed:\n%s", validation.ErrorString())
+	}
+
 	ns := e.Namespace
 	ctx, err := in.context(e, opts)
 	if err != nil {
@@ -599,6 +891,11 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 	if opts.Upgrade {
 		action = "upgrading"
 	}
+	postRenderer, cleanupPostRenderer, err := in.storagePostRenderer(opts.PVCs, opts.Resources)
+	if err != nil {
+		return Result{}, err
+	}
+	defer cleanupPostRenderer()
 	opts.step("%s chart %s (%s)", action, e.Chart.Version, filepath.Base(chart))
 	args := []string{"upgrade", "--install", e.Name, chart,
 		"--namespace", ns, "--create-namespace",
@@ -606,6 +903,9 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 		"--values", tmpValuesName,
 		"--atomic", "--cleanup-on-fail",
 		"--wait", "--timeout", "15m"}
+	if postRenderer != "" {
+		args = append(args, "--post-renderer", postRenderer)
+	}
 	if strings.HasPrefix(chart, "oci://") {
 		args = append(args, "--version", e.Chart.Version)
 	}
@@ -615,32 +915,13 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 	if err := os.Rename(tmpValuesName, valuesFile); err != nil {
 		return Result{}, fmt.Errorf("keeping the rendered values for %s: %w", e.Name, err)
 	}
-
-	rc := route.Context{
-		Zone:       ctx.zone,
-		Release:    e.Name,
-		Tenant:     in.cfg.Tenant,
-		Middleware: in.cfg.Middleware,
+	if err := in.saveInstalledNamespace(e.Name, e.Namespace); err != nil {
+		return Result{}, err
 	}
-	var hosts []string
-	for _, r := range e.EffectiveRoutes() {
-		r.Host = ctx.hosts[r.Key] // effective host, tokens already resolved
-		rc.Exposure = ctx.exposure[r.Key]
-		rc.AllowLocal = ctx.allowLocal[r.Key]
-		rc.Certificate = ctx.certificate[r.Key]
-		rc.CertSecret = ctx.certSecret[r.Key]
-		y, err := route.Render(e, r, rc)
-		if err != nil {
-			return Result{}, err
-		}
-		if y == "" {
-			continue
-		}
-		opts.step("publishing https://%s", ctx.hosts[r.Key])
-		if err := in.apply(y); err != nil {
-			return Result{}, err
-		}
-		hosts = append(hosts, ctx.hosts[r.Key])
+
+	hosts, err := in.applyRoutes(e, ctx, opts)
+	if err != nil {
+		return Result{}, err
 	}
 
 	if e.Name == ServarrApp {
@@ -651,6 +932,9 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 		}
 	}
 	if err := in.saveRoutes(e, ctx); err != nil {
+		return Result{}, err
+	}
+	if err := in.syncVPNDNS(); err != nil {
 		return Result{}, err
 	}
 
@@ -923,11 +1207,19 @@ func (in *Installer) routesByNamespace() map[string][]string {
 		return nil
 	}
 	routes := map[string][]string{}
+	seen := map[string]map[string]bool{}
 	for _, item := range doc.Items {
 		for _, rule := range item.Spec.Rules {
 			if rule.Host == "" {
 				continue
 			}
+			if seen[item.Metadata.Namespace] == nil {
+				seen[item.Metadata.Namespace] = map[string]bool{}
+			}
+			if seen[item.Metadata.Namespace][rule.Host] {
+				continue
+			}
+			seen[item.Metadata.Namespace][rule.Host] = true
 			routes[item.Metadata.Namespace] = append(routes[item.Metadata.Namespace], rule.Host)
 		}
 	}
@@ -942,7 +1234,16 @@ func (in *Installer) routes(ns string) []string {
 	if err != nil {
 		return nil
 	}
-	return strings.Fields(out)
+	var hosts []string
+	seen := map[string]bool{}
+	for _, host := range strings.Fields(out) {
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
 }
 
 // Uninstall removes an installed app. With purge it also deletes the namespace
@@ -951,6 +1252,7 @@ func (in *Installer) routes(ns string) []string {
 func (in *Installer) Uninstall(name string, e *catalog.Entry, purge bool) error {
 	ns := name
 	if e != nil {
+		e.Namespace = in.installedNamespace(name, e.Namespace)
 		ns = e.Namespace
 	}
 	var firstErr error
@@ -960,10 +1262,18 @@ func (in *Installer) Uninstall(name string, e *catalog.Entry, purge bool) error 
 	if e != nil {
 		for _, r := range e.EffectiveRoutes() {
 			obj := route.ObjectName(*e, r)
-			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns, "delete", "ingress", obj, "--ignore-not-found")
+			for _, name := range []string{obj, route.ObjectNameWithSuffix(*e, r, "trusted-vpn")} {
+				_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns, "delete", "ingress", name, "--ignore-not-found")
+				_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns, "delete", "ingressroute", name, "--ignore-not-found")
+			}
+			mgmt := route.ObjectNameWithSuffix(*e, r, "trusted-management")
+			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns, "delete", "ingressroute", mgmt, "--ignore-not-found")
 		}
 	}
 	if err := in.dropContribution(name); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := in.syncVPNDNS(); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if purge {
@@ -1028,6 +1338,7 @@ func (in *Installer) Versions(e catalog.Entry) (VersionInfo, error) {
 func (in *Installer) Status(name string, e *catalog.Entry) (Status, error) {
 	ns := name
 	if e != nil {
+		e.Namespace = in.installedNamespace(name, e.Namespace)
 		ns = e.Namespace
 	}
 	st := Status{Name: name, Namespace: ns, Routes: []string{}, Components: []Component{}}

@@ -261,6 +261,50 @@ func TestCertificatePolicy(t *testing.T) {
 	}
 }
 
+func TestTrustedAccessRequiresAppAuth(t *testing.T) {
+	e := validEntry()
+	e.Route.Trusted = &TrustedAccess{Management: true, VPN: true}
+	if err := e.Validate(); err == nil || !strings.Contains(err.Error(), "appAuth.kind") {
+		t.Fatalf("trusted route without appAuth = %v", err)
+	}
+	e.Route.AppAuth = &AppAuth{Kind: "none"}
+	if err := e.Validate(); err == nil || !strings.Contains(err.Error(), "unknown appAuth.kind") {
+		t.Fatalf("appAuth none = %v", err)
+	}
+	e.Route.AppAuth = &AppAuth{Kind: "ldap"}
+	if err := e.Validate(); err != nil {
+		t.Fatalf("valid trusted route = %v", err)
+	}
+}
+
+func TestTrustedAccessRejectsPublicDefault(t *testing.T) {
+	e := validEntry()
+	e.Route.RequireAuth = false
+	e.Route.Exposure = nil
+	e.Route.Trusted = &TrustedAccess{VPN: true}
+	e.Route.AppAuth = &AppAuth{Kind: "local"}
+	if err := e.Validate(); err == nil || !strings.Contains(err.Error(), "not public") {
+		t.Fatalf("trusted public route = %v", err)
+	}
+}
+
+func TestTrustedSameHost(t *testing.T) {
+	r := Route{}
+	if !r.TrustedSameHost() {
+		t.Fatal("trusted routes should default to same host")
+	}
+	no := false
+	r.Trusted = &TrustedAccess{SameHost: &no}
+	if r.TrustedSameHost() {
+		t.Fatal("sameHost false was ignored")
+	}
+	yes := true
+	r.Trusted.SameHost = &yes
+	if !r.TrustedSameHost() {
+		t.Fatal("sameHost true was ignored")
+	}
+}
+
 func TestLegacyExposureDefaults(t *testing.T) {
 	e := validEntry()
 	if got := e.Route.DefaultExposure(); got != "authelia" {

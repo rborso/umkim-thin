@@ -367,13 +367,19 @@ existing one. Revoking it removes the link; redeeming it twice is refused.
 ## 6. Install your first app
 
 Console → **Catalog** → choose an app (start with **Gitea** or **Nextcloud**),
-pick the hostname and storage classes, and click **Install**. The same from the
-CLI:
+pick the hostname and storage classes, and click **Install**. The **Advanced**
+section in the same panel can render the chart's PVCs and override each claim's
+storage class and size, and can choose a namespace for an ordinary app. The same
+from the CLI:
 
 ```bash
 kubectl -n umkim-thin exec deploy/umkim-thin-console -- \
-  /usr/local/bin/umkim-thin app install gitea
+  /usr/local/bin/umkim-thin app install gitea --namespace gitea
 ```
+
+The `servarr` and `wireguard` namespaces are fixed because their bootstrap and
+gateway wiring use namespace-specific names. Existing apps cannot be moved by
+changing the namespace field; uninstall/reinstall is required.
 
 The installer:
 
@@ -470,6 +476,43 @@ over the tunnel, install it with `--exposure vpn` (and optionally
 `--allow-local`); the route is published only on the internal `vpn` entrypoint.
 The failover is not zero-downtime: an existing WireGuard session re-handshakes
 when the VIP moves.
+
+### Same-host trusted access
+
+To give native clients the public app URL over the VPN and/or management
+network, enable the trusted-access bypass in the generated `config.env`:
+
+```text
+UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true
+UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=true
+UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=172.16.10.0/24
+UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=172.16.10.1/32
+```
+
+The exclude list must contain the source address a public router or proxy
+masquerades to when that address falls inside the management CIDR; otherwise
+public requests would match the bypass. It can be empty when the public path
+preserves the real client source.
+
+If the ingress path SNATs every request to a node address (common with
+`externalTrafficPolicy: Cluster` and a remote endpoint), public and management
+are indistinguishable: disable the management bypass with
+`UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=false` and use the VPN path. Do not
+enable it on a path that destroys the source address.
+
+The management path is a high-priority Traefik `ClientIP` route on
+`websecure` with no Authelia. The VPN path uses the same host on the internal
+`vpn` entrypoint, with the existing source allowlist. Both still require the
+app's own `route.appAuth`. The public route remains Authelia-gated. The
+gateway resolves opted-in app hosts to itself and forwards `auth`, `console`
+and `home` normally; its DNAT is restricted to the gateway address so a
+full-tunnel client can still reach public names.
+
+Do not use `0.0.0.0/0` as a management CIDR. The installer rejects it.
+After changing the flag or CIDRs, reapply the console config and reinstall or
+upgrade the affected app so the route objects are reconciled; turning the flag
+off removes the stale bypass on the next install. The legacy `.vpn.<zone>`
+host remains available when a route sets `trusted.sameHost: false`.
 
 When upgrading from the old single-replica chart, delete the old Deployment
 first (`kubectl -n wireguard delete deploy wireguard-gateway`); the new chart

@@ -65,6 +65,20 @@ A release in `pending-*` is shown as **configuring** (amber), not as down: that
 is what a normal upgrade or bootstrap looks like. Readiness is cluster
 readiness, not an HTTP probe.
 
+## Trusted access
+
+`GET /api/config` also reports `trustedAccessEnabled`,
+`trustedManagementEnabled`, `trustedManagementCIDRs`, and
+`trustedManagementExcludeCIDRs`. The values come from the generated `config.env`
+(`UMKIM_THIN_TRUSTED_ACCESS_ENABLED`,
+`UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED`,
+`UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS`,
+`UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS`); the console does not accept a CIDR from
+a browser request. Catalog routes opt in with `trusted.management` /
+`trusted.vpn` and must declare `appAuth`. The console applies the public route,
+the high-priority management `IngressRoute` (`ClientIP`, no Authelia), and the
+same-host `vpn` Ingress (no Authelia, `vpn-only` allowlist) together.
+
 ## Storage classes
 
 `GET /api/config` returns the classes, the default marker, and access-mode
@@ -112,6 +126,42 @@ bootstrap as a background job:
 5. `helm upgrade --reuse-values` with `bootstrap.enabled=true`,
    `imagePullPolicy=Never` and a `nodeSelector` for the pinned node;
 6. Helm waits for the post-upgrade Job; its log is reported on failure.
+
+### Advanced install options
+
+Every install panel has an **Advanced: namespace, storage and resources**
+section. Opening it renders the chart once and lists each
+`PersistentVolumeClaim` with its current storage class, size and access mode,
+plus every workload container with its CPU/memory requests and limits. The
+operator can override the class and size per claim and the resources per
+container before installing. The install uses a Helm post-renderer to change
+those manifests, so this works for charts whose values use different paths for
+each volume or container.
+
+The **Validate resources & storage** button renders the same plan and checks the
+live cluster before Helm runs. It reports blocking errors for invalid
+quantities, missing classes, impossible Longhorn nominal capacity, and resource
+requests that cannot fit after existing requests; it reports warnings for
+things Kubernetes can only estimate, such as NFS export capacity, missing
+requests, and overcommitted limits. Installations run the same preflight on the
+server and refuse to create a release with blocking errors.
+
+The preflight resource fit is an aggregate estimate across nodes. It catches
+obviously impossible requests, but node affinity, taints, topology and
+per-node fragmentation can still affect placement. Keep a namespace
+`ResourceQuota` for a hard cluster-level ceiling.
+
+The namespace field is available for normal applications. It is fixed for
+`servarr` and `wireguard`, whose bootstrap/gateway wiring has namespace-specific
+names. A new app can be installed into a custom DNS-label namespace; an existing
+release cannot be moved, and the platform's system namespaces are rejected.
+The chosen namespace is recorded with the app state, so status, routes and
+uninstall continue to use it.
+
+The advanced storage form is for new installs. Existing PVCs cannot change
+storage class, and most cannot be shrunk. The catalog defaults below are
+deliberately sized for small metadata volumes; use the advanced form when a
+particular app needs a larger volume or a move to NFS.
 
 ### Default language and quality
 
@@ -237,8 +287,11 @@ image is a no-op (the chart's Jellyfin wizard step cannot be re-run).
 | GET | `/api/catalog` | catalog entries, including chart/application licences and upstream links |
 | GET | `/api/config` | zone, portal, default + classes |
 | GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence, upstream links) |
-| POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate` (async job) |
+| POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, per-PVC `pvcs`, and per-container `resources` overrides (async job) |
 | GET | `/api/apps/{name}` | one app's health, chart/app version and routes |
+| GET | `/api/apps/{name}/storage` | render the chart and list its PVCs/classes/sizes |
+| GET | `/api/apps/{name}/plan` | render the chart's PVCs and workload containers |
+| POST | `/api/apps/{name}/validate` | preflight storage/resource fit for the same install options |
 | GET | `/api/apps/{name}/versions` | installed + available chart/app versions |
 | POST | `/api/apps/{name}/upgrade` | `{version, confirmBackup}`; atomic upgrade job |
 | DELETE | `/api/apps/{name}?purge=` | uninstall (purge deletes data) |

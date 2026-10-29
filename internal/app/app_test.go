@@ -17,6 +17,8 @@ func testInstaller() *Installer {
 		ServiceCIDR:  "10.43.0.0/16",
 		PodCIDR:      "10.244.0.0/16",
 		DNSServiceIP: "10.43.0.10",
+
+		TrustedManagementEnabled: true,
 	})
 }
 
@@ -394,6 +396,193 @@ func TestContextVPN(t *testing.T) {
 		t.Fatalf("VPN + local rejected: %v", err)
 	}
 }
+
+func TestContextTrustedSameHost(t *testing.T) {
+	in := testInstaller()
+	in.cfg.TrustedAccessEnabled = true
+	in.cfg.TrustedManagementCIDRs = []string{"172.16.10.0/24"}
+	in.cfg.TrustedManagementExcludeCIDRs = []string{"172.16.10.1/32"}
+	in.cfg.VPNServerIP = "192.168.168.1"
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode:        "site",
+		Host:        "app.{{ .zone }}",
+		RequireAuth: true,
+		ServiceName: "app",
+		Trusted:     &catalog.TrustedAccess{Management: true, VPN: true},
+		AppAuth:     &catalog.AppAuth{Kind: "ldap"},
+	}}
+	ctx, err := in.context(e, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.hosts[""] != "app.example.com" || ctx.vpnHosts[""] != "app.example.com" {
+		t.Fatalf("same-host trusted routes = %+v / %+v", ctx.hosts, ctx.vpnHosts)
+	}
+	if !ctx.trustedMgmt[""] || !ctx.trustedVPN[""] {
+		t.Fatalf("trusted flags = %+v / %+v", ctx.trustedMgmt, ctx.trustedVPN)
+	}
+}
+
+func TestContextTrustedLegacyVPNHost(t *testing.T) {
+	in := testInstaller()
+	in.cfg.TrustedAccessEnabled = true
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode:        "site",
+		Host:        "app.{{ .zone }}",
+		RequireAuth: true,
+		Trusted:     &catalog.TrustedAccess{VPN: true, SameHost: boolPtr(false)},
+		AppAuth:     &catalog.AppAuth{Kind: "local"},
+	}}
+	ctx, err := in.context(e, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.hosts[""] != "app.example.com" || ctx.vpnHosts[""] != "app.vpn.example.com" {
+		t.Fatalf("legacy VPN host = %+v / %+v", ctx.hosts, ctx.vpnHosts)
+	}
+}
+
+func TestContextTrustedRejectsPublicAndMissingCIDRs(t *testing.T) {
+	in := testInstaller()
+	in.cfg.TrustedAccessEnabled = true
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode:        "site",
+		Host:        "app.{{ .zone }}",
+		RequireAuth: false,
+		Trusted:     &catalog.TrustedAccess{Management: true, VPN: true},
+		AppAuth:     &catalog.AppAuth{Kind: "local"},
+	}}
+	if _, err := in.context(e, Options{}); err == nil || !strings.Contains(err.Error(), "not public") {
+		t.Fatalf("trusted public install = %v", err)
+	}
+	e.Route.RequireAuth = true
+	if _, err := in.context(e, Options{}); err == nil || !strings.Contains(err.Error(), "TRUSTED_MANAGEMENT_CIDRS") {
+		t.Fatalf("missing management CIDRs = %v", err)
+	}
+}
+
+func TestContextTrustedRejectsBadCIDRs(t *testing.T) {
+	in := testInstaller()
+	in.cfg.TrustedAccessEnabled = true
+	in.cfg.TrustedManagementCIDRs = []string{"0.0.0.0/0"}
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode: "site", Host: "app.{{ .zone }}", RequireAuth: true,
+	}}
+	if _, err := in.context(e, Options{}); err == nil || !strings.Contains(err.Error(), "too broad") {
+		t.Fatalf("default route CIDR = %v", err)
+	}
+	in.cfg.TrustedManagementCIDRs = []string{"not-a-cidr"}
+	if _, err := in.context(e, Options{}); err == nil || !strings.Contains(err.Error(), "invalid trusted management CIDR") {
+		t.Fatalf("invalid route CIDR = %v", err)
+	}
+}
+
+func TestContextTrustedManagementCanBeDisabled(t *testing.T) {
+	in := testInstaller()
+	in.cfg.TrustedAccessEnabled = true
+	in.cfg.TrustedManagementEnabled = false
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode:        "site",
+		Host:        "app.{{ .zone }}",
+		RequireAuth: true,
+		Trusted:     &catalog.TrustedAccess{Management: true, VPN: true},
+		AppAuth:     &catalog.AppAuth{Kind: "ldap"},
+	}}
+	ctx, err := in.context(e, Options{})
+	if err != nil {
+		t.Fatalf("management-disabled route rejected: %v", err)
+	}
+	if ctx.trustedMgmt[""] || !ctx.trustedVPN[""] {
+		t.Fatalf("trusted flags = %+v / %+v", ctx.trustedMgmt, ctx.trustedVPN)
+	}
+}
+
+func TestContextTrustedNeedsAppAuth(t *testing.T) {
+	in := testInstaller()
+	in.cfg.TrustedAccessEnabled = true
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode:        "site",
+		Host:        "app.{{ .zone }}",
+		RequireAuth: true,
+		Trusted:     &catalog.TrustedAccess{VPN: true},
+	}}
+	if _, err := in.context(e, Options{}); err == nil || !strings.Contains(err.Error(), "appAuth.kind") {
+		t.Fatalf("trusted route without appAuth = %v", err)
+	}
+	e.Route.AppAuth = &catalog.AppAuth{Kind: "none"}
+	if _, err := in.context(e, Options{}); err == nil || !strings.Contains(err.Error(), "unsafe") {
+		t.Fatalf("trusted route with appAuth none = %v", err)
+	}
+}
+
+func TestContextTrustedFeatureOff(t *testing.T) {
+	in := testInstaller()
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode:        "site",
+		Host:        "app.{{ .zone }}",
+		RequireAuth: true,
+		Trusted:     &catalog.TrustedAccess{Management: true, VPN: true},
+		AppAuth:     &catalog.AppAuth{Kind: "local"},
+	}}
+	ctx, err := in.context(e, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.trustedMgmt[""] || ctx.trustedVPN[""] {
+		t.Fatalf("feature-disabled route got trusted paths: %+v", ctx)
+	}
+}
+
+func TestVPNDNSPairs(t *testing.T) {
+	dir := t.TempDir()
+	in := New(Config{
+		StateDir:             dir,
+		AppsState:            filepath.Join(dir, "apps-state.json"),
+		TrustedAccessEnabled: true,
+	})
+	c := contributions{
+		"app": {
+			Routes: map[string]routeSelection{
+				"": {Host: "app.example.com", VPNHost: "app.example.com", TrustedVPN: true},
+			},
+		},
+		"other": {
+			Routes: map[string]routeSelection{
+				"": {Host: "other.example.com", VPNHost: "other.vpn.example.com", TrustedVPN: true},
+			},
+		},
+	}
+	if err := in.saveContributions(c); err != nil {
+		t.Fatal(err)
+	}
+	got := in.vpnDNSPairs()
+	want := "app.example.com,other.vpn.example.com"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("vpnDNSPairs = %q, want %q", got, want)
+	}
+}
+
+func TestVPNDNSConfigMap(t *testing.T) {
+	out := vpnDNSConfigMap("wireguard-vpn-dns", "wireguard",
+		[]string{"app.example.com", "other.example.com"}, "192.168.168.1")
+	for _, want := range []string{
+		"name: wireguard-vpn-dns",
+		"namespace: wireguard",
+		"hosts: |",
+		"    app.example.com 192.168.168.1",
+		"    other.example.com 192.168.168.1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("DNS ConfigMap missing %q:\n%s", want, out)
+		}
+	}
+	empty := vpnDNSConfigMap("wireguard-vpn-dns", "wireguard", nil, "192.168.168.1")
+	if !strings.Contains(empty, `hosts: ""`) {
+		t.Fatalf("empty DNS ConfigMap = %s", empty)
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
 
 func TestUpgradeKeepsRouteSelection(t *testing.T) {
 	dir := t.TempDir()

@@ -39,6 +39,12 @@ route:
     allowed: [public, authelia, vpn]
   serviceName: mealie
   servicePort: 9000
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC; Forage/Ghee use a Mealie API token or login."
 
 auth:
   # OIDC, so recipes and households belong to directory users.
@@ -53,9 +59,11 @@ values:
   externalUrl: "https://{{ .host }}"
   persistence:
     data:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
   postgres:
     persistence:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
   bootstrap:
     adminEmail: "changeme@example.com"

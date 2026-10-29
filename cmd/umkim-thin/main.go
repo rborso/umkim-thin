@@ -24,6 +24,7 @@ Usage:
   umkim-thin app install <name>        install an app from the catalog
   umkim-thin app versions <name>       show installed and available versions
   umkim-thin app upgrade <name> --to V upgrade to a catalogued chart version
+  umkim-thin app reconcile <name>      republish routes without running Helm
   umkim-thin app list                  list installed apps
   umkim-thin app status <name>         show an app's workloads and routes
   umkim-thin app uninstall <name>      remove an installed app (--purge for data)
@@ -86,6 +87,13 @@ func main() {
 		if err := wgCmd(args[1:]); err != nil {
 			fatal(err)
 		}
+	case "helm-postrender":
+		if len(args) < 2 {
+			fatal(fmt.Errorf("helm-postrender needs an overrides JSON file"))
+		}
+		if err := app.PostRender(args[1]); err != nil {
+			fatal(err)
+		}
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -96,7 +104,7 @@ func main() {
 
 func appCmd(dir string, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("app needs a subcommand: install | versions | upgrade | list | status | uninstall")
+		return fmt.Errorf("app needs a subcommand: install | reconcile | versions | upgrade | list | status | uninstall")
 	}
 	entries, err := catalog.Load(dir)
 	if err != nil {
@@ -129,6 +137,7 @@ func appCmd(dir string, args []string) error {
 		fs := flag.NewFlagSet("app install", flag.ContinueOnError)
 		configClass := fs.String("config-class", "", "RWO storage class (default: site's config class)")
 		mediaClass := fs.String("media-class", "", "RWX storage class (default: site's media class)")
+		namespace := fs.String("namespace", "", "namespace for a new install (default: catalog namespace)")
 		version := fs.String("version", "", "catalogued chart version (default: stable)")
 		allowLocal := fs.Bool("allow-local", false, "also allow the site LAN on VPN routes")
 		var hosts hostFlags
@@ -140,7 +149,7 @@ func appCmd(dir string, args []string) error {
 			return err
 		}
 		opts := app.Options{Hosts: hosts.m, ConfigClass: *configClass, MediaClass: *mediaClass,
-			Exposure: exposures.m, Certificate: certificates.m, ChartVersion: *version}
+			Namespace: *namespace, Exposure: exposures.m, Certificate: certificates.m, ChartVersion: *version}
 		applyAllowLocal(e, &opts, *allowLocal)
 		fmt.Printf("installing %s (chart %s)...\n", e.Name, choose(*version, e.Chart.Version))
 		res, err := in.Install(e, opts)
@@ -148,6 +157,23 @@ func appCmd(dir string, args []string) error {
 			return err
 		}
 		fmt.Printf("installed %s in namespace %s\n", res.Name, res.Namespace)
+		for _, h := range res.Routes {
+			fmt.Printf("  https://%s\n", h)
+		}
+		return nil
+	case "reconcile":
+		if len(args) < 2 {
+			return fmt.Errorf("app reconcile needs a name")
+		}
+		e, ok := byName[args[1]]
+		if !ok {
+			return fmt.Errorf("no catalog entry named %q", args[1])
+		}
+		res, err := in.ReconcileRoutes(e, app.Options{})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("reconciled routes for %s\n", res.Name)
 		for _, h := range res.Routes {
 			fmt.Printf("  https://%s\n", h)
 		}

@@ -33,6 +33,12 @@ route:
     allowed: [public, authelia, vpn]
   serviceName: paperless-web
   servicePort: 8000
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC; Paperless mobile clients use an API token."
 
 auth:
   # OIDC, so documents belong to real users rather than to one shared session.
@@ -54,15 +60,20 @@ values:
   # the cluster default, which is Longhorn RWO on HA.
   persistence:
     data:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
     media:
+      size: 20Gi
       storageClass: "{{ .storage.mediaClass }}"
     consume:
+      size: 2Gi
       storageClass: "{{ .storage.mediaClass }}"
     export:
+      size: 2Gi
       storageClass: "{{ .storage.mediaClass }}"
   postgres:
     persistence:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
   # The chart builds the OIDC CA bundle itself: the image's public roots plus
   # the optional platform CA. This works with a private CA (lab) and with a

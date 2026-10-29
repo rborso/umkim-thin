@@ -136,6 +136,14 @@ helm template t charts/identity -f "$identity_values" \
   --set lldap.externalUrl=ldap://directory.example.com:3890 \
   --set authelia.ldapPassword=ci-only-external >/dev/null
 helm template t charts/wireguard-gateway >/dev/null
+grep -q -- '-d "${GATEWAY_IP}"' charts/wireguard-gateway/templates/configmap.yaml || {
+  echo "wireguard DNAT is not destination-scoped" >&2
+  exit 1
+}
+grep -q 'name: wireguard-vpn-dns' charts/wireguard-gateway/templates/vpn-dns.yaml || {
+  echo "wireguard split-DNS ConfigMap is missing" >&2
+  exit 1
+}
 echo "   ok"
 
 echo ">> no floating image tags"

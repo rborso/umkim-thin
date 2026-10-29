@@ -5,6 +5,16 @@ node that owns the kube-vip VIP already has a local UDP 51820 listener. Peers
 come from a Kubernetes Secret; app routes can be published with
 `exposure: vpn`.
 
+The chart also runs a dedicated cluster-network `vpn-dns` deployment and
+service (`10.43.200.53` by default). The installer writes the
+`wireguard-vpn-dns` ConfigMap with the public hostnames of routes that opted
+into `trusted.vpn`; the DNS pod answers those names with the gateway address
+and forwards every other name to the node resolver. Clients receive this
+service address in their WireGuard `DNS` line. The gateway's `:443` DNAT is
+scoped to the gateway address and targets the Traefik `vpn` entrypoint, so
+full-tunnel clients can still reach public hostnames normally. The legacy
+`<host>.vpn.<zone>` wildcard remains available through `vpnZone`.
+
 ## License
 
 The chart source is Apache-2.0, part of umkim-thin. The WireGuard implementation

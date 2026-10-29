@@ -49,7 +49,7 @@ func ConfigFromEnv() Config {
 		ServerIP:   env("UMKIM_THIN_WG_SERVER_IP", "192.168.168.1"),
 		Port:       atoi(env("UMKIM_THIN_WG_PORT", "51820")),
 		Endpoint:   env("UMKIM_THIN_WG_ENDPOINT", ""),
-		DNS:        env("UMKIM_THIN_DNS_IP", "10.43.0.10"),
+		DNS:        env("UMKIM_THIN_VPN_DNS_IP", "10.43.200.53"),
 		AllowedIPs: extra,
 		StateFile:  env("UMKIM_THIN_WG_STATE", stateDir+"/wg-clients.json"),
 	}

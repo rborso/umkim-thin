@@ -1,0 +1,92 @@
+# Dedicated DNS front for VPN clients. The gateway host-network address cannot
+# reliably receive UDP/53 (the HA ingress path handles only the DNATed TCP/443
+# flow), so the DNS endpoint is a normal pod/service and the gateway forwards
+# tunnel :53 to it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wireguard-vpn-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: wireguard-gateway
+data:
+  hosts: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vpn-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: vpn-dns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vpn-dns
+  template:
+    metadata:
+      labels:
+        app: vpn-dns
+    spec:
+      containers:
+        - name: dnsmasq
+          image: {{ .Values.vpnDNSImage | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache dnsmasq >/dev/null 2>&1
+              i=0
+              while [ ! -s /dns/hosts ] && [ "$i" -lt 30 ]; do
+                sleep 1
+                i=$((i + 1))
+              done
+              {
+                echo "no-resolv"
+                echo "server={{ .Values.vpnDNSUpstream }}"
+                while read -r host ip; do
+                  [ -n "$host" ] || continue
+                  [ -n "$ip" ] || continue
+                  echo "host-record=$host,$ip"
+                done < /dns/hosts
+              } > /etc/dnsmasq.conf
+              exec dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf --log-facility=-
+          ports:
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+          volumeMounts:
+            - name: hosts
+              mountPath: /dns
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: dns-tcp
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: hosts
+          configMap:
+            name: wireguard-vpn-dns
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vpn-dns
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: {{ .Values.vpnDNSClusterIP | quote }}
+  selector:
+    app: vpn-dns
+  ports:
+    - name: dns-udp
+      port: 53
+      targetPort: dns-udp
+      protocol: UDP
+    - name: dns-tcp
+      port: 53
+      targetPort: dns-tcp
+      protocol: TCP

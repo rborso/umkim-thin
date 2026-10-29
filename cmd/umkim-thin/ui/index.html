@@ -287,7 +287,7 @@
         <button type="submit" class="primary">Create client</button>
       </form>
       <div id="wg-result">
-        <img id="wg-qr" alt="WireGuard config QR" style="width:220px; image-rendering:pixelated; border:1px solid var(--line); border-radius:.5rem">
+        <img id="wg-qr" alt="WireGuard config QR" style="width:320px; image-rendering:pixelated; border:1px solid var(--line); border-radius:.5rem">
         <pre id="wg-config"></pre>
         <button id="wg-download">Download .conf</button>
       </div>
@@ -868,8 +868,11 @@ function openInstall(e) {
   for (const r of sites) {
     const key = r.Key || '';
     const exp = r.Exposure || {};
-    const allowed = exp.Allowed || (r.RequireAuth ? ['authelia', 'vpn'] : ['public', 'authelia', 'vpn']);
-    const def = exp.Default || (r.RequireAuth ? 'authelia' : 'public');
+    const trusted = r.Trusted || {};
+    const trustedRoute = trusted.Management || trusted.VPN;
+    const allowed = (exp.Allowed || (r.RequireAuth ? ['authelia', 'vpn'] : ['public', 'authelia', 'vpn']))
+      .filter(v => !(trustedRoute && v === 'public'));
+    const def = (exp.Default && allowed.includes(exp.Default)) ? exp.Default : allowed[0];
     const cert = r.Certificate || {};
     const certAllowed = cert.Allowed || ['acme', 'default', 'secret'];
     hostFields += `<div><label>${esc(key ? key + ' ' : '')}hostname</label>` +
@@ -882,6 +885,9 @@ function openInstall(e) {
       `</select>` +
       `<input data-cert-secret-key="${esc(key)}" placeholder="TLS Secret name for manual" style="width:100%">` +
       `<label><input type="checkbox" data-local-key="${esc(key)}"> also allow the local LAN</label>` +
+      (trustedRoute
+        ? `<span class="hint">Trusted networks: ${esc(trusted.Management ? 'management ' : '')}${esc(trusted.VPN ? 'VPN ' : '')}— app auth: ${esc((r.AppAuth && r.AppAuth.Kind) || 'required')}</span>`
+        : '') +
       `</div>`;
   }
   const chart = e.Chart || {};
@@ -916,6 +922,18 @@ function openInstall(e) {
       `<div><label>Media storage class (RWX on HA)</label><select id="med-class"></select></div>` +
     `</div>` +
     `<div id="media-warn" class="muted"></div>` +
+    `<details id="install-advanced" style="margin-top:.75rem;border:1px solid var(--line);border-radius:.55rem;padding:.6rem .7rem;background:#fbfcfe">` +
+      `<summary style="cursor:pointer;font-weight:650">Advanced: namespace, storage and resources</summary>` +
+      `<div class="row" style="margin-top:.6rem">` +
+        `<div><label>Namespace</label><input id="install-namespace" value="${esc(e.Namespace)}" style="width:100%"${e.Name === 'servarr' || e.Name === 'wireguard' ? ' disabled' : ''}>` +
+        `<span class="hint">${e.Name === 'servarr' || e.Name === 'wireguard' ? 'This stack has namespace-specific wiring and stays in its catalog namespace.' : 'Leave empty/default for a normal install. A new app gets a new namespace; an installed app cannot be moved.'}</span></div>` +
+        `<div style="flex:0 0 auto;align-self:end"><button type="button" id="refresh-pvc-plan">Refresh plan</button> <button type="button" id="validate-install">Validate resources &amp; storage</button></div>` +
+      `</div>` +
+      `<div id="pvc-plan" class="muted" style="margin-top:.5rem"></div>` +
+      `<div id="resource-plan" class="muted" style="margin-top:.5rem"></div>` +
+      `<div id="install-validation" class="muted" style="margin-top:.5rem;white-space:pre-wrap"></div>` +
+      `<span class="hint">Storage and resource overrides are applied by a Helm post-renderer. Use Kubernetes quantities such as <code>2Gi</code>, <code>500Mi</code>, <code>100m</code>, or <code>1</code>. Blank fields inherit the chart value; limits must be at least requests.</span>` +
+    `</details>` +
     `<p class="hint"><strong>License:</strong> ${licenseSummary(e)}</p>` +
     `<p class="hint"><strong>Upstream:</strong> ${linksMarkup(e) || "not recorded"}</p>` +
     `<div style="margin-top:1rem"><button id="do-install">Install</button> <button id="cancel-install">Cancel</button></div>`;
@@ -946,13 +964,94 @@ function openInstall(e) {
   classOptions(document.getElementById('med-class'), CFG.mediaClass);
   document.getElementById('med-class').onchange = mediaWarning;
   mediaWarning();
+  const refreshPlan = () => { if (document.getElementById('install-advanced')?.open) loadInstallPlan(e, panel); };
+  document.getElementById('cfg-class').addEventListener('change', refreshPlan);
+  document.getElementById('med-class').addEventListener('change', refreshPlan);
+  const advanced = document.getElementById('install-advanced');
+  advanced.addEventListener('toggle', () => {
+    if (advanced.open) loadInstallPlan(e, panel);
+  });
+  const nsInput = document.getElementById('install-namespace');
+  nsInput.addEventListener('change', () => { if (advanced.open) loadInstallPlan(e, panel); });
+  document.getElementById('refresh-pvc-plan').onclick = () => loadInstallPlan(e, panel);
+  document.getElementById('validate-install').onclick = () => validateInstall(e, panel);
   document.getElementById('cancel-install').onclick = () => { panel.style.display = 'none'; };
   document.getElementById('do-install').onclick = () => doInstall(e, panel);
 }
 
-async function doInstall(e, panel) {
-  const btn = document.getElementById('do-install');
-  btn.disabled = true; btn.textContent = 'Installing…';
+async function loadInstallPlan(e, panel) {
+  const pvcBox = document.getElementById('pvc-plan');
+  const resourceBox = document.getElementById('resource-plan');
+  if (!pvcBox || !resourceBox) return;
+  const nsInput = document.getElementById('install-namespace');
+  const namespace = nsInput ? nsInput.value.trim() : '';
+  const params = new URLSearchParams();
+  if (namespace) params.set('namespace', namespace);
+  const cfgClass = document.getElementById('cfg-class')?.value || '';
+  const medClass = document.getElementById('med-class')?.value || '';
+  const version = document.getElementById('install-version')?.value || '';
+  if (cfgClass) params.set('configClass', cfgClass);
+  if (medClass) params.set('mediaClass', medClass);
+  if (version) params.set('version', version);
+  pvcBox.textContent = 'rendering plan…';
+  resourceBox.textContent = '';
+  try {
+    const url = '/api/apps/' + encodeURIComponent(e.Name) + '/plan' +
+      (params.toString() ? '?' + params.toString() : '');
+    const res = await fetch(url);
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const plan = JSON.parse(text) || {};
+    const pvcs = plan.pvcs || [];
+    const containers = plan.containers || [];
+    if (!pvcs.length) {
+      pvcBox.textContent = 'This chart has no PersistentVolumeClaims.';
+    } else {
+      pvcBox.innerHTML = pvcs.map(p => {
+        const modes = (p.accessModes || []).join(', ');
+        return `<div class="pvc-row" data-pvc="${esc(p.name)}" style="display:flex;gap:.7rem;flex-wrap:wrap;align-items:end;border-top:1px solid var(--line);padding:.55rem 0">` +
+          `<div style="flex:1 1 14rem"><strong>${esc(p.name)}</strong>` +
+            (modes ? `<br><span class="hint">${esc(modes)}</span>` : '') +
+            `<br><span class="hint">${esc(p.namespace || namespace || '')}</span></div>` +
+          `<div style="flex:0 1 13rem"><label>Storage class</label><select data-pvc-class="${esc(p.name)}"></select></div>` +
+          `<div style="flex:0 1 8rem"><label>Size</label><input data-pvc-size="${esc(p.name)}" value="${esc(p.size || '')}" style="width:100%"></div>` +
+        `</div>`;
+      }).join('');
+      for (const p of pvcs) {
+        const sel = pvcBox.querySelector(`select[data-pvc-class="${CSS.escape(p.name)}"]`);
+        if (!sel) continue;
+        classOptions(sel, p.storageClass || '');
+        if (!p.storageClass) {
+          const o = document.createElement('option');
+          o.value = '';
+          o.textContent = '(cluster default)';
+          o.selected = true;
+          sel.prepend(o);
+        }
+      }
+    }
+    if (!containers.length) {
+      resourceBox.textContent = 'This chart has no workload containers to tune.';
+    } else {
+      resourceBox.innerHTML = containers.map(c => {
+        const key = c.key || '';
+        const init = c.init ? ' · init' : '';
+        return `<div class="resource-row" data-resource-key="${esc(key)}" style="display:flex;gap:.55rem;flex-wrap:wrap;align-items:end;border-top:1px solid var(--line);padding:.55rem 0">` +
+          `<div style="flex:1 1 14rem"><strong>${esc(c.container || '')}</strong>` +
+            `<br><span class="hint">${esc(c.kind || '')}/${esc(c.workload || '')}${init}</span></div>` +
+          `<div style="flex:0 1 7rem"><label>CPU request</label><input data-res-cpu-request="${esc(key)}" value="${esc(c.cpuRequest || '')}" placeholder="inherit" style="width:100%"></div>` +
+          `<div style="flex:0 1 7rem"><label>CPU limit</label><input data-res-cpu-limit="${esc(key)}" value="${esc(c.cpuLimit || '')}" placeholder="inherit" style="width:100%"></div>` +
+          `<div style="flex:0 1 7rem"><label>Memory request</label><input data-res-memory-request="${esc(key)}" value="${esc(c.memoryRequest || '')}" placeholder="inherit" style="width:100%"></div>` +
+          `<div style="flex:0 1 7rem"><label>Memory limit</label><input data-res-memory-limit="${esc(key)}" value="${esc(c.memoryLimit || '')}" placeholder="inherit" style="width:100%"></div>` +
+        `</div>`;
+      }).join('');
+    }
+  } catch (err) {
+    pvcBox.textContent = 'Plan unavailable: ' + String(err.message || err);
+  }
+}
+
+function installRequestBody(e, panel) {
   const hosts = {}, exposure = {}, certificate = {}, allowLocal = {};
   for (const input of panel.querySelectorAll('input[data-host-key]')) hosts[input.dataset.hostKey] = input.value.trim();
   for (const sel of panel.querySelectorAll('select[data-exposure-key]')) exposure[sel.dataset.exposureKey] = sel.value;
@@ -967,10 +1066,24 @@ async function doInstall(e, panel) {
   for (const box of panel.querySelectorAll('input[data-local-key]')) {
     if (box.checked) allowLocal[box.dataset.localKey] = true;
   }
-  if (Object.values(exposure).includes('public') &&
-      !confirm('PUBLIC exposure makes this app reachable without the portal.\n\nContinue only if the app has its own authentication or is intentionally public.')) {
-    btn.disabled = false; btn.textContent = 'Install';
-    return;
+  const nsInput = document.getElementById('install-namespace');
+  const pvcs = {};
+  for (const row of panel.querySelectorAll('[data-pvc]')) {
+    const name = row.dataset.pvc;
+    const cls = row.querySelector('[data-pvc-class]')?.value.trim() || '';
+    const size = row.querySelector('[data-pvc-size]')?.value.trim() || '';
+    if (cls || size) pvcs[name] = { storageClass: cls, size };
+  }
+  const resources = {};
+  for (const row of panel.querySelectorAll('[data-resource-key]')) {
+    const key = row.dataset.resourceKey;
+    const r = {
+      cpuRequest: row.querySelector('[data-res-cpu-request]')?.value.trim() || '',
+      cpuLimit: row.querySelector('[data-res-cpu-limit]')?.value.trim() || '',
+      memoryRequest: row.querySelector('[data-res-memory-request]')?.value.trim() || '',
+      memoryLimit: row.querySelector('[data-res-memory-limit]')?.value.trim() || '',
+    };
+    if (r.cpuRequest || r.cpuLimit || r.memoryRequest || r.memoryLimit) resources[key] = r;
   }
   const body = {
     name: e.Name,
@@ -978,6 +1091,8 @@ async function doInstall(e, panel) {
     hosts, exposure, certificate, allowLocal,
     configClass: document.getElementById('cfg-class').value,
     mediaClass: document.getElementById('med-class').value,
+    namespace: nsInput && !nsInput.disabled ? nsInput.value.trim() : '',
+    pvcs, resources,
   };
   if (e.Name === 'servarr') {
     body.mediaLanguage = document.getElementById('install-media-language').value;
@@ -985,17 +1100,66 @@ async function doInstall(e, panel) {
     body.extraLanguages = Array.from(document.getElementById('install-extra-languages').selectedOptions)
       .map(option => option.value);
   }
-  if (e.Name === 'nextcloud') {
-    body.language = document.getElementById('install-language').value;
+  if (e.Name === 'nextcloud') body.language = document.getElementById('install-language').value;
+  if (e.Name === 'gitea') body.language = document.getElementById('install-gitea-language').value;
+  if (e.Name === 'paperless') body.ocrLanguage = document.getElementById('install-ocr-language').value;
+  return body;
+}
+
+function renderValidation(out) {
+  const el = document.getElementById('install-validation');
+  if (!el) return;
+  const lines = [];
+  if (out.ok) lines.push('Preflight passed: storage and resource requests fit the current cluster.');
+  else lines.push('Preflight FAILED — fix these before installing:');
+  for (const e of out.errors || []) lines.push('ERROR  ' + e.scope + ': ' + e.message);
+  for (const w of out.warnings || []) lines.push('WARN   ' + w.scope + ': ' + w.message);
+  if (!lines.length) lines.push('Preflight returned no checks.');
+  el.textContent = lines.join('\n');
+  el.style.color = out.ok ? '' : 'var(--err-ink)';
+}
+
+async function requestValidation(e, body) {
+  const res = await fetch('/api/apps/' + encodeURIComponent(e.Name) + '/validate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+  return JSON.parse(text);
+}
+
+async function validateInstall(e, panel) {
+  const btn = document.getElementById('validate-install');
+  if (btn) { btn.disabled = true; btn.textContent = 'Validating…'; }
+  try {
+    const out = await requestValidation(e, installRequestBody(e, panel));
+    renderValidation(out);
+  } catch (err) {
+    const el = document.getElementById('install-validation');
+    if (el) { el.style.color = 'var(--err-ink)'; el.textContent = 'Validation failed: ' + String(err.message || err); }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Validate resources & storage'; }
   }
-  if (e.Name === 'gitea') {
-    body.language = document.getElementById('install-gitea-language').value;
-  }
-  if (e.Name === 'paperless') {
-    body.ocrLanguage = document.getElementById('install-ocr-language').value;
+}
+
+async function doInstall(e, panel) {
+  const btn = document.getElementById('do-install');
+  btn.disabled = true; btn.textContent = 'Installing…';
+  const body = installRequestBody(e, panel);
+  if (Object.values(body.exposure).includes('public')) {
+    if (!confirm('PUBLIC exposure makes this app reachable without the portal.\n\nContinue only if the app has its own authentication or is intentionally public.')) {
+      btn.disabled = false; btn.textContent = 'Install';
+      return;
+    }
   }
   note(`installing ${e.Name}…`);
   try {
+    const preflight = await requestValidation(e, body);
+    renderValidation(preflight);
+    if (!preflight.ok) {
+      note('preflight failed; see the Advanced panel for details.', 'err');
+      return;
+    }
     const res = await fetch('/api/apps', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });

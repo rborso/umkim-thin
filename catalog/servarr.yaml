@@ -37,6 +37,12 @@ routes:
       allowed: [public, authelia, vpn]
     serviceName: seerr
     servicePort: 80
+    trusted:
+      management: true
+      vpn: true
+    appAuth:
+      kind: local
+      note: "Seerr signs in through Jellyfin."
   - key: jellyfin
     host: "jellyfin.{{ .zone }}"
     requireAuth: true
@@ -45,6 +51,12 @@ routes:
       allowed: [public, authelia, vpn]
     serviceName: jellyfin
     servicePort: 80
+    trusted:
+      management: true
+      vpn: true
+    appAuth:
+      kind: ldap
+      note: "Jellyfin's LDAP users; native clients sign in directly."
   - key: sonarr
     host: "sonarr.{{ .zone }}"
     requireAuth: true
@@ -53,6 +65,12 @@ routes:
       allowed: [public, authelia, vpn]
     serviceName: sonarr
     servicePort: 80
+    trusted:
+      management: false
+      vpn: true
+    appAuth:
+      kind: local
+      note: "Sonarr local login or API key."
   - key: radarr
     host: "radarr.{{ .zone }}"
     requireAuth: true
@@ -61,6 +79,12 @@ routes:
       allowed: [public, authelia, vpn]
     serviceName: radarr
     servicePort: 80
+    trusted:
+      management: false
+      vpn: true
+    appAuth:
+      kind: local
+      note: "Radarr local login or API key."
   # Indexer management and the download client are part of the stack's UI: an
   # operator has to reach them, and without routes they are only reachable from
   # inside the cluster.
@@ -72,6 +96,12 @@ routes:
       allowed: [public, authelia, vpn]
     serviceName: prowlarr
     servicePort: 80
+    trusted:
+      management: false
+      vpn: true
+    appAuth:
+      kind: local
+      note: "Prowlarr local login or API key."
   - key: qbittorrent
     host: "qbittorrent.{{ .zone }}"
     requireAuth: true
@@ -80,6 +110,12 @@ routes:
       allowed: [public, authelia, vpn]
     serviceName: qbittorrent
     servicePort: 80
+    trusted:
+      management: false
+      vpn: true
+    appAuth:
+      kind: local
+      note: "qBittorrent WebUI password; keep this route on the VPN in practice."
 
 auth:
   # Forward-auth for the web UIs. Jellyfin's native clients cannot complete a
@@ -103,6 +139,13 @@ values:
   media:
     enabled: true
     size: 50Gi
+  apps:
+    qbittorrent:
+      # The chart default is 5Gi. The active config is a few hundred MiB; keep
+      # the Longhorn nominal request small and let Advanced resize it if needed.
+      configSize: 2Gi
+    jellyfin:
+      configSize: 2Gi
   bootstrap:
     # The chart's bootstrap runs a Playwright image built from this repo.
     # The console builds and imports it on demand; set bootstrap.image only

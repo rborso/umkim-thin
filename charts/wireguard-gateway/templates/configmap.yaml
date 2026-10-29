@@ -11,11 +11,12 @@ data:
     set -eu
     echo "==> installing wireguard tools"
     for i in 1 2 3 4 5; do
-      apk add --no-cache wireguard-tools iproute2 iptables >/dev/null 2>&1 && break
+      apk add --no-cache wireguard-tools iproute2 iptables dnsmasq >/dev/null 2>&1 && break
       echo "==> apk failed (attempt $i), retrying"
       sleep 5
     done
     apk info wireguard-tools >/dev/null 2>&1 || { echo "==> cannot install wireguard tools"; exit 1; }
+    apk info dnsmasq >/dev/null 2>&1 || { echo "==> cannot install dnsmasq"; exit 1; }
 
     CONF=/etc/wireguard/wg0.conf
     build() {
@@ -30,25 +31,75 @@ data:
       } > "$CONF"
     }
 
+    # The HA host input path/Calico can drop direct UDP to the gateway port.
+    # OpenWRT forwards WAN 51820 to the VIP, so this rule is what makes the
+    # public endpoint usable without disabling the host firewall.
+    iptables -C INPUT -p udp --dport "${PORT}" -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p udp --dport "${PORT}" -j ACCEPT
+
     build
     ip link show wg0 >/dev/null 2>&1 || ip link add wg0 type wireguard
     ip addr replace "$(cat /config/server-address)" dev wg0
     wg setconf wg0 "$CONF"
     ip link set wg0 up
 
-    # VPN-only routes live on Traefik's internal "vpn" entrypoint (NodePort
-    # 30444 by default). DNAT the tunnel's :443 there; the public router never
-    # forwards 30444 and the route has an IP allowlist as a second layer.
+    GATEWAY_IP="${GATEWAY_IP:-$(cat /config/server-address)}"
+    GATEWAY_IP="${GATEWAY_IP%/*}"
+    NODE_IP="${NODE_IP:-$(ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2; exit}' | cut -d/ -f1)}"
     VPN_PORT="${TRAEFIK_VPN_PORT:-30444}"
-    iptables -t nat -C PREROUTING -s "${SUBNET}" -p tcp --dport 443 \
-      -j DNAT --to-destination "127.0.0.1:${VPN_PORT}" 2>/dev/null || \
-      iptables -t nat -A PREROUTING -s "${SUBNET}" -p tcp --dport 443 \
-        -j DNAT --to-destination "127.0.0.1:${VPN_PORT}"
-    # Keep the client source address on the Traefik path so the vpn-only
-    # allowlist can distinguish a peer from the node/LAN. Insert before the
-    # general masquerade rule.
-    iptables -t nat -C POSTROUTING -s "${SUBNET}" -d 127.0.0.1 -p tcp --dport "${VPN_PORT}" -j RETURN 2>/dev/null || \
-      iptables -t nat -I POSTROUTING 1 -s "${SUBNET}" -d 127.0.0.1 -p tcp --dport "${VPN_PORT}" -j RETURN
+    TRAEFIK_VPN_SERVICE="${TRAEFIK_VPN_SERVICE:-traefik-vpn-direct.kube-system.svc.cluster.local}"
+    CLUSTER_DNS="${CLUSTER_DNS:-10.43.0.10}"
+    resolve_traefik() {
+      [ -n "${TRAEFIK_VPN_HOST_OVERRIDE:-}" ] && { TRAEFIK_VPN_HOST="${TRAEFIK_VPN_HOST_OVERRIDE}"; return; }
+      resolved=$(nslookup "${TRAEFIK_VPN_SERVICE}" "${CLUSTER_DNS}" 2>/dev/null \
+        | awk '/^Address: /{print $2}' | grep -E '^[0-9.]+$' | grep -v "^${CLUSTER_DNS}$" | head -1)
+      [ -n "${resolved}" ] && TRAEFIK_VPN_HOST="${resolved}"
+    }
+    resolve_traefik
+    [ -n "${TRAEFIK_VPN_HOST}" ] || TRAEFIK_VPN_HOST="${NODE_IP}"
+    # Headless DNS returns the Traefik pod IP, so target its container port.
+    # If a node/IP override is used, target the NodePort instead.
+    if [ -n "${TRAEFIK_VPN_HOST_OVERRIDE:-}" ]; then
+      VPN_TARGET="${TRAEFIK_VPN_HOST}:${VPN_PORT}"
+    else
+      VPN_TARGET="${TRAEFIK_VPN_HOST}:9443"
+    fi
+
+    # VPN-only routes live on Traefik's internal "vpn" entrypoint (NodePort
+    # 30444 by default). DNAT only traffic addressed to the gateway's tunnel
+    # address: public names (auth/console/home) must keep going to their normal
+    # destination, especially for full-tunnel clients. The old unscoped rule
+    # is removed on upgrade; it would capture every VPN :443 connection.
+    # Remove both older layouts before installing the current target: the old
+    # unscoped rule and any scoped rule pointing at a previous Traefik port.
+    for old_port in 30443 30444 "${VPN_PORT}"; do
+      while iptables -t nat -D PREROUTING -s "${SUBNET}" -d "${GATEWAY_IP}" -p tcp --dport 443 \
+        -j DNAT --to-destination "127.0.0.1:${old_port}" 2>/dev/null; do :; done
+      while iptables -t nat -D PREROUTING -s "${SUBNET}" -d "${GATEWAY_IP}" -p tcp --dport 443 \
+        -j DNAT --to-destination "${NODE_IP}:${old_port}" 2>/dev/null; do :; done
+      while iptables -t nat -D PREROUTING -s "${SUBNET}" -p tcp --dport 443 \
+        -j DNAT --to-destination "127.0.0.1:${old_port}" 2>/dev/null; do :; done
+    done
+    # Insert above CNI/hostPort rules. Target the Traefik node's NodePort, not
+    # loopback: the Traefik pod may be on another node and kube-proxy handles
+    # the cross-node NodePort. TRAEFIK_VPN_HOST is the node pinned for Traefik.
+    iptables -t nat -I PREROUTING 1 -s "${SUBNET}" -d "${GATEWAY_IP}" -p tcp --dport 443 \
+      -j DNAT --to-destination "${VPN_TARGET}"
+    # UDP/TCP DNS is served by the cluster-network vpn-dns pod; host-network
+    # input on the gateway address is not a reliable path in this topology.
+    VPN_DNS_IP="${VPN_DNS_CLUSTER_IP:-10.43.200.53}"
+    for proto in udp tcp; do
+      iptables -t nat -I PREROUTING 1 -s "${SUBNET}" -d "${GATEWAY_IP}" -p "${proto}" --dport 53 \
+        -j DNAT --to-destination "${VPN_DNS_IP}:53"
+    done
+    # The Traefik pod may be on another node. Let the general MASQUERADE below
+    # SNAT the tunnel source to this node so the reply returns through this
+    # WireGuard session; the vpn entrypoint/allowlist still gates the route.
+    for old_port in 30443 30444 "${VPN_PORT}" "9443"; do
+      while iptables -t nat -D POSTROUTING -s "${SUBNET}" -d 127.0.0.1 -p tcp --dport "${old_port}" -j RETURN 2>/dev/null; do :; done
+      while iptables -t nat -D POSTROUTING -s "${SUBNET}" -d "${NODE_IP}" -p tcp --dport "${old_port}" -j RETURN 2>/dev/null; do :; done
+      while iptables -t nat -D POSTROUTING -s "${SUBNET}" -d "${TRAEFIK_VPN_HOST}" -p tcp --dport "${old_port}" -j RETURN 2>/dev/null; do :; done
+    done
 
     # Send the rest of the client traffic to the cluster out of the node; the
     # node already has ip_forward set, and kube-proxy/flannel route the cluster
@@ -56,11 +107,76 @@ data:
     iptables -t nat -C POSTROUTING -s "${SUBNET}" ! -o wg0 -j MASQUERADE 2>/dev/null || \
       iptables -t nat -A POSTROUTING -s "${SUBNET}" ! -o wg0 -j MASQUERADE
 
+    # Split DNS for same-host app routes. Public names (auth/console/home and
+    # anything not listed) go to the node resolver; only the app hosts in the
+    # wireguard-vpn-dns ConfigMap resolve to the gateway. The old .vpn.<zone>
+    # wildcard remains a fallback for clients that have not migrated.
+    DNS_CONF=/etc/dnsmasq.conf
+    DNS_HOSTS=/dns/hosts
+    DNS_PID=/run/dnsmasq.pid
+    # The projected ConfigMap can appear just after the pod starts. Wait for it
+    # so the first dnsmasq process already has the host-record entries.
+    i=0
+    while [ ! -s "${DNS_HOSTS}" ] && [ "${i}" -lt 30 ]; do
+      sleep 1
+      i=$((i + 1))
+    done
+    configure_dns() {
+      upstream=$(awk '$1 == "nameserver" { print $2; exit }' /etc/resolv.conf 2>/dev/null || true)
+      [ -n "${upstream}" ] || upstream="1.1.1.1"
+      [ "${upstream}" != "${GATEWAY_IP}" ] || upstream="1.1.1.1"
+      {
+        echo "no-resolv"
+        echo "bind-interfaces"
+        echo "listen-address=${GATEWAY_IP}"
+        echo "server=${upstream}"
+        echo "cache-size=1000"
+        if [ -n "${VPN_DNS_ZONE:-}" ]; then
+          case "${VPN_DNS_ZONE}" in
+            vpn.*) DNS_ZONE="${VPN_DNS_ZONE}" ;;
+            *) DNS_ZONE="vpn.${VPN_DNS_ZONE}" ;;
+          esac
+          echo "address=/${DNS_ZONE}/${GATEWAY_IP}"
+        fi
+        if [ -r "${DNS_HOSTS}" ]; then
+          while read -r host ip; do
+            [ -z "${host:-}" ] && continue
+            [ -z "${ip:-}" ] && continue
+            case "${host}" in
+              auth.*|console.*|home.*) continue ;;
+            esac
+            echo "host-record=${host},${ip}"
+          done < "${DNS_HOSTS}"
+        fi
+      } > "${DNS_CONF}"
+      # SIGHUP does not reliably pick up newly added address= entries on this
+      # dnsmasq build; restart it so the mounted host list is authoritative.
+      if [ -s "${DNS_PID}" ]; then
+        kill -9 "$(cat "${DNS_PID}")" 2>/dev/null || true
+        sleep 3
+      fi
+      dnsmasq --conf-file="${DNS_CONF}" --pid-file="${DNS_PID}" || \
+        echo "==> dnsmasq failed to start"
+    }
+    configure_dns
+    # The projected ConfigMap can settle just after the first dnsmasq start.
+    # Do one explicit restart after the mount is stable.
+    sleep 5
+    configure_dns
+    # Some CNI/configmap timing combinations still leave the first process with
+    # the pre-mount config; restart once more after the mount has definitely
+    # settled.
+    sleep 30
+    configure_dns
+
     echo "==> wireguard up (VPN web entrypoint -> 127.0.0.1:${VPN_PORT})"
     wg show wg0 || true
 
-    # Reload peers when the Secret changes (a mounted Secret updates in place).
+    # Reload peers and split DNS when their mounted files change.
     LAST=$(sha256sum /config/peers | cut -d' ' -f1)
+    # Force one reload after the ConfigMap mount settles: the first pass can run
+    # before /dns/hosts is visible and would otherwise leave dnsmasq empty.
+    DNS_LAST=""
     while true; do
       sleep 10
       CUR=$(sha256sum /config/peers 2>/dev/null | cut -d' ' -f1 || true)
@@ -69,5 +185,11 @@ data:
         wg syncconf wg0 "$CONF"
         LAST="${CUR}"
         echo "==> reloaded peers"
+      fi
+      DNS_CUR=$(sha256sum "${DNS_HOSTS}" 2>/dev/null | cut -d' ' -f1 || true)
+      if [ "${DNS_CUR}" != "${DNS_LAST}" ]; then
+        configure_dns
+        DNS_LAST="${DNS_CUR}"
+        echo "==> reloaded VPN split DNS"
       fi
     done

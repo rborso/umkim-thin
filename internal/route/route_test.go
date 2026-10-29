@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/rborso/umkim-thin/internal/catalog"
+	"gopkg.in/yaml.v3"
 )
 
 func entry(route catalog.Route) catalog.Entry {
@@ -190,5 +191,131 @@ func TestAutheliaRuleSkipsVPN(t *testing.T) {
 	}
 	if out != "" {
 		t.Fatalf("VPN route produced an Authelia rule: %q", out)
+	}
+}
+
+func TestRenderTrustedManagement(t *testing.T) {
+	e := entry(catalog.Route{Mode: "site", Host: "app.{{ .zone }}", RequireAuth: true, ServiceName: "svc", ServicePort: 8080})
+	out, err := RenderTrustedManagement(e, *e.Route, Context{
+		Zone:                   "example.com",
+		ManagementCIDRs:        []string{"172.16.10.0/24", "192.0.2.10/32"},
+		ManagementExcludeCIDRs: []string{"172.16.10.1/32"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"apiVersion: traefik.io/v1alpha1",
+		"kind: IngressRoute",
+		"name: nextcloud-trusted-management",
+		"entryPoints: [websecure]",
+		"Host(`app.example.com`)",
+		"ClientIP(`172.16.10.0/24`, `192.0.2.10/32`)",
+		"!ClientIP(`172.16.10.1/32`)",
+		"priority: 1000",
+		"name: svc",
+		"port: 8080",
+		"certResolver: letsencrypt",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("management route missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "identity-authelia@file") {
+		t.Errorf("management route has Authelia:\n%s", out)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("management route is not valid YAML: %v\n%s", err, out)
+	}
+	spec, _ := doc["spec"].(map[string]any)
+	if spec == nil {
+		t.Fatalf("management route has no spec:\n%s", out)
+	}
+	if _, ok := spec["tls"]; !ok {
+		t.Fatalf("management route has no tls block:\n%s", out)
+	}
+}
+
+func TestRenderTrustedManagementCertificateModes(t *testing.T) {
+	e := entry(catalog.Route{Mode: "site", Host: "app.{{ .zone }}", ServiceName: "svc"})
+	out, err := RenderTrustedManagement(e, *e.Route, Context{
+		Zone: "example.com", ManagementCIDRs: []string{"172.16.10.0/24"},
+		Certificate: "secret:wildcard-example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `secretName: "wildcard-example"`) || strings.Contains(out, "certResolver:") {
+		t.Fatalf("secret certificate not mirrored:\n%s", out)
+	}
+	out, err = RenderTrustedManagement(e, *e.Route, Context{
+		Zone: "example.com", ManagementCIDRs: []string{"172.16.10.0/24"},
+		Certificate: "default",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "tls: {}") {
+		t.Fatalf("default certificate should use the TLS store:\n%s", out)
+	}
+	if out, err := RenderTrustedManagement(e, *e.Route, Context{Zone: "example.com"}); err != nil || out != "" {
+		t.Fatalf("no CIDRs should render no object: %q, %v", out, err)
+	}
+}
+
+func TestRenderTrustedVPN(t *testing.T) {
+	e := entry(catalog.Route{Mode: "site", Host: "app.{{ .zone }}", ServiceName: "svc"})
+	out, err := RenderTrustedVPN(e, *e.Route, Context{
+		Zone: "example.com", VPNSubnet: "192.168.169.0/24",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"kind: IngressRoute",
+		"name: nextcloud-trusted-vpn",
+		"entryPoints: [websecure]",
+		"Host(`app.example.com`)",
+		"ClientIP(`192.168.169.0/24`)",
+		"priority: 2000",
+		"name: svc",
+		"certResolver: letsencrypt",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("trusted VPN route missing %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"identity-authelia@file", "vpn-only@file", "entryPoints: [vpn]"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("trusted VPN route leaked %q:\n%s", bad, out)
+		}
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("trusted VPN route is not valid YAML: %v\n%s", err, out)
+	}
+}
+
+func TestRenderSameHostVPN(t *testing.T) {
+	e := entry(catalog.Route{Mode: "site", Host: "app.{{ .zone }}", RequireAuth: true, ServiceName: "svc"})
+	out, err := Render(e, *e.Route, Context{
+		Zone: "example.com", Exposure: "vpn", NameSuffix: "trusted-vpn",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"name: nextcloud-trusted-vpn",
+		`host: "app.example.com"`,
+		"router.entrypoints: vpn",
+		`middlewares: "vpn-only@file"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("same-host VPN route missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "identity-authelia@file") || strings.Contains(out, "router.entrypoints: websecure") {
+		t.Fatalf("same-host VPN route leaked the public gate:\n%s", out)
 	}
 }

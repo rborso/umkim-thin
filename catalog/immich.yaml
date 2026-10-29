@@ -30,6 +30,12 @@ route:
     allowed: [public, authelia, vpn]
   serviceName: immich-server
   servicePort: 2283
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC; the Android app uses the native app.immich:///oauth-callback redirect."
   # Shared albums and public links carry their own key. The page must load its
   # Svelte assets and use Immich's own shared-link/API auth before Authelia can
   # decide whether to challenge; otherwise the browser only sees redirects to
@@ -87,6 +93,9 @@ values:
     # required).
   postgres:
     persistence:
+      # Metadata databases are small; keep the Longhorn request bounded so a
+      # fresh install does not reserve the old 10Gi per replica.
+      size: 4Gi
       storageClass: "{{ .storage.configClass }}"
 
 verify:

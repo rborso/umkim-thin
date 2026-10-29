@@ -43,6 +43,7 @@ POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
 SERVICE_CIDR="${SERVICE_CIDR:-10.43.0.0/16}"
 LAB_CIDR="${LAB_CIDR:-192.168.1.0/24}"
 WG_SUBNET="${WG_SUBNET:-192.168.168.0/24}"
+WG_SERVER_IP="${WG_SERVER_IP:-192.168.168.1}"
 
 HELM="${HELM:-}"
 
@@ -400,6 +401,10 @@ cleanup_wireguard() {
       else
         for i in $(seq 1 8); do
           iptables -t nat -D PREROUTING -s "$WG_SUBNET" -p tcp --dport 443 \
+            -j DNAT --to-destination "127.0.0.1:$TRAEFIK_VPN_PORT" 2>/dev/null || break
+        done
+        for i in $(seq 1 8); do
+          iptables -t nat -D PREROUTING -s "$WG_SUBNET" -d "$WG_SERVER_IP" -p tcp --dport 443 \
             -j DNAT --to-destination "127.0.0.1:$TRAEFIK_VPN_PORT" 2>/dev/null || break
         done
         for i in $(seq 1 8); do

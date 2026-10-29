@@ -31,6 +31,12 @@ route:
     allowed: [authelia, vpn]
   serviceName: sparkyfitness
   servicePort: 80
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: token
+    note: "The Android app uses a generated API key; the web UI keeps OIDC."
 
 auth:
   # Authelia OIDC, so the admin panel and the per-user food diary belong to
@@ -48,15 +54,26 @@ values:
   externalUrl: "https://{{ .host }}"
   persistence:
     uploads:
+      # User media, but still a single-app volume; 5Gi is enough for the
+      # default install and the advanced form can move it to NFS.
+      size: 5Gi
       storageClass: "{{ .storage.configClass }}"
     backup:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
   postgres:
     persistence:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
   server:
     # The directory admin gets the admin panel after the first OIDC login.
     adminEmail: "admin@{{ .zone }}"
+    # Hide the local email/password signup and login form. Do not set
+    # disableSignup: SparkyFitness uses the same user-create hook for OIDC
+    # auto-registration, so disabling signup globally blocks new OIDC users.
+    disableEmailLogin: true
+    forceEmailLogin: false
+    disableSignup: false
     # Mealie is reached at http://mealie.mealie.svc.cluster.local:9000, which
     # SparkyFitness treats as a private address. The platform is single-tenant,
     # so allow the recipe provider for invited users as well as admins.

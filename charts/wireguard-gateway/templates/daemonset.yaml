@@ -43,6 +43,16 @@ spec:
               value: {{ .Values.subnet | quote }}
             - name: TRAEFIK_VPN_PORT
               value: {{ .Values.traefikVPNPort | default 30444 | quote }}
+            - name: TRAEFIK_VPN_HOST_OVERRIDE
+              value: {{ .Values.traefikVPNHost | default "" | quote }}
+            - name: TRAEFIK_VPN_SERVICE
+              value: {{ .Values.traefikVPNService | default "traefik-vpn-direct.kube-system.svc.cluster.local" | quote }}
+            - name: CLUSTER_DNS
+              value: {{ .Values.clusterDNS | default "10.43.0.10" | quote }}
+            - name: VPN_DNS_CLUSTER_IP
+              value: {{ .Values.vpnDNSClusterIP | default "10.43.200.53" | quote }}
+            - name: VPN_DNS_ZONE
+              value: {{ .Values.vpnZone | default "" | quote }}
           ports:
             - name: wg
               containerPort: {{ .Values.port }}
@@ -65,6 +75,9 @@ spec:
             - name: script
               mountPath: /scripts
               readOnly: true
+            - name: vpn-dns
+              mountPath: /dns
+              readOnly: true
       volumes:
         - name: config
           secret:
@@ -72,3 +85,7 @@ spec:
         - name: script
           configMap:
             name: wireguard-gateway-script
+        - name: vpn-dns
+          configMap:
+            name: wireguard-vpn-dns
+            optional: true

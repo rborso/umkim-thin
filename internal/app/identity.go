@@ -40,11 +40,16 @@ type routeSelection struct {
 	Exposure    string `json:"exposure"`
 	AllowLocal  bool   `json:"allowLocal,omitempty"`
 	Certificate string `json:"certificate"`
+	Host        string `json:"host,omitempty"`
+	VPNHost     string `json:"vpnHost,omitempty"`
+	TrustedVPN  bool   `json:"trustedVpn,omitempty"`
+	SameHost    bool   `json:"sameHost,omitempty"`
 }
 
 // contribution is what one app adds to the identity release.
 type contribution struct {
 	OIDC        *autheliaClient           `json:"oidc,omitempty"`
+	Namespace   string                    `json:"namespace,omitempty"`
 	PublicPaths []publicPathRule          `json:"publicPaths,omitempty"`
 	Routes      map[string]routeSelection `json:"routes,omitempty"`
 }
@@ -203,17 +208,33 @@ func (in *Installer) dropContribution(name string) error {
 	return in.syncIdentity(c)
 }
 
+// saveInstalledNamespace records the namespace as soon as Helm has accepted
+// the release, so a later route failure cannot make status/uninstall look in
+// the catalog namespace again.
+func (in *Installer) saveInstalledNamespace(name, namespace string) error {
+	c := in.loadContributions()
+	contrib := c[name]
+	contrib.Namespace = namespace
+	c[name] = contrib
+	return in.saveContributions(c)
+}
+
 // saveRoutes records the effective exposure/certificate choices after a
 // successful install. A failed install must not overwrite the previous state.
 func (in *Installer) saveRoutes(e catalog.Entry, ctx siteContext) error {
 	c := in.loadContributions()
 	contrib := c[e.Name]
+	contrib.Namespace = e.Namespace
 	contrib.Routes = map[string]routeSelection{}
 	for _, r := range e.EffectiveRoutes() {
 		contrib.Routes[r.Key] = routeSelection{
 			Exposure:    ctx.exposure[r.Key],
 			AllowLocal:  ctx.allowLocal[r.Key],
 			Certificate: ctx.certificate[r.Key],
+			Host:        ctx.hosts[r.Key],
+			VPNHost:     ctx.vpnHosts[r.Key],
+			TrustedVPN:  ctx.trustedVPN[r.Key],
+			SameHost:    ctx.trustedSameHost[r.Key],
 		}
 	}
 	c[e.Name] = contrib

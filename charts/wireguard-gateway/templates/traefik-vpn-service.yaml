@@ -1,0 +1,20 @@
+# Headless view of the Traefik pod for the VPN gateway. The gateway resolves
+# this name with the cluster DNS to get the pod IP, avoiding the NodePort
+# hairpin/Source-NAT path for tunnel traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-vpn-direct
+  namespace: {{ .Values.traefikNamespace | default "kube-system" }}
+  labels:
+    app: wireguard-gateway
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik-kube-system
+  ports:
+    - name: vpn
+      port: 9443
+      targetPort: vpn
+      protocol: TCP

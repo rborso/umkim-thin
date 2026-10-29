@@ -29,6 +29,15 @@ spec:
               permanent: true
       websecure:
         nodePort: {{ tls_nodeport }}
+      vpn:
+        # Internal entrypoint for WireGuard-only routes. The public router
+        # forwards 80/443 only; the gateway DNATs tunnel :443 to this NodePort.
+        port: 9443
+        exposedPort: 9443
+        nodePort: {{ vpn_nodeport | default(30444) }}
+        protocol: TCP
+        expose:
+          default: true
       gitssh:
         # Git over SSH is raw TCP; a dedicated Traefik entry point forwards it to
         # Gitea's SSH Service. The HA VIP carries the service port; routers can

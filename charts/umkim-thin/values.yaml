@@ -17,6 +17,7 @@ podSecurity:
 serviceAccountName: umkim-thin-console
 # Namespace that holds LLDAP; the console gets pods/exec only there.
 identityNamespace: identity
+wireguardNamespace: wireguard
 
 # Where the app is published (Authelia gates it, then the console's own login).
 # Required: no default, so an install cannot accidentally claim a real hostname.

@@ -186,6 +186,37 @@ NFS for large Nextcloud/Immich/Paperless media as soon as possible; until then
 those volumes use `longhorn-rwx` and consume replicas. Do not raise the
 percentages on a root disk that also hosts the OS and containerd.
 
+## Per-PVC overrides and catalog defaults
+
+The console's install panel has an **Advanced** section that renders the chart
+once and lists every PVC. Each claim can get its own storage class and size.
+The values are applied by a Helm post-renderer after the chart is rendered, so
+the platform does not need a chart-specific list of values paths. This is
+especially useful for moving a user-data volume to NFS while keeping the
+database on Longhorn, or for sizing one oversized claim independently.
+
+The same panel's **Validate** button checks the plan against the live cluster
+and the install repeats that preflight server-side. For Longhorn it compares the
+new nominal claim sizes, multiplied by the configured replica count, with the
+remaining nominal capacity reported by the Longhorn node disks. NFS capacity is
+reported as a warning because Kubernetes cannot inspect the external export;
+local-path classes are also warning-only. Invalid sizes, missing classes and
+impossible Longhorn capacity are blocking errors.
+
+Catalog install defaults are intentionally small for metadata volumes because
+Longhorn counts the full request per replica. The current defaults include
+`2Gi` for the app PostgreSQL volumes, `4Gi` for Immich PostgreSQL, and smaller
+requests for Mealie/SparkyFitness/Nextcloud/Servarr configuration volumes.
+These are install-time defaults: existing PVCs keep their original size and
+class. Longhorn cannot change an existing claim's class, and shrinking a bound
+PVC is not supported; use the advanced form on a reinstall/migration when a
+larger legacy request must be reduced.
+
+Do not use over-provisioning as a substitute for a real disk. It changes the
+scheduler's nominal ceiling, not the bytes available to Longhorn; keep the
+default 100% on shared root disks and add a dedicated disk or NFS storage
+instead.
+
 ## Removal and recovery
 
 `storage remove` removes the export file, refreshes exports, uninstalls the

@@ -30,6 +30,12 @@ route:
     allowed: [public, authelia, vpn]
   serviceName: actualbudget
   servicePort: 5006
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC for the PWA; community clients use Actual's own auth."
 
 auth:
   # Actual has its own OIDC login. Keep the portal default for browser users;

@@ -257,7 +257,8 @@ secrets_encryption=false
 # Optional fixed public/NAT address. Leave blank for dynamic DNS; verify-ha
 # accepts the current common public address.
 public_ip=""
-wg_endpoint=10.0.0.100
+# Public DNS name clients dial, not the private VIP.
+wg_endpoint=wg.example.com
 wg_subnet=192.168.169.0/24
 wg_server_ip=192.168.169.1
 ```
@@ -387,7 +388,8 @@ This is the normal path when the export is not ready at install time:
 1. Forward **UDP 51820 to the VIP**.
 2. Install **WireGuard gateway** from the console catalog.
 3. Keep the gateway's `nodeSelector` empty so it runs on every node.
-4. Set `wg_endpoint` to the VIP.
+4. Set `wg_endpoint` to the public DNS name clients can reach
+   (for example `wg.example.com`), not the private VIP.
 5. Create clients in **Console → WireGuard clients**.
 
 WireGuard failover is not zero-downtime: when kube-vip moves the VIP, existing

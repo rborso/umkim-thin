@@ -33,6 +33,12 @@ route:
     allowed: [public, authelia, vpn]
   serviceName: gitea
   servicePort: 3000
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: ldap
+    note: "Directory passwords for the web UI; Git clients use SSH keys or tokens."
 
 auth:
   # OIDC for the web SSO (Authelia), LDAP kept for the accounts and clients -
@@ -52,6 +58,7 @@ values:
     externalUrl: "https://{{ .host }}"
     persistence:
       data:
+        size: 5Gi
         storageClass: "{{ .storage.configClass }}"
     # Only directory/OIDC accounts; the public sign-up form stays disabled. The
     # OAuth2 source auto-registers on first login.
@@ -65,6 +72,7 @@ values:
         entryPoint: gitssh
   postgres:
     persistence:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
 
 verify:

@@ -54,6 +54,15 @@ route:
     - "^/s/"
     - "^/index\\.php/s/"
     - "^/public\\.php"
+  # The same public hostname is also reachable from the management network and
+  # the VPN without Authelia forward-auth. The app's own login still applies.
+  trusted:
+    management: true
+    vpn: true
+    # sameHost defaults to true; false keeps <host>.vpn.<zone> for older
+    # clients.
+  appAuth:
+    kind: ldap                # ldap | oidc | local | token
 
 auth:
   kind: forward_auth         # forward_auth | oidc | none
@@ -84,7 +93,11 @@ verify:
 | `chart.versions` | no | tested chart/app pairs and `stable`/`candidate` channels |
 | `route.exposure` | no | `default`/`allowed`: `public`, `authelia`, `vpn`; `allowLocal` for VPN |
 | `route.certificate` | no | `default`/`allowed`: `acme`, `default`, `secret:<name>` |
-| `route.vpnHost` | no | optional VPN hostname; derived as `<host>.vpn.<zone>` when omitted |
+| `route.vpnHost` | no | optional legacy VPN hostname; derived as `<host>.vpn.<zone>` when omitted |
+| `route.trusted.management` | no | allow the configured management CIDRs through without Authelia |
+| `route.trusted.vpn` | no | add the same host on the internal `vpn` entrypoint without Authelia |
+| `route.trusted.sameHost` | no | defaults to `true`; `false` keeps the legacy `.vpn.<zone>` host |
+| `route.appAuth.kind` | when trusted | `ldap`, `oidc`, `local` or `token`; never `none` |
 | `namespace` | yes | created if absent |
 | `license.chart` | yes | licence of the Helm chart itself |
 | `license.application` | yes | licence of the deployed application; use a short mixed-stack expression where needed |
@@ -133,6 +146,35 @@ verify:
 10. **Native clients are not forward-authed.** An app whose mobile/desktop client
    cannot complete a browser login (Jellyfin, for one) gets `oidc` or a
    route with `exposure: vpn`, not a path exemption list.
+11. **A trusted route must keep an app login.** `route.trusted` removes the
+   Authelia gate on the management or VPN path, so `route.appAuth` is
+   mandatory and `none` is rejected. The public route remains Authelia unless
+   the entry is a deliberately public/token-only route; trusted routes cannot
+   be installed with `exposure: public`.
+
+## Trusted access
+
+`route.trusted` is a network policy, not an SSO policy:
+
+- **Public** continues through Authelia on `websecure`.
+- **Management** uses a high-priority Traefik `ClientIP` route for the
+  configured CIDRs and has no Authelia middleware. The source is taken from
+  the TCP peer, never a request header.
+- **VPN** uses the same hostname on the internal `vpn` entrypoint, with the
+  `vpn-only` source allowlist and no Authelia middleware. The dedicated VPN
+  DNS service resolves the app host to the gateway; `auth`, `console` and
+  `home` keep their normal resolution.
+
+The app's own `appAuth` (LDAP, OIDC, local login or API token) is the only
+login on a trusted route. A portal login does not authenticate an LDAP/token
+app; an “optional Authelia login” is only meaningful for apps that support
+OIDC. The installer requires `UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true` and an
+explicit `UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS` list before creating either
+bypass. If a public proxy masquerades to an address inside that CIDR, put it in
+`UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS` so public traffic still falls
+through to Authelia. If the ingress SNATs every request to a node address,
+disable the management bypass with
+`UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=false`; the VPN path remains safe.
 
 ## Multi-route apps
 

@@ -46,6 +46,15 @@ traefik:
   portalEntrypoint: websecure
   portalTLS: true
   portalCertResolver: letsencrypt
+  # Keep the VPN allowlist aligned with the gateway's actual tunnel subnet.
+  vpnSourceRanges:
+    - "{{ wg_subnet }}"
+  vpnLocalSourceRanges:
+    - "{{ wg_subnet }}"
+    - "{{ lab_cidr }}"
+    - "127.0.0.1/32"
+    - "10.42.0.0/16"
+    - "10.43.0.0/16"
 
 # The invite sign-up page posts to this install's console.
 signup:

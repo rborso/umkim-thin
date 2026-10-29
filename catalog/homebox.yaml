@@ -30,6 +30,12 @@ route:
     allowed: [public, authelia, vpn]
   serviceName: homebox
   servicePort: 7745
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC for the PWA."
 
 auth:
   # HomeBox has its own OIDC provider; the portal adds the household gate.

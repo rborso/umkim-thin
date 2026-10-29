@@ -107,3 +107,13 @@ The gateway is optional: a cluster can publish everything publicly, use
 WireGuard only, or both. With it, apps can use `exposure: vpn` and be
 reachable *only* over the overlay (or the VPN plus the local LAN with
 `allowLocal`).
+
+A catalog route can also opt into `trusted.vpn` (and `trusted.management`).
+The VPN path then keeps the public hostname: a dedicated VPN DNS service
+resolves only the opted-in app hosts to the gateway, and the gateway DNAT is
+restricted to the gateway address. The VPN route is on the internal `vpn`
+entrypoint with the `vpn-only` source allowlist and no Authelia; the app's own
+`appAuth` still applies. The management path is a `ClientIP` route on
+`websecure`, but only when the ingress path preserves the source address. The
+public route remains `websecure` + Authelia. Home and the console are not opted
+in.

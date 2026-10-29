@@ -55,6 +55,11 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch]
+  # The advanced install preflight checks nominal Longhorn capacity and the
+  # configured replica count before creating claims.
+  - apiGroups: ["longhorn.io"]
+    resources: [nodes, settings]
+    verbs: [get, list, watch]
   - apiGroups: ["helm.cattle.io"]
     resources: [helmcharts, helmchartconfigs]
     verbs: [get, list, watch, create, update, patch, delete]
@@ -93,6 +98,32 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: umkim-thin-console-identity
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+---
+# The installer reconciles the split-DNS ConfigMap and restarts dnsmasq inside
+# the gateway pods. Keep that exec capability in the wireguard namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: umkim-thin-console-wireguard
+  namespace: {{ .Values.wireguardNamespace | default "wireguard" }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: umkim-thin-console-wireguard
+  namespace: {{ .Values.wireguardNamespace | default "wireguard" }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: umkim-thin-console-wireguard
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccountName }}

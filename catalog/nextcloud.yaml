@@ -34,6 +34,12 @@ routes:
       allowed: [public, authelia, vpn]
     serviceName: nextcloud
     servicePort: 80
+    trusted:
+      management: true
+      vpn: true
+    appAuth:
+      kind: ldap
+      note: "Directory accounts in Nextcloud; native clients use app passwords."
     # Share links are token-authenticated by Nextcloud itself. Forward-auth must
     # not intercept them, and the browser must not be redirected to the portal.
     # The client endpoints (status, WebDAV, OCS, discovery) are also exempt: the
@@ -113,6 +119,7 @@ values:
     aliasGroup: "https://{{ .host }}"
   postgres:
     persistence:
+      size: 2Gi
       storageClass: "{{ .storage.configClass }}"
 
 verify:

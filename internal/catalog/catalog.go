@@ -30,6 +30,52 @@ type Route struct {
 	Exposure *ExposurePolicy `yaml:"exposure,omitempty"`
 	// Certificate is the install-time certificate policy. The default is ACME.
 	Certificate *CertificatePolicy `yaml:"certificate,omitempty"`
+	// Trusted opts this route into the management/VPN bypass paths. The public
+	// route is unchanged; the bypass paths still require the app's own auth.
+	Trusted *TrustedAccess `yaml:"trusted,omitempty"`
+	// AppAuth describes the authentication the application itself offers on a
+	// trusted route. This is deliberately separate from Auth.Kind, which is the
+	// portal (Authelia) policy: an app can use forward-auth on the public host
+	// and still have LDAP, OIDC, local or token auth behind a bypass.
+	AppAuth *AppAuth `yaml:"appAuth,omitempty"`
+}
+
+// TrustedAccess says which non-public networks may reach the route without
+// Authelia forward-auth. The app's own authentication still applies.
+type TrustedAccess struct {
+	Management bool `yaml:"management,omitempty"`
+	VPN        bool `yaml:"vpn,omitempty"`
+	// SameHost defaults to true for trusted routes: the VPN and management
+	// paths use the public hostname. Set it to false only for compatibility
+	// with the older <host>.vpn.<zone> layout.
+	SameHost *bool `yaml:"sameHost,omitempty"`
+}
+
+// AppAuth is the app-level authentication available on a trusted route. It is
+// required for trusted routes because removing Authelia must not leave an
+// unauthenticated application.
+type AppAuth struct {
+	Kind string `yaml:"kind"` // ldap | oidc | local | token
+	Note string `yaml:"note,omitempty"`
+}
+
+// TrustedManagement reports whether the route requests the management bypass.
+func (r Route) TrustedManagement() bool {
+	return r.Trusted != nil && r.Trusted.Management
+}
+
+// TrustedVPN reports whether the route requests the VPN same-host path.
+func (r Route) TrustedVPN() bool {
+	return r.Trusted != nil && r.Trusted.VPN
+}
+
+// TrustedSameHost reports whether a trusted VPN route uses the public hostname.
+// Trusted routes default to same-host; the old .vpn.<zone> layout is opt-out.
+func (r Route) TrustedSameHost() bool {
+	if (r.Trusted == nil) || r.Trusted.SameHost == nil {
+		return true
+	}
+	return *r.Trusted.SameHost
 }
 
 // ExposurePolicy says which network boundaries an app may be installed behind.
@@ -229,6 +275,9 @@ func (e Entry) Validate() error {
 		if err := validateCertificate(r); err != nil {
 			return fmt.Errorf("%s: %w", e.Name, err)
 		}
+		if err := validateTrusted(r); err != nil {
+			return fmt.Errorf("%s: %w", e.Name, err)
+		}
 		// Public paths are exempted from auth, so they must be anchored:
 		// an unanchored pattern silently exempts more than intended.
 		for _, p := range r.PublicPaths {
@@ -244,6 +293,43 @@ func (e Entry) Validate() error {
 }
 
 var validExposures = map[string]bool{"public": true, "authelia": true, "vpn": true}
+
+var validAppAuthKinds = map[string]bool{
+	"ldap":  true,
+	"oidc":  true,
+	"local": true,
+	"token": true,
+}
+
+func validateTrusted(r Route) error {
+	if r.AppAuth != nil {
+		switch r.AppAuth.Kind {
+		case "":
+			return fmt.Errorf("route %q: appAuth.kind is required when appAuth is set", r.Key)
+		default:
+			if !validAppAuthKinds[r.AppAuth.Kind] {
+				return fmt.Errorf("route %q: unknown appAuth.kind %q", r.Key, r.AppAuth.Kind)
+			}
+		}
+	}
+	if !r.TrustedManagement() && !r.TrustedVPN() {
+		return nil
+	}
+	if r.Mode != "site" {
+		return fmt.Errorf("route %q: trusted access is only valid for a site route", r.Key)
+	}
+	if r.AppAuth == nil || r.AppAuth.Kind == "" {
+		return fmt.Errorf("route %q: trusted access needs appAuth.kind (ldap, oidc, local or token)", r.Key)
+	}
+	// Public means unauthenticated at the platform edge. Trusted access is a
+	// deliberate bypass of Authelia, so it is only compatible with the
+	// authenticated public route (or a VPN-only route where there is no public
+	// host at all).
+	if r.DefaultExposure() == "public" {
+		return fmt.Errorf("route %q: trusted access requires authelia or vpn exposure, not public", r.Key)
+	}
+	return nil
+}
 
 func validateExposure(r Route) error {
 	p := r.Exposure

@@ -14,6 +14,7 @@ pub_tls: 443
 pub_wg: 51820
 web_nodeport: 30080
 tls_nodeport: 30443
+vpn_nodeport: 30444
 wg_port: 51820
 
 # The pod CIDR. Calico's IP pool is pinned to this (see the calico role); it
@@ -34,6 +35,19 @@ helm_version: v3.16.3
 wg_endpoint: ""                     # public host:port clients dial (no port)
 wg_subnet: 192.168.168.0/24
 wg_server_ip: 192.168.168.1
+# Traefik NodePort the gateway DNATs VPN :443 to. 30443 (websecure) is used when
+# same-host routes use ClientIP; 30444 is the legacy vpn entrypoint.
+wg_traefik_port: 30444
+traefik_node_ip: ""
+vpn_dns_ip: 10.43.200.53
+# Trusted-network bypass for the management network. Disabled by default; set
+# trusted_access_enabled and an explicit management CIDR list to opt in.
+trusted_access_enabled: false
+trusted_management_enabled: true
+trusted_management_cidrs: ""
+# A public NAT/proxy that masquerades to an address inside the management CIDR
+# would otherwise match the ClientIP bypass. Put that address here.
+trusted_management_exclude_cidrs: ""
 
 # NetworkPolicy: default-deny ingress for the app namespaces, with allowances.
 enable_network_policies: true

@@ -57,6 +57,7 @@
     set -eu
     K="/usr/local/bin/kubectl --kubeconfig {{ state_dir }}/kubeconfig"
     $K create namespace umkim-thin --dry-run=client -o yaml | $K apply -f -
+    $K create namespace wireguard --dry-run=client -o yaml | $K apply -f -
   changed_when: false
 
 - name: seed Secret and ConfigMaps
@@ -74,9 +75,12 @@
       --from-file=config.env={{ state_dir }}/config.env \
       --dry-run=client -o yaml | $K apply -f -
     tar cf /tmp/umkim-mirror.tar -C {{ remote_dir }}/chart-mirror .
+    # The mirror tarball can exceed the 256 KiB annotation limit used by
+    # client-side apply. Server-side apply keeps the manifest out of that
+    # annotation.
     $K create configmap umkim-thin-mirror \
       --from-file=mirror.tar=/tmp/umkim-mirror.tar \
-      --dry-run=client -o yaml | $K apply -f -
+      --dry-run=client -o yaml | $K apply --server-side --force-conflicts -f -
     rm -f /tmp/umkim-mirror.tar
 
 # ---------------------------------------------------------------------------

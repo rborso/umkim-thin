@@ -29,6 +29,44 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
+type installRequest struct {
+	Name           string                            `json:"name"`
+	Host           string                            `json:"host"`
+	Hosts          map[string]string                 `json:"hosts"`
+	ConfigClass    string                            `json:"configClass"`
+	MediaClass     string                            `json:"mediaClass"`
+	Namespace      string                            `json:"namespace"`
+	PVCs           map[string]app.PVCOverride        `json:"pvcs"`
+	Resources      map[string]app.ContainerResources `json:"resources"`
+	Version        string                            `json:"version"`
+	Exposure       map[string]string                 `json:"exposure"`
+	AllowLocal     map[string]bool                   `json:"allowLocal"`
+	Certificate    map[string]string                 `json:"certificate"`
+	MediaLanguage  string                            `json:"mediaLanguage"`
+	QualityCutoff  string                            `json:"qualityCutoff"`
+	ExtraLanguages []string                          `json:"extraLanguages"`
+	Language       string                            `json:"language"`
+	OCRLanguage    string                            `json:"ocrLanguage"`
+}
+
+func (r installRequest) options() app.Options {
+	opts := app.Options{
+		Hosts: r.Hosts, ConfigClass: r.ConfigClass, MediaClass: r.MediaClass,
+		Namespace: r.Namespace, PVCs: r.PVCs, Resources: r.Resources,
+		ChartVersion: r.Version, Exposure: r.Exposure, AllowLocal: r.AllowLocal,
+		Certificate: r.Certificate, MediaLanguage: r.MediaLanguage,
+		QualityCutoff: r.QualityCutoff, ExtraLanguages: r.ExtraLanguages,
+		Language: r.Language, OCRLanguage: r.OCRLanguage,
+	}
+	if opts.Hosts == nil {
+		opts.Hosts = map[string]string{}
+	}
+	if r.Host != "" {
+		opts.Hosts[""] = r.Host
+	}
+	return opts
+}
+
 // serveAPI runs the API and the console from one process.
 //
 // The endpoints mirror the CLI: the console is a client of the same API, not a
@@ -336,31 +374,20 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			names = append(names, c.Name)
 		}
 		writeJSON(w, map[string]any{
-			"zone":             cfg.Zone,
-			"portalHost":       cfg.PortalHost,
-			"configClass":      cfg.ConfigClass,
-			"mediaClass":       cfg.MediaClass,
-			"storageClasses":   names,
-			"storageClassInfo": classes,
+			"zone":                          cfg.Zone,
+			"portalHost":                    cfg.PortalHost,
+			"configClass":                   cfg.ConfigClass,
+			"mediaClass":                    cfg.MediaClass,
+			"storageClasses":                names,
+			"storageClassInfo":              classes,
+			"trustedAccessEnabled":          cfg.TrustedAccessEnabled,
+			"trustedManagementEnabled":      cfg.TrustedManagementEnabled,
+			"trustedManagementCIDRs":        cfg.TrustedManagementCIDRs,
+			"trustedManagementExcludeCIDRs": cfg.TrustedManagementExcludeCIDRs,
 		})
 	})
 	mutating(mux, "POST /api/apps", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Name           string            `json:"name"`
-			Host           string            `json:"host"`
-			Hosts          map[string]string `json:"hosts"`
-			ConfigClass    string            `json:"configClass"`
-			MediaClass     string            `json:"mediaClass"`
-			Version        string            `json:"version"`
-			Exposure       map[string]string `json:"exposure"`
-			AllowLocal     map[string]bool   `json:"allowLocal"`
-			Certificate    map[string]string `json:"certificate"`
-			MediaLanguage  string            `json:"mediaLanguage"`
-			QualityCutoff  string            `json:"qualityCutoff"`
-			ExtraLanguages []string          `json:"extraLanguages"`
-			Language       string            `json:"language"`
-			OCRLanguage    string            `json:"ocrLanguage"`
-		}
+		var req installRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
@@ -370,10 +397,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
 		}
-		opts := app.Options{Hosts: req.Hosts, ConfigClass: req.ConfigClass, MediaClass: req.MediaClass,
-			ChartVersion: req.Version, Exposure: req.Exposure, AllowLocal: req.AllowLocal, Certificate: req.Certificate,
-			MediaLanguage: req.MediaLanguage, QualityCutoff: req.QualityCutoff,
-			ExtraLanguages: req.ExtraLanguages, Language: req.Language, OCRLanguage: req.OCRLanguage}
+		opts := req.options()
 		if e.Name == app.ServarrApp {
 			settings, err := app.NormalizeServarrSettings(app.ServarrSettings{
 				MediaLanguage: req.MediaLanguage,
@@ -385,12 +409,6 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			}
 			opts.MediaLanguage = settings.MediaLanguage
 			opts.QualityCutoff = settings.QualityCutoff
-		}
-		if opts.Hosts == nil {
-			opts.Hosts = map[string]string{}
-		}
-		if req.Host != "" {
-			opts.Hosts[""] = req.Host
 		}
 		audit(r, auth, "install", req.Name, "")
 		writeJSON(w, jobs.start("install", req.Name, func(progress func(string)) (any, error) {
@@ -418,6 +436,62 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			}
 			return res, nil
 		}))
+	})
+	mux.HandleFunc("GET /api/apps/{name}/storage", func(w http.ResponseWriter, r *http.Request) {
+		e, ok := byName[r.PathValue("name")]
+		if !ok {
+			http.Error(w, "no such catalog entry", http.StatusNotFound)
+			return
+		}
+		q := r.URL.Query()
+		plan, err := installer.StoragePlan(e, app.Options{
+			Namespace:   q.Get("namespace"),
+			ConfigClass: q.Get("configClass"),
+			MediaClass:  q.Get("mediaClass"),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, plan)
+	})
+	mux.HandleFunc("GET /api/apps/{name}/plan", func(w http.ResponseWriter, r *http.Request) {
+		e, ok := byName[r.PathValue("name")]
+		if !ok {
+			http.Error(w, "no such catalog entry", http.StatusNotFound)
+			return
+		}
+		q := r.URL.Query()
+		plan, err := installer.RenderPlan(e, app.Options{
+			Namespace:    q.Get("namespace"),
+			ConfigClass:  q.Get("configClass"),
+			MediaClass:   q.Get("mediaClass"),
+			ChartVersion: q.Get("version"),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, plan)
+	})
+	mux.HandleFunc("POST /api/apps/{name}/validate", func(w http.ResponseWriter, r *http.Request) {
+		e, ok := byName[r.PathValue("name")]
+		if !ok {
+			http.Error(w, "no such catalog entry", http.StatusNotFound)
+			return
+		}
+		var req installRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		opts := req.options()
+		result, err := installer.Validate(e, opts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, result)
 	})
 	mux.HandleFunc("GET /api/apps/{name}/versions", func(w http.ResponseWriter, r *http.Request) {
 		e, ok := byName[r.PathValue("name")]
@@ -871,7 +945,9 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		resp := map[string]any{
 			"name": c.Name, "address": c.Address, "publicKey": c.PublicKey, "config": c.Config,
 		}
-		if png, err := qrcode.Encode(c.Config, qrcode.Medium, 256); err == nil {
+		// The config is ~400 bytes; keep the QR large enough that phone
+		// scanners do not misread a section header.
+		if png, err := qrcode.Encode(c.Config, qrcode.Medium, 512); err == nil {
 			resp["qr"] = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 		}
 		writeJSON(w, resp)

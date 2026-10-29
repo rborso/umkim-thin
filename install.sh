@@ -16,6 +16,8 @@ VERSION="0.1.0"
 ZONE=""
 EMAIL=""
 LAN_CIDR="${UMKIM_THIN_LAN_CIDR:-192.168.1.0/24}"
+WG_SUBNET="${UMKIM_THIN_WG_SUBNET:-192.168.168.0/24}"
+WG_SERVER_IP="${UMKIM_THIN_WG_SERVER_IP:-192.168.168.1}"
 IMAGE=""
 IMAGE_PULL_POLICY=""
 IMAGE_TAR=""
@@ -517,9 +519,9 @@ traefik:
   portalTLS: true
   portalCertResolver: letsencrypt
   vpnSourceRanges:
-    - "192.168.168.0/24"
+    - "$WG_SUBNET"
   vpnLocalSourceRanges:
-    - "192.168.168.0/24"
+    - "$WG_SUBNET"
     - "$LAN_CIDR"
     - "127.0.0.1/32"
     # NodePort traffic can be SNATed to the node/CNI networks.
@@ -597,11 +599,19 @@ UMKIM_THIN_CONSOLE_LOCAL_USER=localadmin
 UMKIM_THIN_CONSOLE_LOCAL_PASSWORD_FILE=/data/console-localadmin-password
 UMKIM_THIN_WG_NAMESPACE=wireguard
 UMKIM_THIN_WG_SECRET=wireguard-peers
-UMKIM_THIN_WG_SUBNET=192.168.168.0/24
-UMKIM_THIN_WG_SERVER_IP=192.168.168.1
+UMKIM_THIN_WG_SUBNET=$WG_SUBNET
+UMKIM_THIN_WG_SERVER_IP=$WG_SERVER_IP
 UMKIM_THIN_WG_PORT=$WG_PORT
+UMKIM_THIN_WG_TRAEFIK_PORT=30444
+UMKIM_THIN_TRAEFIK_NODE_IP=
 UMKIM_THIN_WG_ENDPOINT=$WG_ENDPOINT:$WG_PORT
 UMKIM_THIN_WG_ALLOWED_IPS=10.42.0.0/16,10.43.0.0/16,192.168.168.0/24
+UMKIM_THIN_VPN_SUBNET=$WG_SUBNET
+UMKIM_THIN_VPN_DNS_IP=10.43.200.53
+UMKIM_THIN_TRUSTED_ACCESS_ENABLED=${TRUSTED_ACCESS_ENABLED:-false}
+UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=${TRUSTED_MANAGEMENT_ENABLED:-true}
+UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=${TRUSTED_MANAGEMENT_CIDRS:-}
+UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=${TRUSTED_MANAGEMENT_EXCLUDE_CIDRS:-}
 EOF
   chmod 644 "$STATE_DIR/config.env"
 }
@@ -848,8 +858,8 @@ install_vpn_dns() {
 ' "$ZONE"
     printf '        match "^.*\\.vpn\\.%s\\.$"
 ' "$(printf '%s' "$ZONE" | sed 's/\./\\./g')"
-    printf '        answer "{{ .Name }} 60 IN A 192.168.168.1"
-'
+    printf '        answer "{{ .Name }} 60 IN A %s"
+' "$WG_SERVER_IP"
     printf '    }
 '
     printf '    template IN AAAA vpn.%s {
@@ -863,7 +873,7 @@ install_vpn_dns() {
 '
   } > "$tmp"
   if kubectl -n kube-system create configmap coredns --from-file=Corefile="$tmp" --dry-run=client -o yaml | kubectl apply -f - >/dev/null; then
-    info "VPN DNS zone vpn.$ZONE -> 192.168.168.1"
+    info "VPN DNS zone vpn.$ZONE -> $WG_SERVER_IP"
   else
     warn "could not update CoreDNS for the VPN DNS zone"
   fi
@@ -924,7 +934,7 @@ open_firewall() {
     run firewall-cmd --permanent --add-masquerade >/dev/null || true
     run firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16 >/dev/null || true
     run firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16 >/dev/null || true
-    run firewall-cmd --permanent --zone=trusted --add-source=192.168.168.0/24 >/dev/null || true
+    run firewall-cmd --permanent --zone=trusted --add-source="$WG_SUBNET" >/dev/null || true
     run firewall-cmd --permanent --zone=trusted --add-source="$LAN_CIDR" >/dev/null || true
     run firewall-cmd --reload >/dev/null || warn "firewalld reload failed"
     return 0
