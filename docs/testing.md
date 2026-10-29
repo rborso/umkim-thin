@@ -36,7 +36,7 @@ gating contract check, a platform health check, and an informational workflow.
 | `apps.spec.ts` | acceptance | route reachability, auth challenge, public-path exemptions, authenticated reachability |
 | `auth.spec.ts` | acceptance | regular tenant login: Gitea/Jellyfin/Nextcloud LDAP, Immich/Paperless/SparkyFitness/Actual Budget/HomeBox OIDC, Gitea SSH |
 | `tls.spec.ts` | acceptance | the edge serves a real certificate for every route |
-| `console.spec.ts` | acceptance | browser login through Authelia + console, Applications page, `/api/status`, CSP/HSTS, anonymous API refusal |
+| `console.spec.ts` | acceptance | browser login through Authelia + console, Applications page, Backups tab + `/api/backups`, `/api/status`, CSP/HSTS, anonymous API refusal |
 | `home.spec.ts` | acceptance | authenticated read-only home page and `/api/home`; no admin fields |
 
 The gate is run by `ci/e2e.sh` with `npx playwright test apps.spec.ts auth.spec.ts
