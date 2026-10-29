@@ -95,6 +95,20 @@ test.describe('console', () => {
     await expect(page.locator('#catalog')).toContainText('website');
     await expect(page.locator('#catalog')).toContainText('GitHub');
 
+    // Backups: the tab renders the schedule and the API answers with the
+    // archive list. The archive itself is exercised by ci/backup-check.sh; this
+    // is the UI contract (a broken tab would break the page, not just the tab).
+    await page.locator('#tab-backups-label').click();
+    await expect(page.getByRole('heading', { name: 'Backups' })).toBeVisible();
+    await expect(page.locator('#backup-schedule')).not.toBeEmpty();
+    await expect(page.locator('#backup-now')).toBeVisible();
+    const backups = await page.evaluate(async () => {
+      const r = await fetch('/api/backups', { credentials: 'same-origin' });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(backups.status, 'console /api/backups').toBe(200);
+    expect(Array.isArray(backups.body.archives), 'backups is a list').toBeTruthy();
+
     const result = await page.evaluate(async () => {
       const r = await fetch('/api/status', { credentials: 'same-origin' });
       return { status: r.status, body: await r.json() };
