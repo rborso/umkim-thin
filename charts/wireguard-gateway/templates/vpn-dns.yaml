@@ -41,9 +41,17 @@ spec:
                 sleep 1
                 i=$((i + 1))
               done
+              # Empty vpnDNSUpstream inherits the pod resolver (the cluster DNS,
+              # which forwards to the node's upstreams). A comma-separated list
+              # pins specific resolvers instead.
+              upstream={{ .Values.vpnDNSUpstream | default "" | quote }}
               {
-                echo "no-resolv"
-                echo "server={{ .Values.vpnDNSUpstream }}"
+                for u in $(printf '%s' "$upstream" | tr ',' ' '); do
+                  echo "server=$u"
+                done
+                if [ -n "$upstream" ]; then
+                  echo "no-resolv"
+                fi
                 while read -r host ip; do
                   [ -n "$host" ] || continue
                   [ -n "$ip" ] || continue

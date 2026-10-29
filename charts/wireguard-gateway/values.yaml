@@ -21,7 +21,11 @@ clusterDNS: 10.43.0.10
 # Dedicated DNS front for VPN clients. The client DNS address is this ClusterIP;
 # the gateway DNATs tunnel :53 to it.
 vpnDNSClusterIP: 10.43.200.53
-vpnDNSUpstream: 172.16.10.1
+# Resolver the VPN DNS pod forwards to. Empty inherits the pod's own resolver
+# (the cluster DNS, which forwards to the node's upstreams) — the portable
+# default that works on any network. Set a comma-separated list to pin
+# specific resolvers instead, e.g. the LAN DNS for split-horizon names.
+vpnDNSUpstream: ""
 vpnDNSImage: docker.io/library/alpine:3.20.10@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 # Empty runs the gateway on every node (DaemonSet). Set a nodeSelector only to
 # restrict it to a subset. For HA keep it empty so the node holding the VIP

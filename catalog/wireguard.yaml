@@ -16,8 +16,11 @@ links:
 
 chart:
   ref: oci://ghcr.io/rborso/charts/wireguard-gateway
-  version: 0.1.4
+  version: 0.1.5
   versions:
+    - version: 0.1.5
+      appVersion: 1.0.0
+      channel: stable
     - version: 0.1.4
       appVersion: 1.0.0
       channel: stable

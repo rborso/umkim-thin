@@ -9,8 +9,11 @@ The chart also runs a dedicated cluster-network `vpn-dns` deployment and
 service (`10.43.200.53` by default). The installer writes the
 `wireguard-vpn-dns` ConfigMap with the public hostnames of routes that opted
 into `trusted.vpn`; the DNS pod answers those names with the gateway address
-and forwards every other name to the node resolver. Clients receive this
-service address in their WireGuard `DNS` line. The gateway's `:443` DNAT is
+and forwards every other name to the pod's resolver — the cluster DNS by
+default, which forwards to the node's upstreams. Set `vpnDNSUpstream` to a
+comma-separated list to pin resolvers instead (for example a LAN DNS with
+split-horizon names). Clients receive this service address in their WireGuard
+`DNS` line. The gateway's `:443` DNAT is
 scoped to the gateway address and targets the Traefik `vpn` entrypoint, so
 full-tunnel clients can still reach public hostnames normally. The legacy
 `<host>.vpn.<zone>` wildcard remains available through `vpnZone`.

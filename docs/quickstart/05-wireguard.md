@@ -32,7 +32,9 @@ The client receives an address in `192.168.168.0/24` (the gateway is `.1`). Its
 allowed IPs are the cluster pod and service networks. Its DNS is the dedicated
 VPN DNS service (`10.43.200.53`), not the gateway host address. That service
 answers the opted-in app hosts with the gateway address and forwards every
-other name to the node resolver.
+other name to the cluster resolver (which forwards to the node's upstreams).
+To use a specific resolver — for example a LAN DNS with split-horizon names —
+set the chart's `vpnDNSUpstream` to a comma-separated list.
 
 ## Same app URL on the VPN
 
