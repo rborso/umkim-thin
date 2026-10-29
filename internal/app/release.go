@@ -33,29 +33,23 @@ var secretValueKey = regexp.MustCompile(`(?i)(password|passwd|secret|token|crede
 func (in *Installer) Release(e catalog.Entry, namespace string) (ReleaseInfo, error) {
 	ns := firstNonEmpty(namespace, in.installedNamespace(e.Name, e.Namespace))
 
-	statusOut, err := in.run(in.cfg.Helm, "status", e.Name, "-n", ns,
+	metaOut, err := in.run(in.cfg.Helm, "get", "metadata", e.Name, "-n", ns,
 		"--kubeconfig", in.cfg.Kubeconfig, "-o", "json")
 	if err != nil {
 		return ReleaseInfo{}, fmt.Errorf("reading release %s/%s: %w", ns, e.Name, err)
 	}
-	var st struct {
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-		Version   int    `json:"version"`
-		Info      struct {
-			Status       string `json:"status"`
-			LastDeployed string `json:"last_deployed"`
-		} `json:"info"`
-		Chart struct {
-			Metadata struct {
-				Name       string `json:"name"`
-				Version    string `json:"version"`
-				AppVersion string `json:"appVersion"`
-			} `json:"metadata"`
-		} `json:"chart"`
+	var meta struct {
+		Name       string `json:"name"`
+		Namespace  string `json:"namespace"`
+		Chart      string `json:"chart"`
+		Version    string `json:"version"`
+		AppVersion string `json:"appVersion"`
+		Revision   int    `json:"revision"`
+		Status     string `json:"status"`
+		DeployedAt string `json:"deployedAt"`
 	}
-	if err := json.Unmarshal([]byte(statusOut), &st); err != nil {
-		return ReleaseInfo{}, fmt.Errorf("parsing Helm status for %s/%s: %w", ns, e.Name, err)
+	if err := json.Unmarshal([]byte(metaOut), &meta); err != nil {
+		return ReleaseInfo{}, fmt.Errorf("parsing Helm metadata for %s/%s: %w", ns, e.Name, err)
 	}
 
 	valuesOut, err := in.run(in.cfg.Helm, "get", "values", e.Name, "-n", ns,
@@ -76,14 +70,14 @@ func (in *Installer) Release(e catalog.Entry, namespace string) (ReleaseInfo, er
 	sort.Strings(redacted)
 
 	return ReleaseInfo{
-		Name:         firstNonEmpty(st.Name, e.Name),
-		Namespace:    firstNonEmpty(st.Namespace, ns),
-		Chart:        st.Chart.Metadata.Name,
-		ChartVersion: st.Chart.Metadata.Version,
-		AppVersion:   st.Chart.Metadata.AppVersion,
-		Revision:     st.Version,
-		Status:       st.Info.Status,
-		Updated:      st.Info.LastDeployed,
+		Name:         firstNonEmpty(meta.Name, e.Name),
+		Namespace:    firstNonEmpty(meta.Namespace, ns),
+		Chart:        meta.Chart,
+		ChartVersion: meta.Version,
+		AppVersion:   meta.AppVersion,
+		Revision:     meta.Revision,
+		Status:       meta.Status,
+		Updated:      meta.DeployedAt,
 		Values:       values,
 		Redacted:     redacted,
 	}, nil

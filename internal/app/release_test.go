@@ -13,13 +13,13 @@ func TestReleaseReadsHelmValuesAndRedactsSecrets(t *testing.T) {
 	dir := t.TempDir()
 	helm := filepath.Join(dir, "helm")
 	script := `#!/bin/sh
-case "$1" in
-  status)
+case "$1 $2" in
+  "get metadata")
     cat <<'JSON'
-{"name":"demo","namespace":"demo","version":4,"info":{"status":"deployed","last_deployed":"2026-10-29T10:00:00Z"},"chart":{"metadata":{"name":"demo","version":"0.1.2","appVersion":"1.0.0"}}}
+{"name":"demo","namespace":"demo","chart":"demo","version":"0.1.2","appVersion":"1.0.0","revision":4,"status":"deployed","deployedAt":"2026-10-29T10:00:00Z"}
 JSON
     ;;
-  get)
+  "get values")
     cat <<'JSON'
 {"auth":{"password":"hunter2","existingSecret":"demo-secret"},"media":{"accessMode":"ReadWriteMany"},"nested":[{"token":"abc"}]}
 JSON
