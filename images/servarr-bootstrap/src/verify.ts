@@ -151,8 +151,8 @@ async function verifyJellyfin(
     headers: { 'X-Emby-Token': auth.AccessToken },
   });
   for (const expected of [
-    { name: 'Filmek', path: '/media/movies' },
-    { name: 'Sorozatok', path: '/media/tv' },
+    { name: 'Movies', path: '/media/movies' },
+    { name: 'Series', path: '/media/tv' },
   ]) {
     const found = libraries.find(
       (library) =>

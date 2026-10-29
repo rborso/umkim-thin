@@ -45,8 +45,8 @@ export async function setupJellyfin(config: BootstrapConfig): Promise<string | u
 }
 
 const JELLYFIN_LIBRARIES = [
-  { name: 'Filmek', collectionType: 'movies', path: '/media/movies' },
-  { name: 'Sorozatok', collectionType: 'tvshows', path: '/media/tv' },
+  { name: 'Movies', collectionType: 'movies', path: '/media/movies' },
+  { name: 'Series', collectionType: 'tvshows', path: '/media/tv' },
 ] as const;
 
 interface JellyfinVirtualFolder {
@@ -207,8 +207,17 @@ async function ensureJellyfinLibraryRealtimeMonitor(base: string, token: string)
 
   for (const library of JELLYFIN_LIBRARIES) {
     const match = findJellyfinLibrary(existing, library);
-    if (!match?.ItemId) {
+    if (!match) {
       throw new Error(`Jellyfin library "${library.name}" missing after setup`);
+    }
+    if (!match.ItemId) {
+      // Renaming a virtual folder can briefly leave its ItemId unset until
+      // Jellyfin rescans or restarts. Do not fail the whole bootstrap for a
+      // cosmetic monitoring option; the library itself exists at the path.
+      console.log(
+        `WARN: Jellyfin: library "${library.name}" has no ItemId yet; skipping real-time monitor`,
+      );
+      continue;
     }
 
     const currentOptions = match.LibraryOptions ?? {};
@@ -313,6 +322,19 @@ export async function waitForJellyfinWizardComplete(
 async function completeWizardViaApi(base: string, config: BootstrapConfig): Promise<void> {
   console.log('==> Jellyfin: completing startup wizard via API');
 
+  // Jellyfin's StartupController expects the wizard configuration before it
+  // creates the first local user. Calling Startup/User first returns HTTP 500
+  // ("Sequence contains no elements") on a completely fresh database.
+  await completeWizardConfiguration(base, config);
+
+  // Startup/User only updates the first user; it does not initialize one on
+  // Jellyfin 10.10.7. GET /Startup/User calls UserManager.InitializeAsync(),
+  // which creates the implicit administrator that the POST then updates.
+  const firstUser = await http('GET', `${base}/Startup/User`);
+  if (!firstUser.ok) {
+    throw new Error(`Startup/User initialization failed: HTTP ${firstUser.status}`);
+  }
+
   await retryAsync(
     async () => {
       const userResponse = await http('POST', `${base}/Startup/User`, {
@@ -334,7 +356,7 @@ async function completeWizardViaApi(base: string, config: BootstrapConfig): Prom
     { attempts: 6, delayMs: 5_000 },
   );
 
-  await completeWizardConfiguration(base, config);
+  await completeWizardRemoteAccess(base);
   await completeWizardFinalize(base);
   console.log('==> Jellyfin: startup wizard completed via API');
 }
@@ -350,6 +372,19 @@ async function completeWizardConfiguration(base: string, config: BootstrapConfig
   });
   if (!configResponse.ok && configResponse.status !== 204) {
     throw new Error(`Startup/Configuration failed: HTTP ${configResponse.status}`);
+  }
+}
+
+async function completeWizardRemoteAccess(base: string): Promise<void> {
+  const response = await http('POST', `${base}/Startup/RemoteAccess`, {
+    headers: { 'Content-Type': 'application/json' },
+    body: {
+      EnableRemoteAccess: true,
+      EnableAutomaticPortMapping: false,
+    },
+  });
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`Startup/RemoteAccess failed: HTTP ${response.status}`);
   }
 }
 
@@ -390,7 +425,12 @@ async function completeWizardViaPlaywright(config: BootstrapConfig): Promise<voi
   const page = await browser.newPage();
 
   try {
-    await page.goto(`${base}/web/`, { waitUntil: 'networkidle', timeout: 120_000 });
+    // Jellyfin keeps a WebSocket open; `networkidle` never settles and turns a
+    // recoverable first-run page into a two-minute timeout.
+    await page.goto(`${base}/web/`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    await page.waitForSelector('input[type="text"], input[type="password"]', {
+      timeout: 30_000,
+    }).catch(() => undefined);
     await completeWizard(page, config);
   } catch (error) {
     await page.screenshot({
