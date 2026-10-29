@@ -278,6 +278,9 @@ func (in *Installer) writeSparkyMealieProvider(sparky *Result, baseURL, encrypte
 	sql := sparkyProviderSQL(baseURL, encrypted, iv, tag)
 	if _, err := in.sparkyJob(sparky, "umkim-thin-mealie-write",
 		[]string{"-v", "ON_ERROR_STOP=1", "-f", "/sql/script.sql"}, sql); err != nil {
+		if strings.Contains(err.Error(), "has no user to own the global provider") {
+			return fmt.Errorf("SparkyFitness has no user yet: open SparkyFitness and sign in once to create the admin account, then click Connect Mealie again")
+		}
 		return fmt.Errorf("writing the SparkyFitness Mealie provider: %w", err)
 	}
 	return nil

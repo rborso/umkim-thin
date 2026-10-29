@@ -293,6 +293,11 @@ When both Mealie and SparkyFitness are installed, the SparkyFitness row in
 **Applications** has a one-click **Connect Mealie** action. It is optional and
 does not run during either app's install.
 
+SparkyFitness must have at least one user before the provider can be written.
+Open SparkyFitness and sign in once (the OIDC login creates the admin account)
+before clicking **Connect Mealie**; the action reports that prerequisite and
+removes the temporary Mealie token if no user exists.
+
 The action:
 
 1. creates a dedicated `sparkyfitness` API token in Mealie with the Mealie
