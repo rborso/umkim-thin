@@ -204,6 +204,16 @@ the catalog apps, and runs the acceptance gate as a regular invited tenant
 The acceptance gate is `apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts`;
 the functional user journeys under `tests/playwright/journeys/` are
 informational. See [docs/testing.md](docs/testing.md) for the test taxonomy.
+
+To verify an installation that already exists without resetting or provisioning
+it, use the manual existing-installation runner (it discovers installed apps and
+writes HTML/JSON/JUnit reports under `tests/reports/`):
+
+```bash
+./ci/test-existing.sh single
+./ci/test-existing.sh ha --env deploy/provision-ha.env --pin
+./ci/test-existing.sh single --journeys   # optional user journeys
+```
 The reference lab uses Let's Encrypt **staging** and a local CA fallback; never
 enable production ACME in test runs. See [docs/full-build.md](docs/full-build.md).
 

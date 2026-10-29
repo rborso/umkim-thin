@@ -206,7 +206,10 @@ else
 fi
 
 echo "== console restart keeps PVC state =="
-restart=$(node_root <<'EOS'
+if [ "${ASSERT_SKIP_RESTART:-0}" = "1" ]; then
+  skip "console restart skipped (existing-installation test)"
+else
+  restart=$(node_root <<'EOS'
 set -e
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 K=/usr/local/bin/kubectl
@@ -218,11 +221,12 @@ $K -n umkim-thin exec deploy/umkim-thin-console -- test -f /data/secrets.yml >/d
 printf '%s|%s' "$old" "$new"
 EOS
 )
-IFS='|' read -r oldpod newpod <<< "$restart"
-if [ -n "$newpod" ] && [ "$oldpod" != "$newpod" ]; then
-  ok "console restarted with its PVC state (${oldpod} -> ${newpod})"
-else
-  bad "console restart/state check failed (${restart:-no output})"
+  IFS='|' read -r oldpod newpod <<< "$restart"
+  if [ -n "$newpod" ] && [ "$oldpod" != "$newpod" ]; then
+    ok "console restarted with its PVC state (${oldpod} -> ${newpod})"
+  else
+    bad "console restart/state check failed (${restart:-no output})"
+  fi
 fi
 
 echo "== console storage socket =="
@@ -368,7 +372,9 @@ case "$rwx" in
 esac
 
 echo "== wireguard tunnel =="
-if command -v wg-quick >/dev/null 2>&1 && [ -n "${wg_direct_endpoint:-}" ]; then
+if [ "${ASSERT_NO_INSTALL:-0}" = "1" ]; then
+  skip "wireguard: installation disabled for existing-installation test"
+elif command -v wg-quick >/dev/null 2>&1 && [ -n "${wg_direct_endpoint:-}" ]; then
   # Ensure the gateway exists and is stable before adding a peer: re-installing
   # an already-present app triggers a rollout that would race the peer add.
   if ! node_root <<'EOS' >/dev/null 2>&1

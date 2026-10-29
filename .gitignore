@@ -10,6 +10,7 @@ dist/
 tmp/
 logs/
 reports/
+tests/reports/
 test-results/
 playwright-report/
 

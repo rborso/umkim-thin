@@ -18,7 +18,7 @@ import { installed, hostOf, portalSession, appApiKey, waitFor } from '../lib/ses
 const SONARR = () => appApiKey('sonarr');
 const RADARR = () => appApiKey('radarr');
 const PROWLARR = () => appApiKey('prowlarr');
-const LIBRARY = '/media/ci-library';
+const LIBRARY = process.env.UMKIM_THIN_MEDIA_LIBRARY || '/media/ci-library';
 
 test.describe('servarr stack', () => {
   test.skip(!installed('servarr'), 'servarr is not installed');
@@ -46,28 +46,43 @@ test.describe('servarr stack', () => {
   });
 
   test('a root folder on the shared media volume can be created', async () => {
+    test.skip(
+      process.env.UMKIM_THIN_SKIP_MEDIA_FIXTURE === '1',
+      'the runner could not place the shared-volume fixture',
+    );
     const ctx = await portalSession();
     const host = hostOf('radarr');
     const headers = { 'X-Api-Key': RADARR() };
 
     const existing = await (await ctx.get(`${base(host)}/api/v3/rootfolder`, { headers })).json();
-    if (!(existing as any[]).some((f) => f.path === LIBRARY)) {
-      const created = await ctx.post(`${base(host)}/api/v3/rootfolder`, {
-        headers,
-        data: { path: LIBRARY },
-      });
-      expect([200, 201, 400], `create root folder -> ${created.status()}`).toContain(created.status());
+    let createdId: number | undefined;
+    try {
+      if (!(existing as any[]).some((f) => f.path === LIBRARY)) {
+        const created = await ctx.post(`${base(host)}/api/v3/rootfolder`, {
+          headers,
+          data: { path: LIBRARY },
+        });
+        expect([200, 201], `create root folder -> ${created.status()}`).toContain(created.status());
+        createdId = (await created.json().catch(() => ({}))).id;
+      }
+
+      const list = await (await ctx.get(`${base(host)}/api/v3/rootfolder`, { headers })).json();
+      expect(
+        (list as any[]).map((f) => f.path),
+        'the root folder is on the shared media volume',
+      ).toContain(LIBRARY);
+
+      // it is the same filesystem the download client and Jellyfin mount
+      expect((list as any[]).find((f) => f.path === LIBRARY)?.accessible, 'the volume is accessible').toBe(true);
+    } finally {
+      // Existing installations must not be left with a test root folder.
+      if (createdId !== undefined) {
+        await ctx
+          .delete(`${base(host)}/api/v3/rootfolder/${createdId}`, { headers })
+          .catch(() => undefined);
+      }
+      await ctx.dispose();
     }
-
-    const list = await (await ctx.get(`${base(host)}/api/v3/rootfolder`, { headers })).json();
-    expect(
-      (list as any[]).map((f) => f.path),
-      'the root folder is on the shared media volume',
-    ).toContain(LIBRARY);
-
-    // it is the same filesystem the download client and Jellyfin mount
-    expect((list as any[]).find((f) => f.path === LIBRARY)?.accessible, 'the volume is accessible').toBe(true);
-    await ctx.dispose();
   });
 
   test('the download client answers', async () => {

@@ -11,6 +11,7 @@ that tier.
 | Tier 2 | **Platform conformance** | The provisioned cluster is healthy: nodes, storage classes/PVCs, identity secrets, network policy, TLS, the storage agent and WireGuard. | `ci/assert.sh` / `tests/e2e/run.sh platform` |
 | Tier 2 | **Acceptance gate** | The deployment meets its required contract: route/auth challenge, TLS, console, and every installed app accepts a directory login. Gating. | `tests/e2e/run.sh acceptance` |
 | Tier 2 | **Functional user journeys** | A user or client can complete a real workflow. Informational, reported in full. | `tests/e2e/run.sh journeys` |
+| Tier 2 | **Existing-installation run** | The same platform, acceptance and optional journey checks run against an installation that is already deployed; no reset, provisioning or app install. | `ci/test-existing.sh single|ha` |
 | Tier 2 | **Migration / upgrade tests** | Existing single-node installer state moved to the console PVC intact. | `tests/e2e/run.sh migration` |
 | Tier 2 | **Security checks** | No secrets in the tree, logs or ConfigMaps; secret/security invariants. Split between static checks and platform conformance. | `ci/static.sh`, `ci/assert.sh` |
 
@@ -110,3 +111,45 @@ TARGET=ha tests/e2e/run.sh all       # gate + journeys (journeys informational)
 
 `ci/e2e.sh` runs the same categories: provision, install apps, platform
 conformance, acceptance gate, then the informational user journeys.
+
+## Testing an existing installation (manual)
+
+Use this when the cluster already exists (single or HA) and you do **not** want a
+runner to reset it, provision it, or install/upgrade apps:
+
+```sh
+# default env: deploy/provision-single.env / deploy/provision-ha.env
+./ci/test-existing.sh single
+./ci/test-existing.sh ha --env deploy/provision-ha.env --pin
+
+# also run the informational journeys and their media fixture
+./ci/test-existing.sh single --journeys
+./ci/test-existing.sh ha --env deploy/provision-ha.env --pin --journeys
+```
+
+What it does:
+
+1. Reads the target env and discovers **installed catalog releases from Helm**;
+   apps that are not installed are omitted instead of being treated as failures.
+   It also discovers the existing Ingress hosts; it does not call `reset.sh`,
+   `provision.sh`, or the app installer.
+2. Runs `ci/assert.sh` platform conformance. For an existing installation the
+   console restart is disabled by default (`--with-restart` re-enables it) and
+   the WireGuard app-install fallback is disabled. The remaining checks are
+   read-only or create/remove only `ci-*` test resources.
+3. Creates one temporary `ci-portal-<run-id>` tenant, runs the acceptance gate
+   (`apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts`), and
+   runs the optional journeys serially. Temporary directory test accounts,
+   Gitea test users, SSH keys and repositories are removed by
+   `ci/cleanup-ci.sh`; the per-run media fixture and its Radarr root folder are
+   removed as well. `--no-cleanup` leaves the accounts for inspection.
+4. Writes reports under `tests/reports/<target>/<run-id>/` (gitignored):
+   `summary.md`, `summary.json`, `gate.json`, `gate.xml`, `gate.log`,
+   `platform.log`, `html/index.html`, `artifacts/`, and `journeys.json` when
+   journeys were requested.
+
+HA DNS often points at a public address that does not hairpin from the lab
+runner; `--pin` resolves the discovered app hosts (including Collabora and any
+Ingress hosts) to the target VIP. No hosted CI workflow invokes any of this:
+the lab tiers remain a deliberate manual run because the runner holds the
+credentials.
