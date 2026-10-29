@@ -182,7 +182,11 @@ type Options struct {
 	Hosts       map[string]string // route key (or "" for a single route) -> host
 	ConfigClass string            // RWO class for config/databases
 	MediaClass  string            // RWX class for shared media
-	Progress    func(string)      // optional progress sink (async installs)
+	// MediaAccessMode overrides the site's media access mode for this install.
+	// The console sets it from the selected class (RWX when the class supports
+	// it, RWO otherwise); empty keeps UMKIM_THIN_STORAGE_MEDIA_ACCESS_MODE.
+	MediaAccessMode string
+	Progress        func(string) // optional progress sink (async installs)
 
 	// Namespace overrides the catalog's default namespace for a new install.
 	// An existing app keeps the namespace it was installed with; moving a live
@@ -256,9 +260,14 @@ type siteContext struct {
 }
 
 func (in *Installer) context(e catalog.Entry, opts Options) (siteContext, error) {
-	mediaAccessMode := in.cfg.MediaAccessMode
+	mediaAccessMode := firstNonEmpty(opts.MediaAccessMode, in.cfg.MediaAccessMode)
 	if mediaAccessMode == "" {
 		mediaAccessMode = "ReadWriteMany"
+	}
+	switch mediaAccessMode {
+	case "ReadWriteOnce", "ReadWriteMany":
+	default:
+		return siteContext{}, fmt.Errorf("media access mode must be ReadWriteOnce or ReadWriteMany")
 	}
 	// An upgrade keeps the choices the app was installed with unless the
 	// operator explicitly overrides them.

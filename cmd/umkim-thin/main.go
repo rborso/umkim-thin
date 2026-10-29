@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -27,6 +28,7 @@ Usage:
   umkim-thin app reconcile <name>      republish routes without running Helm
   umkim-thin app list                  list installed apps
   umkim-thin app status <name>         show an app's workloads and routes
+  umkim-thin app options <name>        show the values an app was installed with
   umkim-thin app uninstall <name>      remove an installed app (--purge for data)
   umkim-thin storage disks|plan|apply|list|remove  single-node disks/RAID/NFS
   umkim-thin storage-agent             host storage agent (root, single node)
@@ -137,6 +139,7 @@ func appCmd(dir string, args []string) error {
 		fs := flag.NewFlagSet("app install", flag.ContinueOnError)
 		configClass := fs.String("config-class", "", "RWO storage class (default: site's config class)")
 		mediaClass := fs.String("media-class", "", "RWX storage class (default: site's media class)")
+		mediaAccessMode := fs.String("media-access-mode", "", "media access mode: ReadWriteOnce|ReadWriteMany (default: site's mode)")
 		namespace := fs.String("namespace", "", "namespace for a new install (default: catalog namespace)")
 		version := fs.String("version", "", "catalogued chart version (default: stable)")
 		allowLocal := fs.Bool("allow-local", false, "also allow the site LAN on VPN routes")
@@ -149,7 +152,8 @@ func appCmd(dir string, args []string) error {
 			return err
 		}
 		opts := app.Options{Hosts: hosts.m, ConfigClass: *configClass, MediaClass: *mediaClass,
-			Namespace: *namespace, Exposure: exposures.m, Certificate: certificates.m, ChartVersion: *version}
+			MediaAccessMode: *mediaAccessMode,
+			Namespace:       *namespace, Exposure: exposures.m, Certificate: certificates.m, ChartVersion: *version}
 		applyAllowLocal(e, &opts, *allowLocal)
 		fmt.Printf("installing %s (chart %s)...\n", e.Name, choose(*version, e.Chart.Version))
 		res, err := in.Install(e, opts)
@@ -275,6 +279,42 @@ func appCmd(dir string, args []string) error {
 		}
 		for _, h := range st.Routes {
 			fmt.Printf("  route        https://%s\n", h)
+		}
+		return nil
+	case "options":
+		if len(args) < 2 {
+			return fmt.Errorf("app options needs a name")
+		}
+		e, ok := byName[args[1]]
+		if !ok {
+			return fmt.Errorf("no catalog entry named %q", args[1])
+		}
+		fs := flag.NewFlagSet("app options", flag.ContinueOnError)
+		namespace := fs.String("namespace", "", "installed namespace (default: recorded/catalog namespace)")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		info, err := in.Release(e, *namespace)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s (%s) — %s %s, app %s, revision %d, %s\n",
+			info.Name, info.Namespace, info.Chart, info.ChartVersion,
+			info.AppVersion, info.Revision, info.Status)
+		if info.Updated != "" {
+			fmt.Printf("  updated      %s\n", info.Updated)
+		}
+		if len(info.Redacted) > 0 {
+			fmt.Printf("  redacted     %s\n", strings.Join(info.Redacted, ", "))
+		}
+		raw, err := json.MarshalIndent(info.Values, "  ", "  ")
+		if err != nil {
+			return err
+		}
+		if len(info.Values) == 0 {
+			fmt.Println("  values       none (chart defaults)")
+		} else {
+			fmt.Printf("  values\n  %s\n", raw)
 		}
 		return nil
 	default:

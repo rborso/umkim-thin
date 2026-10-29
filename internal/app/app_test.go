@@ -584,6 +584,31 @@ func TestVPNDNSConfigMap(t *testing.T) {
 
 func boolPtr(v bool) *bool { return &v }
 
+func TestMediaAccessModeOverride(t *testing.T) {
+	in := testInstaller()
+	in.cfg.MediaAccessMode = "ReadWriteOnce"
+	e := catalog.Entry{Name: "app", Namespace: "app", Route: &catalog.Route{
+		Mode: "site", Host: "app.{{ .zone }}", RequireAuth: true,
+	}}
+	ctx, err := in.context(e, Options{MediaAccessMode: "ReadWriteMany"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.mediaAccessMode != "ReadWriteMany" {
+		t.Fatalf("media access mode = %q", ctx.mediaAccessMode)
+	}
+	ctx, err = in.context(e, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.mediaAccessMode != "ReadWriteOnce" {
+		t.Fatalf("site default was not used: %q", ctx.mediaAccessMode)
+	}
+	if _, err := in.context(e, Options{MediaAccessMode: "rwx"}); err == nil {
+		t.Fatal("expected an invalid access mode to be rejected")
+	}
+}
+
 func TestUpgradeKeepsRouteSelection(t *testing.T) {
 	dir := t.TempDir()
 	in := New(Config{Zone: "example.com", StateDir: dir, AppsState: filepath.Join(dir, "apps-state.json")})

@@ -30,29 +30,31 @@ import (
 var uiFS embed.FS
 
 type installRequest struct {
-	Name           string                            `json:"name"`
-	Host           string                            `json:"host"`
-	Hosts          map[string]string                 `json:"hosts"`
-	ConfigClass    string                            `json:"configClass"`
-	MediaClass     string                            `json:"mediaClass"`
-	Namespace      string                            `json:"namespace"`
-	PVCs           map[string]app.PVCOverride        `json:"pvcs"`
-	Resources      map[string]app.ContainerResources `json:"resources"`
-	Version        string                            `json:"version"`
-	Exposure       map[string]string                 `json:"exposure"`
-	AllowLocal     map[string]bool                   `json:"allowLocal"`
-	Certificate    map[string]string                 `json:"certificate"`
-	MediaLanguage  string                            `json:"mediaLanguage"`
-	QualityCutoff  string                            `json:"qualityCutoff"`
-	ExtraLanguages []string                          `json:"extraLanguages"`
-	Language       string                            `json:"language"`
-	OCRLanguage    string                            `json:"ocrLanguage"`
+	Name            string                            `json:"name"`
+	Host            string                            `json:"host"`
+	Hosts           map[string]string                 `json:"hosts"`
+	ConfigClass     string                            `json:"configClass"`
+	MediaClass      string                            `json:"mediaClass"`
+	MediaAccessMode string                            `json:"mediaAccessMode"`
+	Namespace       string                            `json:"namespace"`
+	PVCs            map[string]app.PVCOverride        `json:"pvcs"`
+	Resources       map[string]app.ContainerResources `json:"resources"`
+	Version         string                            `json:"version"`
+	Exposure        map[string]string                 `json:"exposure"`
+	AllowLocal      map[string]bool                   `json:"allowLocal"`
+	Certificate     map[string]string                 `json:"certificate"`
+	MediaLanguage   string                            `json:"mediaLanguage"`
+	QualityCutoff   string                            `json:"qualityCutoff"`
+	ExtraLanguages  []string                          `json:"extraLanguages"`
+	Language        string                            `json:"language"`
+	OCRLanguage     string                            `json:"ocrLanguage"`
 }
 
 func (r installRequest) options() app.Options {
 	opts := app.Options{
 		Hosts: r.Hosts, ConfigClass: r.ConfigClass, MediaClass: r.MediaClass,
-		Namespace: r.Namespace, PVCs: r.PVCs, Resources: r.Resources,
+		MediaAccessMode: r.MediaAccessMode,
+		Namespace:       r.Namespace, PVCs: r.PVCs, Resources: r.Resources,
 		ChartVersion: r.Version, Exposure: r.Exposure, AllowLocal: r.AllowLocal,
 		Certificate: r.Certificate, MediaLanguage: r.MediaLanguage,
 		QualityCutoff: r.QualityCutoff, ExtraLanguages: r.ExtraLanguages,
@@ -378,6 +380,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			"portalHost":                    cfg.PortalHost,
 			"configClass":                   cfg.ConfigClass,
 			"mediaClass":                    cfg.MediaClass,
+			"mediaAccessMode":               cfg.MediaAccessMode,
 			"storageClasses":                names,
 			"storageClassInfo":              classes,
 			"trustedAccessEnabled":          cfg.TrustedAccessEnabled,
@@ -445,9 +448,10 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		q := r.URL.Query()
 		plan, err := installer.StoragePlan(e, app.Options{
-			Namespace:   q.Get("namespace"),
-			ConfigClass: q.Get("configClass"),
-			MediaClass:  q.Get("mediaClass"),
+			Namespace:       q.Get("namespace"),
+			ConfigClass:     q.Get("configClass"),
+			MediaClass:      q.Get("mediaClass"),
+			MediaAccessMode: q.Get("mediaAccessMode"),
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -463,16 +467,30 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		q := r.URL.Query()
 		plan, err := installer.RenderPlan(e, app.Options{
-			Namespace:    q.Get("namespace"),
-			ConfigClass:  q.Get("configClass"),
-			MediaClass:   q.Get("mediaClass"),
-			ChartVersion: q.Get("version"),
+			Namespace:       q.Get("namespace"),
+			ConfigClass:     q.Get("configClass"),
+			MediaClass:      q.Get("mediaClass"),
+			MediaAccessMode: q.Get("mediaAccessMode"),
+			ChartVersion:    q.Get("version"),
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		writeJSON(w, plan)
+	})
+	mux.HandleFunc("GET /api/apps/{name}/release", func(w http.ResponseWriter, r *http.Request) {
+		e, ok := byName[r.PathValue("name")]
+		if !ok {
+			http.Error(w, "no such catalog entry", http.StatusNotFound)
+			return
+		}
+		info, err := installer.Release(e, r.URL.Query().Get("namespace"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, info)
 	})
 	mux.HandleFunc("POST /api/apps/{name}/validate", func(w http.ResponseWriter, r *http.Request) {
 		e, ok := byName[r.PathValue("name")]

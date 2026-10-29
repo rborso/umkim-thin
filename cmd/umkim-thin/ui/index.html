@@ -107,6 +107,8 @@
   #storage-format input { margin-top: .45rem }
   #storage-plan-out:empty, #external-plan-out:empty { display: none }
   #storage-plan-out, #external-plan-out { white-space: pre-wrap; margin: .75rem 0 0; padding: .75rem; background: #f8fafc; border: 1px solid var(--line); border-radius: .55rem; min-height: 1.5rem; color: var(--muted); font-size: .86rem }
+  #options-values { max-height: 52vh; overflow: auto; white-space: pre-wrap; margin: .6rem 0 0; padding: .75rem; background: #f8fafc; border: 1px solid var(--line); border-radius: .55rem; font-size: .82rem }
+  #options-meta { margin: 0 0 .4rem; color: var(--muted) }
   #wg-result { display: none; margin-top: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: .7rem; background: #fbfcfe }
   #wg-config { white-space: pre-wrap; overflow-wrap: anywhere; background: #101828; color: #e4e7ec; padding: .8rem; border-radius: .5rem }
   #msg { position: fixed; right: 1rem; bottom: 1rem; z-index: 20; max-width: min(36rem, calc(100vw - 2rem)); max-height: 45vh; overflow: auto; padding: .8rem 1rem; border-radius: .65rem; border: 1px solid var(--line); background: #fff; box-shadow: 0 12px 32px rgba(16,24,40,.16); white-space: pre-wrap; display: none }
@@ -536,6 +538,21 @@
   </div>
 </dialog>
 
+<dialog id="options-dialog" class="modal" aria-labelledby="options-dialog-title">
+  <form method="dialog" class="modal-head">
+    <h3 id="options-dialog-title">Install options</h3>
+    <button value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="modal-body">
+    <p id="options-meta" class="muted"></p>
+    <p class="hint">Helm user-supplied values from the installed release. Secret-looking values are redacted; chart defaults are not shown.</p>
+    <pre id="options-values"></pre>
+    <div class="modal-actions">
+      <button value="close">Close</button>
+    </div>
+  </div>
+</dialog>
+
 <dialog id="profiles-dialog" class="modal" aria-labelledby="profiles-dialog-title">
   <form method="dialog" class="modal-head">
     <h3 id="profiles-dialog-title">Media profiles</h3>
@@ -565,7 +582,7 @@
 </dialog>
 
 <script>
-const CFG = { zone: '', portalHost: '', configClass: 'local-path', mediaClass: 'umkim-thin-nfs', storageClasses: [], storageClassInfo: [] };
+const CFG = { zone: '', portalHost: '', configClass: 'local-path', mediaClass: 'umkim-thin-nfs', mediaAccessMode: 'ReadWriteMany', storageClasses: [], storageClassInfo: [] };
 const ENTRIES = {};
 
 const TAB_NAMES = ['overview', 'catalog', 'access', 'storage', 'certificates'];
@@ -817,10 +834,32 @@ function mediaWarning() {
   const el = document.getElementById('media-warn');
   if (!sel || !el) return;
   const modes = sel.selectedOptions[0]?.dataset.modes || '';
+  const modeList = modes ? modes.split(',') : [];
+  const access = document.getElementById('med-access');
+  const hint = document.getElementById('med-access-hint');
+  if (access && modeList.length) {
+    if (modeList.includes('RWX')) access.value = 'ReadWriteMany';
+    else if (modeList.includes('RWO')) access.value = 'ReadWriteOnce';
+    const rwxOption = access.querySelector('option[value="ReadWriteMany"]');
+    if (rwxOption) rwxOption.disabled = !modeList.includes('RWX');
+  }
+  const updateHint = () => {
+    if (!hint || !access) return;
+    hint.textContent = access.value === 'ReadWriteMany'
+      ? 'Shared across nodes; requires an RWX class.'
+      : 'One node at a time; fine for local-path on a single node.';
+  };
+  updateHint();
+  if (access) access.onchange = updateHint;
+  const rwx = (CFG.storageClassInfo || [])
+    .filter(c => (c.accessModes || []).includes('RWX') && c.name !== sel.value)
+    .map(c => c.name);
   if (!modes) {
-    el.textContent = 'Access modes for this class are unknown. A single node can use ReadWriteOnce; an HA cluster needs ReadWriteMany.';
-  } else if (!modes.split(',').includes('RWX')) {
-    el.textContent = 'This class advertises ' + modes + ', not RWX. That is fine on a single node; an HA cluster needs a shared class.';
+    el.textContent = 'Access modes for this class are unknown. A single node can use ReadWriteOnce; an HA cluster needs ReadWriteMany.' +
+      (rwx.length ? ' Shared classes: ' + rwx.join(', ') + '.' : '');
+  } else if (!modeList.includes('RWX')) {
+    el.textContent = 'This class advertises ' + modes + ', not RWX. That is fine on a single node; an HA cluster needs a shared class.' +
+      (rwx.length ? ' Shared classes: ' + rwx.join(', ') + '.' : '');
   } else {
     el.textContent = '';
   }
@@ -920,6 +959,7 @@ function openInstall(e) {
     `<div class="row">` +
       `<div><label>Config storage class (RWO)</label><select id="cfg-class"></select></div>` +
       `<div><label>Media storage class (RWX on HA)</label><select id="med-class"></select></div>` +
+      `<div><label>Media access mode</label><select id="med-access"><option value="ReadWriteOnce">ReadWriteOnce</option><option value="ReadWriteMany">ReadWriteMany</option></select><span class="hint" id="med-access-hint"></span></div>` +
     `</div>` +
     `<div id="media-warn" class="muted"></div>` +
     `<details id="install-advanced" style="margin-top:.75rem;border:1px solid var(--line);border-radius:.55rem;padding:.6rem .7rem;background:#fbfcfe">` +
@@ -962,6 +1002,8 @@ function openInstall(e) {
   syncLocal();
   classOptions(document.getElementById('cfg-class'), CFG.configClass);
   classOptions(document.getElementById('med-class'), CFG.mediaClass);
+  const medAccess = document.getElementById('med-access');
+  if (medAccess) medAccess.value = CFG.mediaAccessMode || 'ReadWriteMany';
   document.getElementById('med-class').onchange = mediaWarning;
   mediaWarning();
   const refreshPlan = () => { if (document.getElementById('install-advanced')?.open) loadInstallPlan(e, panel); };
@@ -989,9 +1031,11 @@ async function loadInstallPlan(e, panel) {
   if (namespace) params.set('namespace', namespace);
   const cfgClass = document.getElementById('cfg-class')?.value || '';
   const medClass = document.getElementById('med-class')?.value || '';
+  const medAccess = document.getElementById('med-access')?.value || '';
   const version = document.getElementById('install-version')?.value || '';
   if (cfgClass) params.set('configClass', cfgClass);
   if (medClass) params.set('mediaClass', medClass);
+  if (medAccess) params.set('mediaAccessMode', medAccess);
   if (version) params.set('version', version);
   pvcBox.textContent = 'rendering plan…';
   resourceBox.textContent = '';
@@ -1091,6 +1135,7 @@ function installRequestBody(e, panel) {
     hosts, exposure, certificate, allowLocal,
     configClass: document.getElementById('cfg-class').value,
     mediaClass: document.getElementById('med-class').value,
+    mediaAccessMode: document.getElementById('med-access')?.value || '',
     namespace: nsInput && !nsInput.disabled ? nsInput.value.trim() : '',
     pvcs, resources,
   };
@@ -1415,8 +1460,12 @@ async function loadApplications() {
       tr.innerHTML = `<td>${esc(a.name)}<br><span class="muted">${esc(a.namespace)}${lic.application ? ' · ' + esc(lic.application) : ''}</span>${appLinks ? '<br>' + appLinks : ''}</td>` +
         `<td><span class="chip ${chip}">${esc(state)}</span><br><span class="muted job-progress">${detail}</span></td>` +
         `<td>${version}</td>` +
-        `<td>${links}</td><td>${setup}<br><button data-upgrade="${esc(a.name)}">${upgradeLabel}</button></td>`;
+        `<td>${links}</td><td>${setup}<br><button data-upgrade="${esc(a.name)}">${upgradeLabel}</button> ` +
+        `<button data-options data-app="${esc(a.name)}" data-namespace="${esc(a.namespace)}">Install options</button></td>`;
       for (const b of tr.querySelectorAll('[data-setup]')) b.onclick = runSetup;
+      for (const b of tr.querySelectorAll('[data-options]')) {
+        b.onclick = () => showInstallOptions(b.dataset.app, b.dataset.namespace);
+      }
       for (const b of tr.querySelectorAll('[data-indexers]')) {
         b.onclick = () => openIndexerDialog(b.dataset.app, b.dataset.namespace);
       }
@@ -1827,6 +1876,35 @@ async function addProfile() {
     note(String(err.message || err), 'err');
   } finally {
     btn.disabled = false; btn.textContent = 'Add profile';
+  }
+}
+
+async function showInstallOptions(name, namespace) {
+  const dialog = document.getElementById('options-dialog');
+  const meta = document.getElementById('options-meta');
+  const pre = document.getElementById('options-values');
+  meta.textContent = 'loading…';
+  pre.textContent = '';
+  dialog.showModal();
+  try {
+    const url = '/api/apps/' + encodeURIComponent(name) + '/release' +
+      (namespace ? '?namespace=' + encodeURIComponent(namespace) : '');
+    const res = await fetch(url);
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
+    const info = JSON.parse(text);
+    const chart = [info.chart, info.chartVersion].filter(Boolean).join(' ');
+    meta.textContent = `${info.name} in ${info.namespace} — ${chart || 'chart ?'}` +
+      (info.appVersion ? ` · app ${info.appVersion}` : '') +
+      ` · revision ${info.revision} · ${info.status}` +
+      (info.updated ? ` · ${info.updated}` : '') +
+      (info.redacted && info.redacted.length ? ` · redacted: ${info.redacted.join(', ')}` : '');
+    pre.textContent = (info.values && Object.keys(info.values).length)
+      ? JSON.stringify(info.values, null, 2)
+      : 'No user-supplied values; the chart defaults were used.';
+  } catch (err) {
+    meta.textContent = 'could not read the release';
+    pre.textContent = String(err.message || err);
   }
 }
 
