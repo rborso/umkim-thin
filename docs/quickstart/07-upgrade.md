@@ -32,6 +32,8 @@ The installer builds the console
 image locally by default; the installer:
 
 - keeps `/etc/umkim-thin/secrets.yml` and every existing secret;
+- preserves the console-managed OIDC clients by copying
+  `/data/identity-apps.yml` from the console PVC before upgrading identity;
 - re-renders the values and re-packages the charts;
 - runs `helm upgrade --install` for the identity stack and the console;
 - waits for the rollouts.

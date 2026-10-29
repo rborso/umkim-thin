@@ -132,6 +132,22 @@ sudo kubectl -n identity logs deploy/authelia --tail=100
 A broken LLDAP means no logins. The console’s breakglass account works through a
 local port-forward (see [First login](02-first-login.md#the-breakglass-account)).
 
+### OIDC login returns 404 at the issuer
+
+If `https://auth.<zone>/api/oidc/authorization` or
+`https://auth.<zone>/.well-known/openid-configuration` returns 404, Authelia
+has no `identity_providers.oidc` block. The console keeps the app OIDC clients
+on its PVC (`/data/identity-apps.yml`). A current `install.sh` copies that file
+into `/etc/umkim-thin/identity-apps.yml` before upgrading identity; on an older
+checkout, pull and re-run:
+
+```bash
+git pull
+sudo ./install.sh --zone example.com --email you@example.com --reuse-k3s
+```
+
+Reinstalling an OIDC app also makes the console re-sync the identity release.
+
 ### Storage is Pending
 
 Which class is expected depends on the path:
