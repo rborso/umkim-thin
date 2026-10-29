@@ -57,28 +57,17 @@ func (in *Installer) ConnectMealieToSparky() (MealieSparkyResult, error) {
 		return MealieSparkyResult{}, fmt.Errorf("SparkyFitness is not installed")
 	}
 
-	// The platform's default-deny policies block cross-namespace traffic. Add
-	// the two narrow allowances the integration needs, so it also works on an
-	// installation provisioned before these namespaces were wired.
-	if err := in.ensureIntegrationNetworkPolicies(mealie.Namespace, sparky.Namespace); err != nil {
-		return MealieSparkyResult{}, fmt.Errorf("allowing the Mealie/SparkyFitness integration: %w", err)
-	}
-	if err := in.ensureSparkyExecRole(sparky.Namespace); err != nil {
-		return MealieSparkyResult{}, fmt.Errorf("allowing the console to write the SparkyFitness provider: %w", err)
-	}
-
 	mealieBase := fmt.Sprintf("http://%s.%s.svc.cluster.local:9000", mealie.Name, mealie.Namespace)
 	secret, ok := in.getSecret(sparky.Namespace, sparky.Name+"-secrets")
 	if !ok {
 		return MealieSparkyResult{}, fmt.Errorf("the SparkyFitness release Secret is not available")
 	}
-	dbPassword := secret["postgres-password"]
 	encryptionKey := secret["api-encryption-key"]
-	if dbPassword == "" || encryptionKey == "" {
-		return MealieSparkyResult{}, fmt.Errorf("the SparkyFitness Secret is missing its database password or encryption key")
+	if encryptionKey == "" {
+		return MealieSparkyResult{}, fmt.Errorf("the SparkyFitness Secret is missing its encryption key")
 	}
 
-	existing, err := in.sparkyMealieBaseURL(sparky, dbPassword)
+	existing, err := in.sparkyMealieBaseURL(sparky)
 	if err != nil {
 		return MealieSparkyResult{}, err
 	}
@@ -118,7 +107,7 @@ func (in *Installer) ConnectMealieToSparky() (MealieSparkyResult, error) {
 	if err != nil {
 		return fail(fmt.Errorf("encrypting the Mealie token for SparkyFitness: %w", err))
 	}
-	if err := in.writeSparkyMealieProvider(sparky, dbPassword, mealieBase, encrypted, iv, tag); err != nil {
+	if err := in.writeSparkyMealieProvider(sparky, mealieBase, encrypted, iv, tag); err != nil {
 		return fail(err)
 	}
 	return MealieSparkyResult{
@@ -128,118 +117,170 @@ func (in *Installer) ConnectMealieToSparky() (MealieSparkyResult, error) {
 	}, nil
 }
 
-// ensureIntegrationNetworkPolicies allows the console to reach both apps and
-// SparkyFitness to reach Mealie. It is additive: an existing default-deny
-// policy stays in force for every other source.
-func (in *Installer) ensureIntegrationNetworkPolicies(mealieNS, sparkyNS string) error {
-	if err := in.apply(fmt.Sprintf(`apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+const sparkyPostgresImage = "docker.io/library/postgres:18.6"
+
+// sparkyJob runs one short psql Job in the SparkyFitness namespace. The
+// console cannot grant itself pods/exec (RBAC escalation prevention), so a Job
+// is the supported way to reach the database. The password comes from the
+// release Secret; the SQL script (when present) is a Secret mounted read-only.
+func (in *Installer) sparkyJob(sparky *Result, name string, args []string, script string) (string, error) {
+	ns := sparky.Namespace
+	_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+		"delete", "job", name, "--ignore-not-found", "--wait=true")
+	secretName := ""
+	if script != "" {
+		secretName = name + "-sql"
+		_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+			"delete", "secret", secretName, "--ignore-not-found")
+		secret := fmt.Sprintf(`apiVersion: v1
+kind: Secret
 metadata:
-  name: umkim-thin-mealie-integration
+  name: %s
+  namespace: %s
+stringData:
+  script.sql: |
+%s
+`, secretName, ns, indent(script, 4))
+		if err := in.apply(secret); err != nil {
+			return "", fmt.Errorf("creating the SQL Secret: %w", err)
+		}
+	}
+
+	dbUser, dbName := in.sparkyDBConfig(sparky)
+	var argLines strings.Builder
+	for _, a := range args {
+		fmt.Fprintf(&argLines, "            - %q\n", a)
+	}
+	volumes := ""
+	mounts := ""
+	if secretName != "" {
+		volumes = fmt.Sprintf(`      volumes:
+        - name: sql
+          secret:
+            secretName: %s
+`, secretName)
+		mounts = `          volumeMounts:
+            - name: sql
+              mountPath: /sql
+              readOnly: true
+`
+	}
+	job := fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
   namespace: %s
 spec:
-  podSelector: {}
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: %s
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: umkim-thin
-      ports:
-        - protocol: TCP
-          port: 9000
-`, mealieNS, sparkyNS)); err != nil {
-		return fmt.Errorf("Mealie network policy: %w", err)
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app: umkim-thin-mealie-integration
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: psql
+          image: %s
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: ["psql"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: PGHOST
+              value: %q
+            - name: PGUSER
+              value: %q
+            - name: PGDATABASE
+              value: %q
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: %s
+                  key: postgres-password
+          args:
+%s%s%s
+`, name, ns, sparkyPostgresImage, sparky.Name+"-postgres", dbUser, dbName,
+		sparky.Name+"-secrets", argLines.String(), mounts, volumes)
+	if err := in.apply(job); err != nil {
+		if secretName != "" {
+			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+				"delete", "secret", secretName, "--ignore-not-found")
+		}
+		return "", fmt.Errorf("creating the SparkyFitness database Job: %w", err)
 	}
-	if err := in.apply(fmt.Sprintf(`apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: umkim-thin-sparkyfitness-integration
-  namespace: %s
-spec:
-  podSelector: {}
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: umkim-thin
-      ports:
-        - protocol: TCP
-          port: 80
-`, sparkyNS)); err != nil {
-		return fmt.Errorf("SparkyFitness network policy: %w", err)
+	defer func() {
+		_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+			"delete", "job", name, "--ignore-not-found", "--wait=false")
+		if secretName != "" {
+			_, _ = in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+				"delete", "secret", secretName, "--ignore-not-found")
+		}
+	}()
+
+	if _, err := in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+		"wait", "--for=condition=complete", "job/"+name, "--timeout=180s"); err != nil {
+		logs, _ := in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+			"logs", "job/"+name)
+		return "", fmt.Errorf("the SparkyFitness database Job did not complete: %s", strings.TrimSpace(logs))
 	}
-	return nil
+	out, _ := in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+		"logs", "job/"+name)
+	return out, nil
 }
 
-// ensureSparkyExecRole grants the console pods/exec only in the SparkyFitness
-// namespace. The console already manages the release there; this keeps the
-// exec grant out of the cluster-wide role.
-func (in *Installer) ensureSparkyExecRole(namespace string) error {
-	return in.apply(fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: umkim-thin-mealie-integration
-  namespace: %s
-rules:
-  - apiGroups: [""]
-    resources: [pods/exec]
-    verbs: [create, get]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: umkim-thin-mealie-integration
-  namespace: %s
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: umkim-thin-mealie-integration
-subjects:
-  - kind: ServiceAccount
-    name: umkim-thin-console
-    namespace: umkim-thin
-`, namespace, namespace))
+// sparkyDBConfig reads the release ConfigMap, falling back to the chart
+// defaults. The values are not secrets.
+func (in *Installer) sparkyDBConfig(sparky *Result) (string, string) {
+	user, name := "sparky_admin", "sparkyfitness"
+	out, err := in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", sparky.Namespace,
+		"get", "configmap", sparky.Name+"-server", "-o", "json")
+	if err != nil {
+		return user, name
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	if json.Unmarshal([]byte(out), &cm) != nil {
+		return user, name
+	}
+	if v := strings.TrimSpace(cm.Data["SPARKY_FITNESS_DB_USER"]); v != "" {
+		user = v
+	}
+	if v := strings.TrimSpace(cm.Data["SPARKY_FITNESS_DB_NAME"]); v != "" {
+		name = v
+	}
+	return user, name
 }
 
-func (in *Installer) sparkyMealieBaseURL(sparky *Result, dbPassword string) (string, error) {
+func (in *Installer) sparkyMealieBaseURL(sparky *Result) (string, error) {
 	query := `SELECT base_url FROM external_data_providers WHERE provider_type = 'mealie' AND is_public = TRUE AND is_active = TRUE ORDER BY updated_at DESC NULLS LAST LIMIT 1`
-	out, err := in.sparkyPSQL(sparky, dbPassword, []string{"-tAc", query}, "")
+	out, err := in.sparkyJob(sparky, "umkim-thin-mealie-check", []string{"-tAc", query}, "")
 	if err != nil {
 		return "", fmt.Errorf("reading the SparkyFitness Mealie provider: %w", err)
 	}
 	return strings.TrimSpace(out), nil
 }
 
-func (in *Installer) writeSparkyMealieProvider(sparky *Result, dbPassword, baseURL, encrypted, iv, tag string) error {
+func (in *Installer) writeSparkyMealieProvider(sparky *Result, baseURL, encrypted, iv, tag string) error {
 	sql := sparkyProviderSQL(baseURL, encrypted, iv, tag)
-	if _, err := in.sparkyPSQL(sparky, dbPassword, []string{"-v", "ON_ERROR_STOP=1", "-f", "-"}, sql); err != nil {
+	if _, err := in.sparkyJob(sparky, "umkim-thin-mealie-write",
+		[]string{"-v", "ON_ERROR_STOP=1", "-f", "/sql/script.sql"}, sql); err != nil {
 		return fmt.Errorf("writing the SparkyFitness Mealie provider: %w", err)
 	}
 	return nil
-}
-
-// sparkyPSQL runs psql inside the release's PostgreSQL pod. The password is
-// sent on stdin, never in argv. `sql` may be empty when psqlArgs already point
-// at a file/stdin.
-func (in *Installer) sparkyPSQL(sparky *Result, dbPassword string, psqlArgs []string, sql string) (string, error) {
-	args := []string{"--kubeconfig", in.cfg.Kubeconfig, "-n", sparky.Namespace,
-		"exec", "-i", "deploy/" + sparky.Name + "-postgres", "--", "sh", "-c",
-		`set -eu
-IFS= read -r pw
-PGPASSWORD="$pw" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"`,
-		"psql"}
-	args = append(args, psqlArgs...)
-	input := dbPassword + "\n" + sql
-	out, err := in.runInput(input, in.cfg.Kubectl, args...)
-	if err != nil {
-		return "", err
-	}
-	return out, nil
 }
 
 // sparkyProviderSQL upserts the global Mealie provider. SparkyFitness stores

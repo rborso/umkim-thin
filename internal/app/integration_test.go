@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestEncryptSparkySecret(t *testing.T) {
@@ -63,66 +65,56 @@ func TestSparkyProviderSQL(t *testing.T) {
 	}
 }
 
-func TestEnsureIntegrationPolicies(t *testing.T) {
+func TestSparkyJobManifest(t *testing.T) {
 	dir := t.TempDir()
 	applied := filepath.Join(dir, "applied.yaml")
 	kubectl := filepath.Join(dir, "kubectl")
-	if err := os.WriteFile(kubectl, []byte("#!/bin/sh\ncat >> \"$APPLIED\"\n"), 0o755); err != nil {
+	script := `#!/bin/sh
+case "$1" in
+  apply) cat > "$APPLIED"; exit 0 ;;
+esac
+case "$5" in
+  get) echo '{"data":{"SPARKY_FITNESS_DB_USER":"sparky_admin","SPARKY_FITNESS_DB_NAME":"sparkyfitness"}}' ;;
+  logs) echo "base-url" ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("APPLIED", applied)
 
-	in := New(Config{Kubectl: kubectl})
-	if err := in.ensureIntegrationNetworkPolicies("mealie", "sparkyfitness"); err != nil {
-		t.Fatalf("ensureIntegrationNetworkPolicies: %v", err)
-	}
-	if err := in.ensureSparkyExecRole("sparkyfitness"); err != nil {
-		t.Fatalf("ensureSparkyExecRole: %v", err)
+	in := New(Config{Kubectl: kubectl, Kubeconfig: "/tmp/kubeconfig"})
+	_, err := in.sparkyJob(&Result{Name: "sparkyfitness", Namespace: "sparkyfitness"},
+		"umkim-thin-mealie-write", []string{"-v", "ON_ERROR_STOP=1", "-f", "/sql/script.sql"}, "SELECT 1;")
+	if err != nil {
+		t.Fatalf("sparkyJob: %v", err)
 	}
 	body, err := os.ReadFile(applied)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var job map[string]any
+	if err := yaml.Unmarshal(body, &job); err != nil {
+		t.Fatalf("job manifest is not valid YAML: %v\n%s", err, body)
+	}
+	if job["kind"] != "Job" {
+		t.Fatalf("kind = %v", job["kind"])
+	}
 	for _, want := range []string{
-		"name: umkim-thin-mealie-integration",
-		"namespace: mealie",
-		"kubernetes.io/metadata.name: sparkyfitness",
-		"name: umkim-thin-sparkyfitness-integration",
+		"name: umkim-thin-mealie-write",
 		"namespace: sparkyfitness",
-		"kubernetes.io/metadata.name: umkim-thin",
-		"resources: [pods/exec]",
-		"name: umkim-thin-console",
+		"name: PGPASSWORD",
+		"key: postgres-password",
+		"name: sql",
+		"secretName: umkim-thin-mealie-write-sql",
+		"mountPath: /sql",
+		"runAsNonRoot: true",
+		"/sql/script.sql",
 	} {
 		if !strings.Contains(string(body), want) {
-			t.Errorf("applied policy missing %q:\n%s", want, body)
+			t.Errorf("job manifest missing %q:\n%s", want, body)
 		}
-	}
-}
-
-func TestSparkyPSQLKeepsPasswordOffArgv(t *testing.T) {
-	dir := t.TempDir()
-	argvFile := filepath.Join(dir, "argv")
-	stdinFile := filepath.Join(dir, "stdin")
-	kubectl := filepath.Join(dir, "kubectl")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_FILE\"\ncat > \"$STDIN_FILE\"\n"
-	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ARGV_FILE", argvFile)
-	t.Setenv("STDIN_FILE", stdinFile)
-
-	in := New(Config{Kubectl: kubectl})
-	if _, err := in.sparkyPSQL(&Result{Name: "sparkyfitness", Namespace: "sparkyfitness"},
-		"db-secret", []string{"-tAc", "SELECT 1"}, ""); err != nil {
-		t.Fatalf("sparkyPSQL: %v", err)
-	}
-	argv, _ := os.ReadFile(argvFile)
-	stdin, _ := os.ReadFile(stdinFile)
-	if strings.Contains(string(argv), "db-secret") {
-		t.Fatalf("password leaked into argv: %s", argv)
-	}
-	if !strings.HasPrefix(string(stdin), "db-secret\n") {
-		t.Fatalf("password not sent on stdin: %q", stdin)
 	}
 }
 

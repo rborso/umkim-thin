@@ -271,18 +271,19 @@ The action:
    `SPARKY_FITNESS_API_ENCRYPTION_KEY`;
 3. creates (or updates) one **global** Mealie food provider in the
    SparkyFitness database;
-4. adds two narrow NetworkPolicies so the console can reach both apps and
-   SparkyFitness can reach Mealie on an existing default-deny installation;
-5. grants the console `pods/exec` only in the SparkyFitness namespace, so it
-   can run `psql` in that release's PostgreSQL pod. The grant is a namespaced
-   Role/RoleBinding, not a cluster-wide exec permission.
+4. runs a short `psql` Job in the SparkyFitness namespace to upsert the
+   provider. The Job reads the database password from the release Secret and
+   the SQL script from a temporary Secret; no `pods/exec` grant is needed.
 
 There is no manual key or dialog: SparkyFitness has no supported
 service-account/API-key handoff, so the console writes the single provider row
 with the same AES-256-GCM key and schema the application uses. The token never
 appears in argv, the console log, or a ConfigMap. A second click is a no-op
 when the provider already points at this Mealie Service; a failed database
-write removes the temporary Mealie token.
+write removes the temporary Mealie token. New installations get the required
+console and SparkyFitness → Mealie NetworkPolicies from the Ansible netpol
+template; an older installation with default-deny policies must re-run that
+template.
 
 The provider uses the in-cluster URL
 `http://mealie.<namespace>.svc.cluster.local:9000`. Recipes flow from Mealie
