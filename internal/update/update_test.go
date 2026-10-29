@@ -270,3 +270,20 @@ func TestRefreshDoesNotFallBackOnOtherErrors(t *testing.T) {
 		t.Fatalf("the fallback ran on a non-404 (%d hits)", tagHits)
 	}
 }
+
+// Passing the default endpoint explicitly (the console does) must still get the
+// tag fallback: only a mirror gets none.
+func TestDefaultFallbackFollowsTheDefaultEndpoint(t *testing.T) {
+	c := New(Config{Current: "0.2.0", Enabled: true, Endpoint: DefaultEndpoint})
+	if c.cfg.FallbackEndpoint != DefaultFallbackEndpoint {
+		t.Fatalf("fallback = %q, want the default tag list", c.cfg.FallbackEndpoint)
+	}
+	mirror := New(Config{Current: "0.2.0", Enabled: true, Endpoint: "https://mirror.example.com/latest"})
+	if mirror.cfg.FallbackEndpoint != "" {
+		t.Fatalf("a mirror got a GitHub fallback: %q", mirror.cfg.FallbackEndpoint)
+	}
+	off := New(Config{Current: "0.2.0", Enabled: true, Endpoint: DefaultEndpoint, FallbackEndpoint: "-"})
+	if off.cfg.FallbackEndpoint != "" {
+		t.Fatalf("fallback = %q, want disabled", off.cfg.FallbackEndpoint)
+	}
+}

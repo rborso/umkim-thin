@@ -111,9 +111,11 @@ type Checker struct {
 func New(cfg Config) *Checker {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = DefaultEndpoint
-		if cfg.FallbackEndpoint == "" {
-			cfg.FallbackEndpoint = DefaultFallbackEndpoint
-		}
+	}
+	// The default fallback belongs to the default endpoint; a mirror that was
+	// set explicitly gets no implicit GitHub fallback.
+	if cfg.FallbackEndpoint == "" && cfg.Endpoint == DefaultEndpoint {
+		cfg.FallbackEndpoint = DefaultFallbackEndpoint
 	}
 	if cfg.FallbackEndpoint == "-" {
 		cfg.FallbackEndpoint = ""
