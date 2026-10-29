@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR"
-VERSION="0.1.0"
+VERSION="0.2.0"
 ZONE=""
 EMAIL=""
 LAN_CIDR="${UMKIM_THIN_LAN_CIDR:-192.168.1.0/24}"
