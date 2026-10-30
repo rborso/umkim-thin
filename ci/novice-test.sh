@@ -64,6 +64,16 @@ else
   fail "install-single.sh is missing or not executable"
 fi
 
+echo "== upgrade reuse =="
+# An existing install reuses its zone/email, so an upgrade is one flag.
+reuse_state="$tmp/state"
+mkdir -p "$reuse_state"
+printf 'UMKIM_THIN_ZONE=example.com\nUMKIM_THIN_ACME_EMAIL=admin@example.com\n' >"$reuse_state/config.env"
+out=$(UMKIM_THIN_STATE_DIR="$reuse_state" ./install.sh --reuse-k3s --dry-run --skip-dns-check 2>&1) || fail "install.sh --reuse-k3s --dry-run failed: $out"
+printf '%s' "$out" | grep -q "reusing zone example.com" || fail "the zone was not reused"
+printf '%s' "$out" | grep -q "reusing email admin@example.com" || fail "the email was not reused"
+ok "reuses zone and email from the existing install"
+
 echo "== CLI parity =="
 # Every console surface has a CLI command. These run without a cluster, so they
 # catch a command that no longer builds or parses its flags.

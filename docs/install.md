@@ -219,6 +219,10 @@ Or edit the environment yourself and run it:
 PROVISION_ENV=deploy/provision-single.env ./deploy/provision.sh
 ```
 
+Re-running `install.sh` on the same host is an upgrade: `sudo ./install.sh
+--reuse-k3s` reuses the zone and email from `/etc/umkim-thin/config.env`, so the
+flags are only needed on the first install (or when you intend to change them).
+
 The Ansible single path starts with `local-path` config and `umkim-thin-nfs`
 media (`nfs_mode=host` exports from the node). To use an export on another
 host, see [Use an NFS server on another host](quickstart/12-external-nfs.md).

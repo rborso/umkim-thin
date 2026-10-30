@@ -89,6 +89,8 @@ Options:
 
 Examples:
   sudo ./install.sh --zone example.com --email admin@example.com
+  # upgrade an existing install: zone and email come from /etc/umkim-thin
+  sudo ./install.sh --reuse-k3s
   sudo ./install.sh --render-only --zone example.com --email admin@example.com --out /tmp/umkim
   sudo ./install.sh --backup --out /var/backups/umkim-thin
   sudo ./install.sh --doctor
@@ -128,12 +130,45 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# reuse_previous_values fills --zone/--email from the existing install so an
+# upgrade does not have to repeat them. Explicit flags always win; a fresh host
+# has nothing to reuse and still gets the required-flag error.
+reuse_previous_values() {
+  local cfg="$STATE_DIR/config.env" got
+  [ -r "$cfg" ] || return 0
+
+  if [ -z "$ZONE" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_ZONE=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      ZONE="$got"
+      info "reusing zone $ZONE from $cfg"
+    fi
+  fi
+
+  if [ -z "$EMAIL" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_ACME_EMAIL=//p' "$cfg" | head -1)
+    # Installs that predate that key: the rendered Traefik config carries the
+    # ACME address, and the identity values carry the directory admin email.
+    if [ -z "$got" ] && [ -r "$STATE_DIR/traefik-config.yaml" ]; then
+      got=$(sed -n 's/.*acme\.email=\([^"[:space:]]*\).*/\1/p' "$STATE_DIR/traefik-config.yaml" | head -1)
+    fi
+    if [ -z "$got" ] && [ -r "$STATE_DIR/identity-values.yml" ]; then
+      got=$(sed -n 's/^[[:space:]]*adminEmail:[[:space:]]*"\(.*\)"/\1/p' "$STATE_DIR/identity-values.yml" | head -1)
+    fi
+    if [ -n "$got" ]; then
+      EMAIL="$got"
+      info "reusing email $EMAIL from the existing install"
+    fi
+  fi
+}
+
 validate_inputs() {
   if [ "$RENDER_ONLY" -eq 1 ] || [ "$MODE" = "install" ]; then
     [ -f charts/apps/gitea/Chart.yaml ] || \
       die "charts/apps submodule is missing; run: git submodule update --init --recursive"
-    [ -n "$ZONE" ] || die "--zone is required (for example --zone example.com)"
-    [ -n "$EMAIL" ] || die "--email is required (the ACME account and directory admin email)"
+    reuse_previous_values
+    [ -n "$ZONE" ] || die "--zone is required on a first install (an existing install reuses it from $STATE_DIR/config.env)"
+    [ -n "$EMAIL" ] || die "--email is required on a first install (an existing install reuses it)"
     ZONE=$(printf '%s' "$ZONE" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
     case "$ZONE" in
       *[!a-z0-9.-]*|.*|*.-*|*-.*|*..*) die "invalid --zone: $ZONE" ;;
@@ -568,6 +603,8 @@ UMKIM_THIN_KUBECONFIG=/tmp/kubeconfig
 UMKIM_THIN_STATE_DIR=/data
 UMKIM_THIN_CHART_MIRROR=/data/chart-mirror
 UMKIM_THIN_ZONE=$ZONE
+# Kept so a re-run can reuse the ACME/directory address without the flag.
+UMKIM_THIN_ACME_EMAIL=$EMAIL
 UMKIM_THIN_PORTAL_HOST=auth.$ZONE
 UMKIM_THIN_TENANT=default-tenant
 UMKIM_THIN_STORAGE_CONFIG_CLASS=local-path

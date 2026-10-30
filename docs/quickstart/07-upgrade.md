@@ -26,12 +26,16 @@ From the checkout:
 
 ```bash
 git pull
-sudo ./install.sh --zone example.com --email you@example.com --reuse-k3s
+sudo ./install.sh --reuse-k3s
 ```
 
-Use the **same flags** as the first install, plus `--reuse-k3s`: k3s is already
-installed, and without that flag the installer refuses to touch it. The same
-applies when resuming after a failed install that already reached k3s.
+`--reuse-k3s` is the only flag you need on an existing install: the installer
+reuses the zone and email from `/etc/umkim-thin/config.env` (older installs fall
+back to the rendered Traefik config and identity values) and says which values
+it took. Pass `--zone`/`--email` explicitly to change them — moving the zone is
+a different operation, not an upgrade. Without `--reuse-k3s` the installer
+refuses to touch an existing k3s, and the same applies when resuming after a
+failed install that already reached k3s.
 
 The installer builds the console
 image locally by default; the installer:
