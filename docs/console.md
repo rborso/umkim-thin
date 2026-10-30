@@ -399,7 +399,7 @@ and backup code, so a feature cannot exist in only one of them.
 | Access → Invitations | `umkim-thin invite create\|list\|revoke\|redeem` |
 | Access → directory groups | `umkim-thin invite groups` |
 | Access → WireGuard | `umkim-thin wg client create\|list\|delete` |
-| Storage | `umkim-thin storage disks\|plan\|apply\|list\|remove` |
+| Storage | `umkim-thin storage disks\|plan\|apply\|verify\|list\|remove` (`plan` and `verify` mount an external export once, like the Plan button) |
 | Certificates | `umkim-thin cert add\|list\|default\|remove` |
 | Backups | `umkim-thin backup list\|create\|verify\|restore\|prune` |
 | Header version + update chip | `umkim-thin version [--offline] [--json]` |

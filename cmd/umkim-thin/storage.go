@@ -27,6 +27,7 @@ Usage:
   umkim-thin storage import-dir --name NAME --path /srv/existing
   umkim-thin storage plan  --name NAME --kind external --server NAS --export /media
   umkim-thin storage apply --name NAME --kind external --server NAS --export /media
+  umkim-thin storage verify --server HOST --export PATH
   umkim-thin storage remove --name NAME
   umkim-thin storage-agent --socket /run/umkim-thin/storage.sock
 
@@ -88,7 +89,7 @@ func (f *storageFlags) request() storage.Request {
 }
 
 func storageCmd(args []string) error {
-	if len(args) == 0 {
+	if len(args) == 0 || wantsHelp(args) {
 		fmt.Print(storageUsage)
 		return nil
 	}
@@ -152,10 +153,22 @@ func storageCmd(args []string) error {
 		req := f.request()
 		var plan storage.Plan
 		var err error
-		if client.available() {
+		// External exports are managed by the console (state on its PVC), not by
+		// the host agent; the agent socket is for local disks and directories.
+		if client.available() && req.Kind != "external" {
 			err = client.post("/"+args[0], req, &plan)
 		} else if args[0] == "plan" {
 			plan, err = direct().Plan(req)
+			if err == nil && req.Kind == "external" {
+				// Same check as the console's Plan button: reachability and the
+				// export list do not prove the export is mountable.
+				var warnings []string
+				warnings, err = direct().ProbeMount(plan.Request.Server, plan.Export, plan.MountOptions)
+				plan.Warnings = append(plan.Warnings, warnings...)
+				if err == nil {
+					fmt.Printf("mount test: %s:%s is readable\n", plan.Request.Server, plan.Export)
+				}
+			}
 		} else {
 			plan, err = direct().Apply(req)
 		}
@@ -163,6 +176,29 @@ func storageCmd(args []string) error {
 			return err
 		}
 		printPlan(plan)
+		return nil
+	case "verify":
+		fs := flag.NewFlagSet("storage verify", flag.ContinueOnError)
+		var f storageFlags
+		f.register(fs)
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.server == "" || f.export == "" {
+			return fmt.Errorf("storage verify needs --server and --export")
+		}
+		opts := f.mountOptions
+		if opts == "" {
+			opts = "nfsvers=4.2,rw,nolock"
+		}
+		warnings, err := direct().ProbeMount(f.server, f.export, opts)
+		for _, w := range warnings {
+			fmt.Printf("warning: %s\n", w)
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s:%s mounted and is readable\n", f.server, f.export)
 		return nil
 	case "import-dir":
 		fs := flag.NewFlagSet("storage import-dir", flag.ContinueOnError)
