@@ -2,7 +2,7 @@ apiVersion: v2
 name: identity
 description: LLDAP directory + Authelia forward-auth, SSO and invitations for apps on a cluster
 type: application
-version: 0.1.8
+version: 0.1.9
 appVersion: "1.0"
 
 home: https://github.com/rborso/umkim-thin

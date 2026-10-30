@@ -32,6 +32,12 @@ metadata:
   namespace: {{ include "identity.namespace" . }}
 spec:
   replicas: 1
+  # Recreate, like authelia and valkey: the data claim is ReadWriteOnce, so on
+  # HA a rolling update schedules the new pod on another node while the old one
+  # still holds the volume — the new pod waits for a detach that never comes and
+  # the upgrade times out. Recreate terminates the old pod first.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: lldap
