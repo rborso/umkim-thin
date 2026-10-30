@@ -453,3 +453,38 @@ func TestArchiveCountsOnlyCreatedSnapshots(t *testing.T) {
 		t.Fatalf("snapshots = %d, want 1", a.Snapshots)
 	}
 }
+
+// The list must use the same snapshot count as create/verify: an archive whose
+// applies all failed lists zero snapshots, not the number of attempts.
+func TestListCountsOnlyCreatedSnapshots(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	m.cfg.Run = func(name, stdin string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "get volumesnapshotclass"):
+			return `{"items":[{"metadata":{"name":"longhorn-snapshot"}}]}`, nil
+		case strings.Contains(joined, "get pvc -A"):
+			return `{"items":[{"metadata":{"namespace":"gitea","name":"gitea-data"}}]}`, nil
+		case strings.Contains(joined, "apply -f -"):
+			return "", os.ErrInvalid
+		}
+		return "", nil
+	}
+	if _, err := m.Create(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	list, err := m.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Snapshots != 0 {
+		t.Fatalf("list = %+v, want one archive with 0 snapshots", list)
+	}
+	mf, err := m.Manifest(list[0].Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mf.Snapshots) != 1 || mf.Snapshots[0].Error == "" {
+		t.Fatalf("manifest lost the failed apply: %+v", mf.Snapshots)
+	}
+}

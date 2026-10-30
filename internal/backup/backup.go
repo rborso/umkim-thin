@@ -486,14 +486,10 @@ func (m *Manager) List() ([]Archive, error) {
 		if err != nil {
 			a.Error = err.Error()
 		} else {
-			a.Created = mf.Created
-			a.Version = mf.Version
-			a.Zone = mf.Zone
-			a.Note = mf.Note
-			a.Apps = len(mf.Apps)
-			a.Files = len(mf.Files)
-			a.Snapshots = len(mf.Snapshots)
-			a.Warnings = mf.Warnings
+			// Same counting rule as Create/Verify: a failed snapshot apply stays
+			// in the manifest but is not a snapshot.
+			a = archiveFrom(e.Name(), info.Size(), mf)
+			a.modTime = info.ModTime()
 		}
 		out = append(out, a)
 	}
