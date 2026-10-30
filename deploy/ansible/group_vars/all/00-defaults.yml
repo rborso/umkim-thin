@@ -126,6 +126,11 @@ nfs_server: "{{ ansible_default_ipv4.address }}"
 
 # Longhorn (optional shared backend; replicated, HA-capable)
 longhorn_chart_version: "1.6.2"
+# The console's backup snapshots application PVCs through the standard
+# snapshot.storage.k8s.io API; the installer provides the controller and this
+# class for Longhorn's driver.
+longhorn_snapshotter_version: v8.7.0
+longhorn_snapshot_class: longhorn-snapshot
 longhorn_storage_class: longhorn-rwo
 longhorn_rwx_storage_class: longhorn-rwx
 longhorn_data_path: /var/lib/longhorn

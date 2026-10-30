@@ -61,6 +61,59 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   changed_when: false
 
+# The console's backup takes a VolumeSnapshot per application PVC. That API
+# (snapshot.storage.k8s.io) is a separate project, not part of Kubernetes and
+# not installed by Longhorn's chart: without it the backup is metadata-only and
+# the console reports "no VolumeSnapshotClass". Install the controller and one
+# class for Longhorn's driver. The version is pinned; applying an already
+# present CRD is a no-op.
+- name: longhorn | install the snapshot CRDs and controller
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl apply -f {{ item }}
+  loop:
+    - https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ longhorn_snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml
+    - https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ longhorn_snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml
+    - https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ longhorn_snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml
+    - https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ longhorn_snapshotter_version }}/deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml
+    - https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ longhorn_snapshotter_version }}/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+  retries: 3
+  delay: 5
+  register: longhorn_snapshot_crds
+  until: longhorn_snapshot_crds.rc == 0
+
+- name: longhorn | wait for the snapshot controller
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n kube-system rollout status deploy/snapshot-controller
+      --timeout=180s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: longhorn | render the volume snapshot class
+  ansible.builtin.copy:
+    dest: /tmp/longhorn-snapshotclass.yaml
+    mode: '0644'
+    content: |
+      apiVersion: snapshot.storage.k8s.io/v1
+      kind: VolumeSnapshotClass
+      metadata:
+        name: {{ longhorn_snapshot_class }}
+        labels:
+          app.kubernetes.io/managed-by: umkim-thin
+      driver: driver.longhorn.io
+      deletionPolicy: Delete
+
+- name: longhorn | apply the volume snapshot class
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl apply -f /tmp/longhorn-snapshotclass.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
 - name: longhorn | wait for the manager
   ansible.builtin.command:
     cmd: >-
