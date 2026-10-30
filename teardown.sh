@@ -64,8 +64,9 @@ Options:
   -y, --yes          Do not ask for confirmation.
   --dry-run          Print the plan; make no changes (no root needed).
   --purge-data       Also remove /etc/umkim-thin, /var/lib/umkim-thin,
-                     /opt/umkim-thin and Longhorn data. It also unmounts
-                     recorded /srv/nfs mounts and removes their fstab entries.
+                     /opt/umkim-thin and Longhorn data. It also unmounts every
+                     /srv/nfs mount (recorded or not) and removes its fstab
+                     entry, so a reboot does not bring the export back.
                      It does NOT delete the data on those filesystems.
   --keep-tools       Keep an independently installed /usr/local/bin/helm.
                      (k3s's kubectl/crictl/ctr symlinks are removed.)
@@ -176,7 +177,7 @@ EOF
   if [ "$PURGE_DATA" -eq 1 ]; then
     cat <<EOF
 --purge-data will ALSO remove the host state/chart directories, Longhorn data,
-unmount recorded /srv/nfs exports, and remove their fstab entries.
+unmount every /srv/nfs mount (recorded or not) and remove its fstab entry.
 The filesystems themselves are left intact.
 EOF
   else
@@ -292,6 +293,19 @@ cleanup_nfs_exports() {
   else
     info "no umkim-thin export files"
   fi
+  # The Ansible path writes its exports as a marked block in /etc/exports; it is
+  # not in exports.d, so removing the agent files alone left the export (and
+  # nfs-server) behind.
+  if [ -r /etc/exports ] && grep -q "# BEGIN umkim-thin shared storage" /etc/exports 2>/dev/null; then
+    info "remove the umkim-thin block from /etc/exports"
+    local tmp
+    tmp=$(mktemp)
+    sed '/# BEGIN umkim-thin shared storage/,/# END umkim-thin shared storage/d' /etc/exports >"$tmp"
+    if ! run cp "$tmp" /etc/exports; then
+      warn "could not update /etc/exports"
+    fi
+    rm -f "$tmp"
+  fi
 
   if have exportfs; then
     try_run exportfs -ra
@@ -306,43 +320,90 @@ cleanup_nfs_exports() {
   fi
 }
 
+# remove_fstab_entry <mountpoint>: drop the line so a reboot does not remount
+# it. Called even when the unmount failed: leaving the entry is how an export
+# comes back after a teardown.
+remove_fstab_entry() {
+  local mp="$1" tmp
+  [ -r /etc/fstab ] || return 0
+  awk -v mp="$mp" '$2 == mp { found=1 } END { exit !found }' /etc/fstab || return 0
+  tmp=$(mktemp)
+  awk -v mp="$mp" '$2 != mp' /etc/fstab >"$tmp"
+  info "remove the fstab entry for $mp"
+  if ! run cp "$tmp" /etc/fstab; then
+    warn "could not update /etc/fstab for $mp"
+  fi
+  rm -f "$tmp"
+}
+
 purge_storage_mounts() {
   [ "$PURGE_DATA" -eq 1 ] || return 0
-  log "recorded NFS mounts"
-  local state_file="$STATE_DIR/storage.yml"
-  if [ ! -r "$state_file" ]; then
-    info "no storage state at $state_file"
-    return 0
-  fi
+  log "NFS storage mounts"
   if ! have mountpoint; then
     warn "mountpoint not found; not unmounting /srv/nfs entries"
     return 0
   fi
 
-  local mp tmp
+  # The mount may be recorded in the agent's state, or only in /proc/mounts (an
+  # older install, or a re-run after --purge-data removed the state directory).
+  # Take both, so a leftover export is still found.
+  local -a mounts=()
+  local mp
+  if [ -r "$STATE_DIR/storage.yml" ]; then
+    while IFS= read -r mp; do
+      [ -n "$mp" ] && mounts+=("$mp")
+    done < <(awk '$1 == "mountpoint:" { gsub(/"/, "", $2); print $2 }' "$STATE_DIR/storage.yml")
+  else
+    info "no storage state at $STATE_DIR/storage.yml; using /proc/mounts"
+  fi
   while IFS= read -r mp; do
+    [ -n "$mp" ] && mounts+=("$mp")
+  done < <(awk '$2 ~ /^\/srv\/nfs\// { print $2 }' /proc/mounts)
+
+  # De-duplicate.
+  local -a unique=()
+  local seen=" "
+  for mp in "${mounts[@]}"; do
+    case "$seen" in *" $mp "*) continue ;; esac
+    seen="$seen$mp "
+    unique+=("$mp")
+  done
+
+  if [ "${#unique[@]}" -eq 0 ]; then
+    info "no /srv/nfs mounts"
+  fi
+
+  local failures=0
+  for mp in "${unique[@]}"; do
     case "$mp" in
       /srv/nfs/*) ;;
       *) continue ;;
     esac
     if mountpoint -q "$mp"; then
+      # An exported filesystem (or one with a client mount) is busy: release the
+      # exports first, then unmount. Lazy unmount is the fallback so teardown
+      # does not leave the storage attached.
+      if have exportfs; then
+        try_run exportfs -ra >/dev/null 2>&1 || true
+      fi
       info "unmount $mp (data stays on disk)"
       if ! run umount "$mp"; then
-        warn "could not unmount $mp; keeping its fstab entry"
-        continue
+        info "still busy; detaching lazily"
+        if ! run umount -l "$mp"; then
+          warn "could not unmount $mp"
+          failures=$((failures + 1))
+        fi
       fi
+    else
+      info "$mp is not mounted"
     fi
-    if [ -r /etc/fstab ] && awk -v mp="$mp" '$2 == mp { found=1 } END { exit !found }' /etc/fstab; then
-      tmp=$(mktemp)
-      awk -v mp="$mp" '$2 != mp' /etc/fstab >"$tmp"
-      info "remove the fstab entry for $mp"
-      if ! run cp "$tmp" /etc/fstab; then
-        warn "could not update /etc/fstab for $mp"
-      fi
-      rm -f "$tmp"
-    fi
-  done < <(awk '$1 == "mountpoint:" { gsub(/"/, "", $2); print $2 }' "$state_file")
+    remove_fstab_entry "$mp"
+  done
   rmdir /srv/nfs 2>/dev/null || true
+  if [ "$failures" -ne 0 ]; then
+    warn "$failures /srv/nfs mount(s) are still attached; inspect them with: findmnt -R /srv/nfs"
+  fi
+  return 0
 }
 
 cleanup_vip() {
@@ -664,7 +725,7 @@ summary() {
     echo "Teardown complete."
   fi
   if [ "$PURGE_DATA" -eq 1 ]; then
-    echo "Host state, chart data, Longhorn data and /srv/nfs mount entries were removed."
+    echo "Host state, chart data, Longhorn data and the /srv/nfs mounts were removed."
     echo "The filesystems on /srv/nfs were not wiped."
   else
     echo "Kept: $STATE_DIR, $DATA_DIR, $REMOTE_DIR, /var/lib/longhorn and /srv/nfs."

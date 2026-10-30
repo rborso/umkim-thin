@@ -303,3 +303,14 @@ Longhorn's chart does not install it. The HA installer therefore installs the
 `longhorn-snapshot` VolumeSnapshotClass, which the console's backup uses to
 snapshot every application PVC (`docs/backup.md`). The class uses
 `deletionPolicy: Delete`, so deleting an archive deletes its snapshots.
+
+## Teardown
+
+`sudo ./teardown.sh --purge-data` stops the host storage agent, removes the
+umkim-thin export files **and** the marked block the Ansible path writes into
+`/etc/exports`, stops `nfs-server` when no exports remain, then unmounts every
+mount under `/srv/nfs` — recorded in the agent's state or only present in
+`/proc/mounts`, which matters on a re-run after the state directory was already
+purged — and removes the matching `/etc/fstab` entries so a reboot cannot bring
+the export back. The filesystems themselves are not wiped: the disk keeps its
+data and can be remounted.
