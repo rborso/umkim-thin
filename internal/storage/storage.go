@@ -301,10 +301,37 @@ func (c *Config) CheckExternal(server, export string) ([]string, error) {
 	if err != nil {
 		return []string{"NFS TCP/2049 is reachable; showmount failed, so the export path was not verified: " + strings.TrimSpace(string(out))}, nil
 	}
-	if !strings.Contains(string(out), export) {
-		return nil, fmt.Errorf("NFS server %s does not advertise export %s", server, export)
+	exact, parent := matchExport(string(out), export)
+	if exact {
+		return nil, nil
 	}
-	return nil, nil
+	if parent != "" {
+		// showmount lists what the server exports; a client cannot mount a
+		// subdirectory of an export over NFSv4, which is the default here.
+		return nil, fmt.Errorf("NFS server %s exports %s, not %s: NFSv4 clients mount the exported directory itself — export %s on the server, or use %s as the path",
+			server, parent, export, export, parent)
+	}
+	return nil, fmt.Errorf("NFS server %s does not advertise export %s", server, export)
+}
+
+// matchExport reads `showmount -e` output. exact reports the requested path is
+// exported; parent names the export that contains it, when there is one.
+func matchExport(list, export string) (exact bool, parent string) {
+	want := filepath.Clean(export)
+	for _, line := range strings.Split(list, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+			continue
+		}
+		got := filepath.Clean(fields[0])
+		if got == want {
+			return true, ""
+		}
+		if strings.HasPrefix(want, got+"/") && (parent == "" || len(got) > len(parent)) {
+			parent = got
+		}
+	}
+	return false, parent
 }
 
 // Plan validates a request and returns the exact steps.
@@ -723,9 +750,57 @@ func (c *Config) installProvisioner(p Plan) error {
 		"--wait", "--timeout", "5m"}
 	out, err := c.command(c.Helm, args...)
 	if err != nil {
-		return fmt.Errorf("helm upgrade --install nfs-%s: %w: %s", p.Request.Name, err, strings.TrimSpace(out))
+		// Helm only reports "context deadline exceeded" when the wait times
+		// out; the reason is in the provisioner pod's FailedMount event (access
+		// denied, no such export, wrong NFS version). Surface it, or the
+		// operator has nothing to act on.
+		msg := strings.TrimSpace(out)
+		if detail := c.mountFailure(p.Request.Name); detail != "" {
+			msg += "\n" + detail
+		}
+		return fmt.Errorf("helm upgrade --install nfs-%s: %w: %s", p.Request.Name, err, msg)
 	}
 	return nil
+}
+
+// mountFailure returns the first FailedMount message for the release's
+// provisioner pod, which is what actually explains a timed-out install.
+func (c *Config) mountFailure(name string) string {
+	out, err := c.command(c.Kubectl, "--kubeconfig", c.Kubeconfig, "-n", "nfs-provisioner",
+		"get", "events", "-o", "json")
+	if err != nil {
+		return ""
+	}
+	var events struct {
+		Items []struct {
+			Reason         string `json:"reason"`
+			Message        string `json:"message"`
+			InvolvedObject struct {
+				Name string `json:"name"`
+			} `json:"involvedObject"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &events); err != nil {
+		return ""
+	}
+	prefix := "nfs-" + name + "-"
+	for _, e := range events.Items {
+		if e.Reason != "FailedMount" || !strings.HasPrefix(e.InvolvedObject.Name, prefix) {
+			continue
+		}
+		msg := strings.TrimSpace(e.Message)
+		if i := strings.Index(msg, ":"); i > 0 {
+			// Drop the "MountVolume.SetUp failed for volume ..." preamble.
+			if strings.HasPrefix(msg, "MountVolume.SetUp failed") {
+				msg = strings.TrimSpace(msg[i+1:])
+			}
+		}
+		if len(msg) > 400 {
+			msg = msg[:400] + "…"
+		}
+		return "provisioner mount failed: " + msg
+	}
+	return ""
 }
 
 func writeExport(p Plan) error {

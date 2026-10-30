@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -259,5 +260,72 @@ func TestApplyExternalDoesNotTouchHost(t *testing.T) {
 	records := c.List()
 	if len(records) != 1 || records[0].Kind != "external" || records[0].Server != "nas.lan" {
 		t.Fatalf("records = %+v", records)
+	}
+}
+
+// Helm reports only "context deadline exceeded" when the wait times out; the
+// reason is the provisioner pod's FailedMount event, and the operator needs it.
+func TestExternalInstallReportsTheMountError(t *testing.T) {
+	f, err := os.CreateTemp("", "storage-*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+	c := New(Config{StateFile: f.Name(), Helm: "helm", Kubectl: "kubectl", Kubeconfig: "/k"})
+	c.checkExternal = func(server, export string) ([]string, error) { return nil, nil }
+	c.run = func(name string, args ...string) (string, error) {
+		joined := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "repo add"), strings.Contains(joined, "repo update"):
+			return "", nil
+		case strings.Contains(joined, "upgrade --install"):
+			return "Release \"nfs-bck-hdd\" does not exist. Installing it now.\nError: context deadline exceeded", errors.New("exit status 1")
+		case strings.Contains(joined, "get events"):
+			return `{"items":[
+				{"reason":"FailedMount","message":"MountVolume.SetUp failed for volume \"pv-nfs-bck-hdd\" : mount failed: exit status 32: mount.nfs: access denied by server while mounting 192.168.1.20:/backup","involvedObject":{"name":"nfs-bck-hdd-nfs-subdir-external-provisioner-abc"}},
+				{"reason":"FailedMount","message":"unrelated","involvedObject":{"name":"other-pod"}}
+			]}`, nil
+		}
+		return "", nil
+	}
+	_, err = c.Apply(Request{Name: "bck-hdd", Kind: "external", Server: "192.168.1.20", Export: "/backup"})
+	if err == nil {
+		t.Fatal("Apply succeeded; want the install failure")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("error lost Helm's message: %v", err)
+	}
+	if !strings.Contains(err.Error(), "access denied by server") {
+		t.Fatalf("error does not explain the mount failure: %v", err)
+	}
+	if strings.Contains(err.Error(), "unrelated") {
+		t.Fatalf("error includes another pod's event: %v", err)
+	}
+}
+
+func TestMatchExport(t *testing.T) {
+	list := `Export list for nas.lan:
+/srv/nfs/umkim-thin 192.168.1.0/24
+/volume1/media     *
+/backup
+`
+	cases := []struct {
+		export string
+		exact  bool
+		parent string
+	}{
+		{"/srv/nfs/umkim-thin", true, ""},
+		{"/backup", true, ""},
+		{"/volume1/media/", true, ""},
+		{"/srv/nfs/umkim-thin/bck-hdd", false, "/srv/nfs/umkim-thin"},
+		{"/volume1", false, ""},
+		{"/nope", false, ""},
+	}
+	for _, c := range cases {
+		exact, parent := matchExport(list, c.export)
+		if exact != c.exact || parent != c.parent {
+			t.Errorf("matchExport(%q) = %v, %q; want %v, %q", c.export, exact, parent, c.exact, c.parent)
+		}
 	}
 }
