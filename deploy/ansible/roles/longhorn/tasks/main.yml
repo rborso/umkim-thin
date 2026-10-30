@@ -37,9 +37,26 @@
     dest: /tmp/longhorn-storageclasses.yaml
     mode: '0644'
 
+# StorageClass parameters are immutable, so a class created by an older render
+# cannot be patched: an upgrade that changes the replica count or adds a
+# parameter fails with "field is immutable". Recreate the two classes when that
+# happens — deleting a StorageClass never deletes a volume, and existing PVs
+# keep the parameters they were provisioned with.
 - name: longhorn | apply the storage classes
-  ansible.builtin.command:
-    cmd: /usr/local/bin/kubectl apply -f /tmp/longhorn-storageclasses.yaml
+  ansible.builtin.shell: |
+    set -o pipefail
+    if /usr/local/bin/kubectl apply -f /tmp/longhorn-storageclasses.yaml 2>/tmp/longhorn-sc.err; then
+      exit 0
+    fi
+    if ! grep -q "field is immutable" /tmp/longhorn-sc.err; then
+      cat /tmp/longhorn-sc.err >&2
+      exit 1
+    fi
+    echo "storage class parameters changed; recreating {{ longhorn_storage_class }} and {{ longhorn_rwx_storage_class }}"
+    /usr/local/bin/kubectl delete storageclass {{ longhorn_storage_class }} {{ longhorn_rwx_storage_class }} --ignore-not-found
+    /usr/local/bin/kubectl apply -f /tmp/longhorn-storageclasses.yaml
+  args:
+    executable: /bin/bash
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   changed_when: false
