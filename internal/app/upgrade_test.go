@@ -105,3 +105,26 @@ func TestBackupSettingsDefaults(t *testing.T) {
 		t.Errorf("explicit settings were not honoured: %+v", cfg)
 	}
 }
+
+func TestDirectoryURL(t *testing.T) {
+	if got := defaultDirectoryURL("example.com"); got != "https://lldap.example.com" {
+		t.Fatalf("defaultDirectoryURL = %q", got)
+	}
+	if got := defaultDirectoryURL(""); got != "" {
+		t.Fatalf("defaultDirectoryURL with no zone = %q, want empty", got)
+	}
+
+	t.Setenv("UMKIM_THIN_ZONE", "example.com")
+	t.Setenv("UMKIM_THIN_LLDAP_URL", "")
+	cfg := ConfigFromEnv()
+	if cfg.DirectoryURL != "https://lldap.example.com" {
+		t.Fatalf("DirectoryURL = %q, want the zone default", cfg.DirectoryURL)
+	}
+
+	// An external directory publishes its own UI.
+	t.Setenv("UMKIM_THIN_LLDAP_URL", "https://directory.example.net")
+	cfg = ConfigFromEnv()
+	if cfg.DirectoryURL != "https://directory.example.net" {
+		t.Fatalf("DirectoryURL = %q, want the override", cfg.DirectoryURL)
+	}
+}

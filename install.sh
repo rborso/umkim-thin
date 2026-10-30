@@ -584,6 +584,8 @@ UMKIM_THIN_IDENTITY_APPS=/data/identity-apps.yml
 UMKIM_THIN_BIND_SECRET=lldap-service-accounts
 UMKIM_THIN_BASE_DN=$BASE_DN
 UMKIM_THIN_LLDAP_HOST=lldap.identity.svc.cluster.local
+# Public directory (LLDAP) web UI; the home page links here for a password change.
+UMKIM_THIN_LLDAP_URL=https://lldap.$ZONE
 UMKIM_THIN_LLDAP_PORT=3890
 UMKIM_THIN_SECRETS_FILE=/data/secrets.yml
 UMKIM_THIN_CONSOLE_SESSION_KEY_FILE=/data/console-session-key

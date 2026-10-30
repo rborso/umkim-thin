@@ -95,6 +95,9 @@ type Config struct {
 	// HomeHost is the public host of the household home page. The chart
 	// derives it from consoleHost; the console only uses it for its shortcut.
 	HomeHost string
+	// DirectoryURL is the public LLDAP web UI, where a directory user changes
+	// their own password. The home page links to it.
+	DirectoryURL string
 
 	// Backups. The console writes one archive per run (state, seed, app
 	// inventory) and asks the storage for a VolumeSnapshot per app PVC.
@@ -174,6 +177,7 @@ func ConfigFromEnv() Config {
 		GitSHA:           firstNonEmpty(env("UMKIM_THIN_GIT_SHA", ""), readFileTrim("/opt/umkim-thin/git-sha")),
 		Version:          firstNonEmpty(env("UMKIM_THIN_VERSION", ""), readFileTrim("/opt/umkim-thin/version")),
 		HomeHost:         firstNonEmpty(env("UMKIM_THIN_HOME_HOST", ""), defaultHomeHost(zone)),
+		DirectoryURL:     firstNonEmpty(env("UMKIM_THIN_LLDAP_URL", ""), defaultDirectoryURL(zone)),
 
 		BackupDir:       env("UMKIM_THIN_BACKUP_DIR", stateDir+"/backups"),
 		BackupSeedDir:   env("UMKIM_THIN_SEED_DIR", "/etc/umkim-thin"),
@@ -191,6 +195,16 @@ func defaultHomeHost(zone string) string {
 		return ""
 	}
 	return "home." + zone
+}
+
+// defaultDirectoryURL is the LLDAP web UI the installer publishes
+// (lldap.webUIHost = lldap.<zone>). Empty without a zone, so a bare CLI run
+// does not invent a URL.
+func defaultDirectoryURL(zone string) string {
+	if zone == "" {
+		return ""
+	}
+	return "https://lldap." + zone
 }
 
 // HomeURL is the public address of the household home page, or "" when the

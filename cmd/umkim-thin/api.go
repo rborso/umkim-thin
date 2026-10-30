@@ -424,6 +424,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			"zone":                          cfg.Zone,
 			"portalHost":                    cfg.PortalHost,
 			"homeUrl":                       cfg.HomeURL(),
+			"directoryUrl":                  cfg.DirectoryURL,
 			"version":                       cfg.Version,
 			"configClass":                   cfg.ConfigClass,
 			"mediaClass":                    cfg.MediaClass,
@@ -1134,7 +1135,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			_, _ = w.Write([]byte("ok\n"))
 		})
-		homeMux.HandleFunc("GET /api/home", homeAPIHandler(installer, entries))
+		homeMux.HandleFunc("GET /api/home", homeAPIHandler(installer, entries, cfg.DirectoryURL))
 		homeMux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" {
 				http.NotFound(w, r)
@@ -1192,15 +1193,18 @@ type homeApp struct {
 }
 
 type homeResponse struct {
-	User string    `json:"user,omitempty"`
-	Apps []homeApp `json:"apps"`
+	User string `json:"user,omitempty"`
+	// DirectoryURL is the LLDAP web UI, where the user changes their own
+	// password. Empty when the zone is unknown.
+	DirectoryURL string    `json:"directoryUrl,omitempty"`
+	Apps         []homeApp `json:"apps"`
 }
 
 // homeAPIHandler returns installed catalog apps with their public routes. The
 // expensive Helm/kubectl work runs in the background: the first successful
 // build is shared by all users, and a stale snapshot is served immediately
 // while the next one is refreshed.
-func homeAPIHandler(installer *app.Installer, entries []catalog.Entry) http.HandlerFunc {
+func homeAPIHandler(installer *app.Installer, entries []catalog.Entry, directoryURL string) http.HandlerFunc {
 	store := &homeStore{
 		build: func() []homeApp { return buildHomeApps(installer, entries) },
 		ready: make(chan struct{}),
@@ -1217,8 +1221,9 @@ func homeAPIHandler(installer *app.Installer, entries []catalog.Entry) http.Hand
 		apps := store.snapshot()
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, homeResponse{
-			User: strings.TrimSpace(r.Header.Get("Remote-User")),
-			Apps: apps,
+			User:         strings.TrimSpace(r.Header.Get("Remote-User")),
+			DirectoryURL: directoryURL,
+			Apps:         apps,
 		})
 	}
 }

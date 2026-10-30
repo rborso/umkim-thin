@@ -26,6 +26,12 @@ full URL to share. Both come from `homeUrl` in `GET /api/config`, which the
 chart fills from `homeHost` (derived from `consoleHost` when unset). An install
 that has no home host hides both.
 
+The page also carries a **Change password** link to the directory's own web UI
+(`https://lldap.<zone>`, `UMKIM_THIN_LLDAP_URL` to override, e.g. for an
+external directory). It opens in a new tab; the user signs in there with their
+directory account, so the platform never handles the password. `GET /api/home`
+returns it as `directoryUrl` and the link is hidden when the zone is unknown.
+
 ## Layout
 
 The console is split into tabs so unrelated operations are not stacked on one
