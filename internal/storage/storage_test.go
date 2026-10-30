@@ -314,19 +314,28 @@ func TestMatchExport(t *testing.T) {
 		export string
 		exact  bool
 		parent string
+		sub    string
 	}{
-		{"/srv/nfs/umkim-thin", true, ""},
-		{"/backup", true, ""},
-		{"/volume1/media/", true, ""},
-		{"/srv/nfs/umkim-thin/bck-hdd", false, "/srv/nfs/umkim-thin"},
-		{"/volume1", false, ""},
-		{"/nope", false, ""},
+		{"/srv/nfs/umkim-thin", true, "", ""},
+		{"/backup", true, "", ""},
+		{"/volume1/media/", true, "", ""},
+		{"/srv/nfs/umkim-thin/bck-hdd", false, "/srv/nfs/umkim-thin", ""},
+		{"/volume1", false, "", ""},
+		{"/nope", false, "", ""},
 	}
 	for _, c := range cases {
-		exact, parent := matchExport(list, c.export)
-		if exact != c.exact || parent != c.parent {
-			t.Errorf("matchExport(%q) = %v, %q; want %v, %q", c.export, exact, parent, c.exact, c.parent)
+		exact, parent, sub := matchExport(list, c.export)
+		if exact != c.exact || parent != c.parent || sub != c.sub {
+			t.Errorf("matchExport(%q) = %v, %q, %q; want %v, %q, %q", c.export, exact, parent, sub, c.exact, c.parent, c.sub)
 		}
+	}
+
+	// NFSv4 pseudo-root: the server exports /srv/nfs/umkim-thin/bck-hdd under
+	// fsid=0, and the client mounts it as /bck-hdd.
+	pseudo := "Export list for nas.lan:\n/srv/nfs/umkim-thin/bck-hdd 192.168.1.0/24\n"
+	exact, parent, sub := matchExport(pseudo, "/bck-hdd")
+	if exact || parent != "" || sub != "/srv/nfs/umkim-thin/bck-hdd" {
+		t.Fatalf("pseudo-root match = %v, %q, %q", exact, parent, sub)
 	}
 }
 

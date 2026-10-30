@@ -316,8 +316,18 @@ func (c *Config) CheckExternal(server, export string) ([]string, error) {
 	if err != nil {
 		return []string{"NFS TCP/2049 is reachable; showmount failed, so the export path was not verified: " + strings.TrimSpace(string(out))}, nil
 	}
-	exact, parent := matchExport(string(out), export)
+	exact, parent, sub := matchExport(string(out), export)
 	if exact {
+		if parent != "" {
+			// The path is exported, but it also sits inside another export.
+			// With an NFSv4 pseudo-root the client path is the suffix, and
+			// mounting the server path fails with "No such file or directory".
+			return []string{fmt.Sprintf("%s is also inside the export %s; if the server uses an NFSv4 pseudo-root (fsid=0) the client path is %s",
+				export, parent, strings.TrimPrefix(filepath.Clean(export), parent))}, nil
+		}
+		return nil, nil
+	}
+	if sub != "" {
 		return nil, nil
 	}
 	if parent != "" {
@@ -329,9 +339,12 @@ func (c *Config) CheckExternal(server, export string) ([]string, error) {
 	return nil, fmt.Errorf("NFS server %s does not advertise export %s", server, export)
 }
 
-// matchExport reads `showmount -e` output. exact reports the requested path is
-// exported; parent names the export that contains it, when there is one.
-func matchExport(list, export string) (exact bool, parent string) {
+// matchExport reads `showmount -e` output, which lists the server's paths.
+//   - exact: the requested path is exported as written.
+//   - sub: the requested path is the NFSv4 pseudo-root form of an export
+//     ("/bck-hdd" for a server export "/srv/nfs/bck-hdd" under fsid=0).
+//   - parent: the requested path sits inside an export and is not mountable.
+func matchExport(list, export string) (exact bool, parent, sub string) {
 	want := filepath.Clean(export)
 	for _, line := range strings.Split(list, "\n") {
 		fields := strings.Fields(line)
@@ -340,13 +353,18 @@ func matchExport(list, export string) (exact bool, parent string) {
 		}
 		got := filepath.Clean(fields[0])
 		if got == want {
-			return true, ""
+			return true, "", ""
 		}
 		if strings.HasPrefix(want, got+"/") && (parent == "" || len(got) > len(parent)) {
 			parent = got
 		}
+		if len(got) > len(want) && strings.HasSuffix(got, want) {
+			if sub == "" || len(got) < len(sub) {
+				sub = got
+			}
+		}
 	}
-	return false, parent
+	return false, parent, sub
 }
 
 // Plan validates a request and returns the exact steps.
