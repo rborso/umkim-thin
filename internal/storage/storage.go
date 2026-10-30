@@ -103,8 +103,14 @@ type Config struct {
 	NFSServer      string
 	DefaultClients []string
 	NFSChartRepo   string
+	// Mount probe (see probe.go): the image and budget for the throwaway pod
+	// that proves an external export is mountable before Helm waits on it.
+	ProbeImage     string
+	ProbeNamespace string
+	ProbeTimeout   time.Duration
 	// command runner is a test seam.
-	run func(name string, args ...string) (string, error)
+	run      func(name string, args ...string) (string, error)
+	runInput func(stdin, name string, args ...string) (string, error)
 	// external NFS probe is a test seam.
 	checkExternal func(server, export string) ([]string, error)
 }
@@ -128,6 +134,15 @@ func New(cfg Config) *Config {
 	}
 	if cfg.NFSChartRepo == "" {
 		cfg.NFSChartRepo = "https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/"
+	}
+	if cfg.ProbeImage == "" {
+		cfg.ProbeImage = defaultProbeImage
+	}
+	if cfg.ProbeNamespace == "" {
+		cfg.ProbeNamespace = "nfs-provisioner"
+	}
+	if cfg.ProbeTimeout <= 0 {
+		cfg.ProbeTimeout = 45 * time.Second
 	}
 	return &cfg
 }
@@ -609,6 +624,13 @@ func (c *Config) Apply(req Request) (Plan, error) {
 		if err := c.checkExternalClass(plan, releaseExists); err != nil {
 			return Plan{}, err
 		}
+		// Mount it once before Helm does, so a broken export fails in seconds
+		// with the kubelet's reason instead of a five-minute wait timeout.
+		probeWarnings, err := c.ProbeMount(plan.Request.Server, plan.Export, plan.MountOptions)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.Warnings = append(plan.Warnings, probeWarnings...)
 		if err := c.installProvisioner(plan); err != nil {
 			if !releaseExists {
 				_, _ = c.command(c.Helm, "uninstall", "nfs-"+req.Name,

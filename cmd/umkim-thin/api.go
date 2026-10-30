@@ -708,6 +708,33 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		writeJSON(w, plan)
 	})
+	// The plan can only check reachability and the export list; this mounts the
+	// export in a throwaway pod, the same way the provisioner will.
+	mutating(mux, "POST /api/storage/verify", func(w http.ResponseWriter, r *http.Request) {
+		var req storage.Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Kind != "external" {
+			http.Error(w, "only external NFS exports can be verified", http.StatusBadRequest)
+			return
+		}
+		server := strings.TrimSpace(req.Server)
+		if server == "" {
+			server = externalStorage.NFSServer
+		}
+		mountOptions := strings.TrimSpace(req.MountOptions)
+		if mountOptions == "" {
+			mountOptions = "nfsvers=4.2,rw,nolock"
+		}
+		warnings, err := externalStorage.ProbeMount(server, strings.TrimSpace(req.Export), mountOptions)
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "error": err.Error(), "warnings": warnings})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "warnings": warnings})
+	})
 	mutating(mux, "POST /api/storage/apply", func(w http.ResponseWriter, r *http.Request) {
 		var req storage.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

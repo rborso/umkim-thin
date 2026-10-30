@@ -2618,6 +2618,22 @@ async function planStorage() {
     const text = await res.text();
     if (!res.ok) throw new Error(text || ('HTTP ' + res.status));
     renderStoragePlan(JSON.parse(text), out);
+    // Reachability and the export list do not prove the export is mountable;
+    // mount it once in a throwaway pod before the user commits.
+    if (external) {
+      out.textContent += '\n\nTesting the mount (a short-lived probe pod)…';
+      const v = await fetch('/api/storage/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      });
+      const verdict = await v.json().catch(() => ({}));
+      if (verdict.ok) {
+        out.textContent += '\nOK: the export mounted and is readable';
+      } else {
+        out.textContent += '\nFAILED: ' + (verdict.error || 'the export could not be mounted');
+      }
+      for (const w of (verdict.warnings || [])) out.textContent += '\nWARN: ' + w;
+    }
   } catch (err) {
     out.textContent = 'Plan failed:\n' + String(err.message || err);
     note(String(err.message || err), 'err');

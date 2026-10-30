@@ -329,3 +329,86 @@ func TestMatchExport(t *testing.T) {
 		}
 	}
 }
+
+// The probe mounts the export in a pod; a definitive failure must be an error
+// with the server's reason, and the pod must always be removed.
+func TestProbeMountSucceeds(t *testing.T) {
+	var deleted bool
+	c := New(Config{StateFile: t.TempDir() + "/s.yml", Helm: "helm", Kubectl: "kubectl", Kubeconfig: "/k"})
+	var created []string
+	c.runInput = func(stdin, name string, args ...string) (string, error) {
+		created = append(created, stdin)
+		if strings.Contains(stdin, "kind: Pod") &&
+			(!strings.Contains(stdin, "path: /mnt/data/share") || !strings.Contains(stdin, "server: 192.168.1.40")) {
+			t.Fatalf("probe pod spec is wrong:\n%s", stdin)
+		}
+		return "ok", nil
+	}
+	c.run = func(name string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "delete pod"):
+			deleted = true
+			return "", nil
+		case strings.Contains(joined, "get pod") && strings.Contains(joined, "-o json"):
+			return `{"status":{"phase":"Succeeded"}}`, nil
+		}
+		return "", nil
+	}
+	warnings, err := c.ProbeMount("192.168.1.40", "/mnt/data/share", "nfsvers=4.2,rw,nolock")
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("ProbeMount = %v, %v; want success", warnings, err)
+	}
+	if !deleted {
+		t.Fatal("the probe pod was not deleted")
+	}
+	if len(created) != 2 || !strings.Contains(created[0], "kind: Namespace") {
+		t.Fatalf("the probe did not create its namespace first: %v", created)
+	}
+}
+
+func TestProbeMountReportsTheServerReason(t *testing.T) {
+	c := New(Config{StateFile: t.TempDir() + "/s.yml", Helm: "helm", Kubectl: "kubectl", Kubeconfig: "/k"})
+	c.runInput = func(string, string, ...string) (string, error) { return "pod created", nil }
+	c.run = func(name string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "get pod") && strings.Contains(joined, "-o json"):
+			return `{"status":{"phase":"Pending"}}`, nil
+		case strings.Contains(joined, "get events"):
+			return `{"items":[{"reason":"FailedMount","message":"MountVolume.SetUp failed for volume \"pv-nfs\" : mount failed: exit status 32: mount.nfs: mounting 192.168.1.40:/mnt/data/share failed, reason given by server: No such file or directory"}]}`, nil
+		}
+		return "", nil
+	}
+	_, err := c.ProbeMount("192.168.1.40", "/mnt/data/share", "")
+	if err == nil || !strings.Contains(err.Error(), "No such file or directory") {
+		t.Fatalf("ProbeMount error = %v, want the server's reason", err)
+	}
+	if !strings.Contains(err.Error(), "192.168.1.40:/mnt/data/share") {
+		t.Fatalf("error does not name the export: %v", err)
+	}
+}
+
+// A probe that cannot run (image pull) must not block an install that would
+// otherwise work.
+func TestProbeMountImagePullIsAWarning(t *testing.T) {
+	c := New(Config{StateFile: t.TempDir() + "/s.yml", Helm: "helm", Kubectl: "kubectl", Kubeconfig: "/k"})
+	c.runInput = func(string, string, ...string) (string, error) { return "pod created", nil }
+	c.run = func(name string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "get pod") && strings.Contains(joined, "-o json"):
+			return `{"status":{"phase":"Pending"}}`, nil
+		case strings.Contains(joined, "get events"):
+			return `{"items":[{"reason":"Failed","message":"Failed to pull image \"alpine\": rpc error: dial tcp: i/o timeout"}]}`, nil
+		}
+		return "", nil
+	}
+	warnings, err := c.ProbeMount("192.168.1.40", "/mnt/data/share", "")
+	if err != nil {
+		t.Fatalf("ProbeMount returned a hard error for an image pull: %v", err)
+	}
+	if len(warnings) == 0 || !strings.Contains(strings.Join(warnings, " "), "could not verify") {
+		t.Fatalf("warnings = %v, want a could-not-verify warning", warnings)
+	}
+}
