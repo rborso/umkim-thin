@@ -15,8 +15,10 @@ import (
 
 // fakeCluster answers the two kubectl reads and records everything else.
 type fakeCluster struct {
-	class       string
-	pvcs        []string // "ns/name"
+	class string
+	pvcs  []string // "ns/name"
+	// nfs names one PVC that is NFS-backed (not CSI) and must be skipped.
+	nfs         string
 	applied     []string
 	appliedYAML []string
 	fail        bool
@@ -34,9 +36,22 @@ func (f *fakeCluster) run(name, stdin string, args ...string) (string, error) {
 		var items []string
 		for _, p := range f.pvcs {
 			ns, n, _ := strings.Cut(p, "/")
-			items = append(items, `{"metadata":{"namespace":"`+ns+`","name":"`+n+`"}}`)
+			items = append(items, `{"metadata":{"namespace":"`+ns+`","name":"`+n+`"},"spec":{"volumeName":"pv-`+n+`"}}`)
 		}
 		return `{"items":[` + strings.Join(items, ",") + `]}`, nil
+	case strings.Contains(joined, "get pv -o json"):
+		var items []string
+		for _, p := range f.pvcs {
+			_, n, _ := strings.Cut(p, "/")
+			if f.nfs != "" && n == f.nfs {
+				items = append(items, `{"metadata":{"name":"pv-`+n+`"},"spec":{"nfs":{"server":"10.0.0.1"}}}`)
+				continue
+			}
+			items = append(items, `{"metadata":{"name":"pv-`+n+`"},"spec":{"csi":{"driver":"driver.longhorn.io"}}}`)
+		}
+		return `{"items":[` + strings.Join(items, ",") + `]}`, nil
+	case strings.Contains(joined, "get volumesnapshot") && strings.Contains(joined, "jsonpath"):
+		return "true", nil
 	case strings.Contains(joined, "apply -f -"):
 		if f.fail {
 			return "", os.ErrPermission
@@ -446,11 +461,12 @@ func TestCreateFollowsConfigMapSymlinks(t *testing.T) {
 // archive's snapshot count must only include the ones that exist.
 func TestArchiveCountsOnlyCreatedSnapshots(t *testing.T) {
 	a := archiveFrom("x.tar.gz", 1, Manifest{Snapshots: []SnapshotRecord{
-		{Namespace: "gitea", PVC: "data", Snapshot: "ut-1-data-abc"},
+		{Namespace: "gitea", PVC: "data", Snapshot: "ut-1-data-abc", Ready: true},
+		{Namespace: "gitea", PVC: "notready", Snapshot: "ut-1-notready-def"},
 		{Namespace: "gitea", PVC: "postgres", Error: "invalid name"},
 	}})
 	if a.Snapshots != 1 {
-		t.Fatalf("snapshots = %d, want 1", a.Snapshots)
+		t.Fatalf("snapshots = %d, want 1 (a not-ready snapshot is not counted)", a.Snapshots)
 	}
 }
 
@@ -464,7 +480,9 @@ func TestListCountsOnlyCreatedSnapshots(t *testing.T) {
 		case strings.Contains(joined, "get volumesnapshotclass"):
 			return `{"items":[{"metadata":{"name":"longhorn-snapshot"}}]}`, nil
 		case strings.Contains(joined, "get pvc -A"):
-			return `{"items":[{"metadata":{"namespace":"gitea","name":"gitea-data"}}]}`, nil
+			return `{"items":[{"metadata":{"namespace":"gitea","name":"gitea-data"},"spec":{"volumeName":"pv-gitea"}}]}`, nil
+		case strings.Contains(joined, "get pv -o json"):
+			return `{"items":[{"metadata":{"name":"pv-gitea"},"spec":{"csi":{"driver":"driver.longhorn.io"}}}]}`, nil
 		case strings.Contains(joined, "apply -f -"):
 			return "", os.ErrInvalid
 		}
@@ -486,5 +504,36 @@ func TestListCountsOnlyCreatedSnapshots(t *testing.T) {
 	}
 	if len(mf.Snapshots) != 1 || mf.Snapshots[0].Error == "" {
 		t.Fatalf("manifest lost the failed apply: %+v", mf.Snapshots)
+	}
+}
+
+// NFS (or local-path) PVCs have no CSI source; the snapshot controller refuses
+// them, so they are skipped with a warning instead of creating broken objects.
+func TestSnapshotsSkipNonCSIVolumes(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	f := &fakeCluster{
+		class: "longhorn-snapshot",
+		pvcs:  []string{"gitea/gitea-data", "nextcloud/nextcloud-data"},
+		nfs:   "nextcloud-data",
+	}
+	m.cfg.Run = f.run
+	a, err := m.Create(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Snapshots != 1 {
+		t.Fatalf("snapshots = %d, want only the CSI-backed PVC", a.Snapshots)
+	}
+	if len(a.Warnings) == 0 || !strings.Contains(strings.Join(a.Warnings, " "), "nextcloud/nextcloud-data") {
+		t.Fatalf("warnings = %v, want the skipped NFS PVC named", a.Warnings)
+	}
+	mf, _, err := scanArchive(filepath.Join(m.Dir(), a.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range mf.Snapshots {
+		if s.PVC == "nextcloud-data" {
+			t.Fatalf("an NFS PVC was snapshotted: %+v", s)
+		}
 	}
 }

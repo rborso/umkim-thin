@@ -47,16 +47,31 @@ func (m *Manager) snapshotPVCs(_ context.Context, ts time.Time) ([]SnapshotRecor
 				Name      string `json:"name"`
 				Namespace string `json:"namespace"`
 			} `json:"metadata"`
+			Spec struct {
+				VolumeName string `json:"volumeName"`
+			} `json:"spec"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(out), &pvcs); err != nil {
 		return nil, "application data was not snapshotted: " + shortErr(err)
 	}
+	csi, err := m.csiVolumes()
+	if err != nil {
+		return nil, "application data was not snapshotted: " + shortErr(err)
+	}
 	stamp := ts.Format("20060102T150405Z")
 	var recs []SnapshotRecord
+	var skipped []string
 	for _, p := range pvcs.Items {
 		ns, name := p.Metadata.Namespace, p.Metadata.Name
 		if ns == "" || name == "" || platformNamespaces[ns] {
+			continue
+		}
+		// The snapshot API is a CSI feature: an NFS (or local-path) volume has
+		// no CSI source and the controller refuses it. Back those up where the
+		// data lives (the NFS server or a VM snapshot) and say so.
+		if !csi[p.Spec.VolumeName] {
+			skipped = append(skipped, ns+"/"+name)
 			continue
 		}
 		snap := snapshotName(stamp, name)
@@ -69,9 +84,84 @@ func (m *Manager) snapshotPVCs(_ context.Context, ts time.Time) ([]SnapshotRecor
 		recs = append(recs, SnapshotRecord{Namespace: ns, PVC: name, Snapshot: snap, Class: class})
 	}
 	if len(recs) == 0 {
+		if len(skipped) > 0 {
+			return nil, "application data was not snapshotted: no CSI-backed PVC (skipped " + strings.Join(skipped, ", ") + ")"
+		}
 		return nil, "no application PVCs to snapshot"
 	}
-	return recs, ""
+	warn := ""
+	if len(skipped) > 0 {
+		warn = "these PVCs are not CSI-backed and were not snapshotted (back them up at the storage): " + strings.Join(skipped, ", ")
+	}
+	m.waitReady(recs)
+	return recs, warn
+}
+
+// csiVolumes returns the persistent volumes that are CSI-backed, keyed by PV
+// name. Everything else (NFS, local-path) cannot be snapshotted through the
+// VolumeSnapshot API.
+func (m *Manager) csiVolumes() (map[string]bool, error) {
+	out, err := m.cfg.Run(m.cfg.Kubectl, "", "--kubeconfig", m.cfg.Kubeconfig,
+		"get", "pv", "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	var pvs struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				CSI *struct {
+					Driver string `json:"driver"`
+				} `json:"csi"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &pvs); err != nil {
+		return nil, err
+	}
+	csi := make(map[string]bool, len(pvs.Items))
+	for _, pv := range pvs.Items {
+		csi[pv.Metadata.Name] = pv.Spec.CSI != nil
+	}
+	return csi, nil
+}
+
+// waitReady polls the snapshots it just created so the manifest records what
+// actually completed, not what was requested. A snapshot that is still not
+// ready keeps its error and is not counted.
+func (m *Manager) waitReady(recs []SnapshotRecord) {
+	deadline := time.Now().Add(m.cfg.SnapshotWait)
+	for {
+		pending := 0
+		for i := range recs {
+			if recs[i].Snapshot == "" || recs[i].Error != "" || recs[i].Ready {
+				continue
+			}
+			out, err := m.cfg.Run(m.cfg.Kubectl, "", "--kubeconfig", m.cfg.Kubeconfig,
+				"get", "volumesnapshot", recs[i].Snapshot, "-n", recs[i].Namespace,
+				"-o", "jsonpath={.status.readyToUse}")
+			if err != nil {
+				recs[i].Error = shortErr(err)
+				continue
+			}
+			if strings.TrimSpace(out) == "true" {
+				recs[i].Ready = true
+				continue
+			}
+			pending++
+		}
+		if pending == 0 || time.Now().After(deadline) {
+			for i := range recs {
+				if recs[i].Snapshot != "" && recs[i].Error == "" && !recs[i].Ready {
+					recs[i].Error = "not ready before the backup finished"
+				}
+			}
+			return
+		}
+		time.Sleep(m.cfg.SnapshotPoll)
+	}
 }
 
 // snapshotClass picks the first VolumeSnapshotClass. Multiple classes are an

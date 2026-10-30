@@ -106,6 +106,10 @@
           app.kubernetes.io/managed-by: umkim-thin
       driver: driver.longhorn.io
       deletionPolicy: Delete
+      # Longhorn's CSI driver needs the snapshot type: without it the
+      # snapshotter tries a backup to an (empty) backup target and fails.
+      parameters:
+        type: snap
 
 - name: longhorn | apply the volume snapshot class
   ansible.builtin.command:

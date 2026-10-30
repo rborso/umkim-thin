@@ -74,6 +74,10 @@ type Config struct {
 	Keep int
 	// Snapshots enables the CSI VolumeSnapshot half.
 	Snapshots bool
+	// SnapshotWait bounds how long Create waits for the snapshots to become
+	// ready (default 90s), polling every SnapshotPoll (default 3s).
+	SnapshotWait time.Duration
+	SnapshotPoll time.Duration
 	// Now is injectable for tests.
 	Now func() time.Time
 	// Run executes a tool (with optional stdin). Injectable for tests.
@@ -104,7 +108,10 @@ type SnapshotRecord struct {
 	PVC       string `json:"pvc"`
 	Snapshot  string `json:"snapshot,omitempty"`
 	Class     string `json:"class,omitempty"`
-	Error     string `json:"error,omitempty"`
+	// Ready is set when the snapshot reached readyToUse before the backup
+	// finished; only those are counted in the archive summary.
+	Ready bool   `json:"ready,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // Manifest is the archive's index. It is the first entry in the tar.
@@ -166,6 +173,12 @@ func New(cfg Config) *Manager {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.SnapshotWait <= 0 {
+		cfg.SnapshotWait = 90 * time.Second
+	}
+	if cfg.SnapshotPoll <= 0 {
+		cfg.SnapshotPoll = 3 * time.Second
 	}
 	if cfg.Run == nil {
 		cfg.Run = func(name, stdin string, args ...string) (string, error) {
@@ -832,7 +845,7 @@ func archiveFrom(name string, size int64, mf Manifest) Archive {
 	// the manifest for the operator, but it is not a snapshot.
 	ok := 0
 	for _, s := range mf.Snapshots {
-		if s.Snapshot != "" && s.Error == "" {
+		if s.Snapshot != "" && s.Ready && s.Error == "" {
 			ok++
 		}
 	}

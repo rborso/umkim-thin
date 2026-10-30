@@ -105,9 +105,15 @@ recorded (best effort). Snapshots are named
 - **No remote target.** The archive directory is local. For offsite copies, sync
   `/data/backups` (or point `UMKIM_THIN_BACKUP_DIR` at an RWX class) and back up
   the snapshot storage separately.
-- **Snapshots need a CSI driver that supports them.** `local-path` does not;
-  Longhorn does. Without a `VolumeSnapshotClass` the archive is metadata-only and
-  the console says so in its warnings.
+- **Snapshots need a CSI driver that supports them.** The HA installer provides
+  the standard snapshot API (`external-snapshotter` v8.7.0) and a
+  `longhorn-snapshot` VolumeSnapshotClass (`parameters.type: snap`) for
+  Longhorn's driver, so HA gets the data half out of the box. Only CSI-backed
+  volumes can be snapshotted: PVCs on the external NFS class are skipped with a
+  warning naming them — back those up on the NFS server. The single-node
+  `local-path` provisioner is not a CSI driver either, so there the archive is
+  metadata-only and the console says so. A cluster without a
+  `VolumeSnapshotClass` still gets a valid archive.
 - **No per-app restore.** A restore is console state + missing apps; restoring
   one app's data is the snapshot/PVC step above.
 - **No encryption.** Archives are mode 0600 and contain secrets (`secrets.yml`,

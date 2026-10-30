@@ -294,3 +294,12 @@ The state file is `/etc/umkim-thin/storage.yml`; `/etc/mdadm.conf` and
 - StorageClass removal keeps data; there is no purge command;
 - the directory mode assumes the directory is already on a mounted filesystem
   and is intentionally not responsible for that mount.
+
+## Volume snapshots (HA)
+
+Longhorn is a CSI driver, but Kubernetes does not ship the snapshot API and
+Longhorn's chart does not install it. The HA installer therefore installs the
+`external-snapshotter` CRDs and controller (pinned `v8.7.0`) and one
+`longhorn-snapshot` VolumeSnapshotClass, which the console's backup uses to
+snapshot every application PVC (`docs/backup.md`). The class uses
+`deletionPolicy: Delete`, so deleting an archive deletes its snapshots.
