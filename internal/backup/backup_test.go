@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -355,6 +356,11 @@ func TestSnapshotNameFitsTheLimit(t *testing.T) {
 	if len(n) > 63 {
 		t.Fatalf("snapshot name %q is %d characters", n, len(n))
 	}
+	// Kubernetes object names are lowercase RFC 1123: the archive stamp's T and
+	// Z must not leak in (the lab rejected every snapshot before this).
+	if !regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).MatchString(n) {
+		t.Fatalf("snapshot name %q is not a lowercase RFC 1123 name", n)
+	}
 	if n != snapshotName("20261102T120000Z", long) {
 		t.Fatal("snapshot name is not deterministic")
 	}
@@ -433,5 +439,17 @@ func TestCreateFollowsConfigMapSymlinks(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("seed/config.env is missing: %v", paths)
+	}
+}
+
+// A failed snapshot apply is kept in the manifest for the operator, but the
+// archive's snapshot count must only include the ones that exist.
+func TestArchiveCountsOnlyCreatedSnapshots(t *testing.T) {
+	a := archiveFrom("x.tar.gz", 1, Manifest{Snapshots: []SnapshotRecord{
+		{Namespace: "gitea", PVC: "data", Snapshot: "ut-1-data-abc"},
+		{Namespace: "gitea", PVC: "postgres", Error: "invalid name"},
+	}})
+	if a.Snapshots != 1 {
+		t.Fatalf("snapshots = %d, want 1", a.Snapshots)
 	}
 }

@@ -832,9 +832,17 @@ func (m *Manager) Path(name string) (string, error) {
 }
 
 func archiveFrom(name string, size int64, mf Manifest) Archive {
+	// Count the snapshots that were actually created: a failed apply is kept in
+	// the manifest for the operator, but it is not a snapshot.
+	ok := 0
+	for _, s := range mf.Snapshots {
+		if s.Snapshot != "" && s.Error == "" {
+			ok++
+		}
+	}
 	return Archive{
 		Name: name, Size: size, Created: mf.Created, Version: mf.Version,
 		Zone: mf.Zone, Note: mf.Note, Apps: len(mf.Apps), Files: len(mf.Files),
-		Snapshots: len(mf.Snapshots), Warnings: mf.Warnings,
+		Snapshots: ok, Warnings: mf.Warnings,
 	}
 }

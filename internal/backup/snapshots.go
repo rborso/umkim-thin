@@ -108,7 +108,9 @@ func snapshotName(stamp, pvc string) string {
 		base = base[:34]
 	}
 	base = strings.TrimRight(base, "-")
-	return "ut-" + stamp + "-" + base + "-" + suffix
+	// Kubernetes object names are lowercase RFC 1123; the archive stamp has an
+	// uppercase T and Z.
+	return "ut-" + strings.ToLower(stamp) + "-" + base + "-" + suffix
 }
 
 func snapshotYAML(name, namespace, pvc, class string) string {
