@@ -13,10 +13,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -40,6 +42,10 @@ func ConfigFromEnv() Config {
 	loadConfigFile("/etc/umkim-thin/config.env")
 	stateDir := env("UMKIM_THIN_STATE_DIR", "/etc/umkim-thin")
 	extra := splitCSV(env("UMKIM_THIN_WG_ALLOWED_IPS", ""))
+	port := atoi(env("UMKIM_THIN_WG_PORT", "51820"))
+	if port == 0 {
+		port = 51820
+	}
 	return Config{
 		Kubeconfig: env("UMKIM_THIN_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"),
 		Kubectl:    env("UMKIM_THIN_KUBECTL", "/usr/local/bin/kubectl"),
@@ -47,12 +53,80 @@ func ConfigFromEnv() Config {
 		Secret:     env("UMKIM_THIN_WG_SECRET", "wireguard-peers"),
 		Subnet:     env("UMKIM_THIN_WG_SUBNET", "192.168.168.0/24"),
 		ServerIP:   env("UMKIM_THIN_WG_SERVER_IP", "192.168.168.1"),
-		Port:       atoi(env("UMKIM_THIN_WG_PORT", "51820")),
-		Endpoint:   env("UMKIM_THIN_WG_ENDPOINT", ""),
+		Port:       port,
+		Endpoint:   NormalizeEndpoint(env("UMKIM_THIN_WG_ENDPOINT", ""), port),
 		DNS:        env("UMKIM_THIN_VPN_DNS_IP", "10.43.200.53"),
 		AllowedIPs: extra,
 		StateFile:  env("UMKIM_THIN_WG_STATE", stateDir+"/wg-clients.json"),
 	}
+}
+
+// NormalizeEndpoint turns the configured public address into the host:port a
+// client dials. It accepts "host", "host:port", "scheme://host/" and IPv6
+// literals, and appends the gateway port only when the value has none. An
+// empty value stays empty; Create refuses to hand out a config without one.
+func NormalizeEndpoint(raw string, port int) string {
+	if port == 0 {
+		port = 51820
+	}
+	e := strings.TrimSpace(raw)
+	if e == "" {
+		return ""
+	}
+	// Tolerate a URL-shaped value from a copy-pasted config.
+	if i := strings.Index(e, "://"); i >= 0 {
+		e = e[i+3:]
+	}
+	e = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(e), "/"))
+	if e == "" {
+		return ""
+	}
+	// Older templates appended the port unconditionally, so "host:51820"
+	// became "host:51820:51820". Collapse that instead of shipping it.
+	if parts := strings.Split(e, ":"); len(parts) == 3 && isPort(parts[1]) && parts[1] == parts[2] {
+		e = parts[0] + ":" + parts[1]
+	}
+	if _, _, err := net.SplitHostPort(e); err == nil {
+		return e
+	}
+	// A bare IPv6 literal needs brackets before the port can be appended.
+	if ip := net.ParseIP(strings.Trim(e, "[]")); ip != nil && ip.To4() == nil {
+		return net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	}
+	if strings.Contains(e, ":") {
+		// Keep an unrecognised value visible instead of doubling the port.
+		return e
+	}
+	return net.JoinHostPort(e, strconv.Itoa(port))
+}
+
+func isPort(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n > 0 && n <= 65535
+}
+
+// FileName is a safe download name for a client config: ASCII, no spaces, and
+// always ending in .conf. WireGuard's importers accept a plain .conf, while
+// some browsers rename a text/plain blob to .txt.
+func FileName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	for strings.Contains(out, "--") {
+		out = strings.ReplaceAll(out, "--", "-")
+	}
+	out = strings.Trim(strings.TrimSuffix(out, ".conf"), "-.")
+	if out == "" {
+		out = "wireguard-client"
+	}
+	return out + ".conf"
 }
 
 // Manager reads and writes the peers Secret.
@@ -141,8 +215,18 @@ func (m *Manager) EnsureServer() error {
 
 // Create adds a client and returns its config.
 func (m *Manager) Create(name string) (Client, error) {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return Client{}, fmt.Errorf("a client name is required")
+	}
+	if len(name) > 64 {
+		return Client{}, fmt.Errorf("a client name must be at most 64 characters")
+	}
+	if strings.ContainsAny(name, "\r\n\t") {
+		return Client{}, fmt.Errorf("a client name cannot contain line breaks or tabs")
+	}
+	if m.cfg.Endpoint == "" {
+		return Client{}, fmt.Errorf("the WireGuard endpoint is not configured: set UMKIM_THIN_WG_ENDPOINT to the public address clients dial (for example wg.example.com), then restart the console")
 	}
 	st, err := m.load()
 	if err != nil {
@@ -197,6 +281,36 @@ func (m *Manager) List() ([]Peer, error) {
 	return out, nil
 }
 
+// Status is the read-only view the console shows next to the client list. A
+// client config is only useful when the gateway is installed and an endpoint
+// is configured, so both are reported instead of failing later.
+type Status struct {
+	Endpoint  string `json:"endpoint"`
+	Subnet    string `json:"subnet"`
+	Clients   int    `json:"clients"`
+	Installed bool   `json:"gatewayInstalled"`
+}
+
+// Status reports the endpoint, the tunnel subnet and whether the gateway
+// DaemonSet exists. The check is best effort: a missing cluster (or RBAC)
+// simply reports "not installed".
+func (m *Manager) Status() Status {
+	st := Status{Endpoint: m.cfg.Endpoint, Subnet: m.cfg.Subnet}
+	if state, err := m.load(); err == nil {
+		st.Clients = len(state.Clients)
+	}
+	if m.cfg.Kubectl != "" {
+		args := []string{"-n", m.cfg.Namespace, "get", "daemonset", "wireguard-gateway", "-o", "name"}
+		if m.cfg.Kubeconfig != "" {
+			args = append([]string{"--kubeconfig", m.cfg.Kubeconfig}, args...)
+		}
+		if out, err := exec.Command(m.cfg.Kubectl, args...).Output(); err == nil {
+			st.Installed = strings.TrimSpace(string(out)) != ""
+		}
+	}
+	return st
+}
+
 // nextAddress returns the lowest free host address in the tunnel subnet.
 func (m *Manager) nextAddress(st *state) (string, error) {
 	prefix, err := netip.ParsePrefix(m.cfg.Subnet)
@@ -249,7 +363,15 @@ func lastIPv4(p netip.Prefix) netip.Addr {
 }
 
 func (m *Manager) clientConfig(priv, addr, serverPub string) string {
-	allowed := append([]string{m.cfg.Subnet}, m.cfg.AllowedIPs...)
+	allowed := []string{m.cfg.Subnet}
+	seen := map[string]bool{m.cfg.Subnet: true}
+	for _, a := range m.cfg.AllowedIPs {
+		if a = strings.TrimSpace(a); a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		allowed = append(allowed, a)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\nAddress = %s/32\n", priv, addr)
 	if m.cfg.DNS != "" {

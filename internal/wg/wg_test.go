@@ -75,6 +75,51 @@ func TestClientConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeEndpoint(t *testing.T) {
+	cases := map[string]string{
+		"":                           "",
+		"wg.example.com":             "wg.example.com:51820",
+		"wg.example.com:51999":       "wg.example.com:51999",
+		"https://wg.example.com/":    "wg.example.com:51820",
+		"WG.Example.COM":             "WG.Example.COM:51820",
+		"wg.example.com:51820:51820": "wg.example.com:51820",
+		"203.0.113.9":                "203.0.113.9:51820",
+		"203.0.113.9:51820":          "203.0.113.9:51820",
+		"2001:db8::1":                "[2001:db8::1]:51820",
+		"[2001:db8::1]:51820":        "[2001:db8::1]:51820",
+	}
+	for in, want := range cases {
+		if got := NormalizeEndpoint(in, 51820); got != want {
+			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFileName(t *testing.T) {
+	cases := map[string]string{
+		"laptop":          "laptop.conf",
+		"My Phone":        "my-phone.conf",
+		"  Anna's iPad  ": "anna-s-ipad.conf",
+		"":                "wireguard-client.conf",
+		"../etc/passwd":   "etc-passwd.conf",
+		"laptop.conf":     "laptop.conf",
+	}
+	for in, want := range cases {
+		if got := FileName(in); got != want {
+			t.Errorf("FileName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCreateNeedsAnEndpoint(t *testing.T) {
+	m := testManager("192.168.168.0/24", "192.168.168.1")
+	m.cfg.Endpoint = ""
+	m.cfg.StateFile = filepath.Join(t.TempDir(), "state.json")
+	if _, err := m.Create("laptop"); err == nil {
+		t.Fatal("Create handed out a config with no endpoint")
+	}
+}
+
 func TestKeypair(t *testing.T) {
 	priv, pub, err := keypair()
 	if err != nil {

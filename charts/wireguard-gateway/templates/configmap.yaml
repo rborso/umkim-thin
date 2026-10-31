@@ -43,6 +43,15 @@ data:
     wg setconf wg0 "$CONF"
     ip link set wg0 up
 
+    # Calico (and a firewalld FORWARD policy) drops forwarded traffic that does
+    # not belong to an interface it manages, so tunnel traffic to pod/service
+    # IPs never leaves the node. Accept wg0 in both directions; the return path
+    # is still limited to established flows by conntrack.
+    iptables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null || \
+      iptables -I FORWARD 1 -i wg0 -j ACCEPT
+    iptables -C FORWARD -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+      iptables -I FORWARD 1 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
     GATEWAY_IP="${GATEWAY_IP:-$(cat /config/server-address)}"
     GATEWAY_IP="${GATEWAY_IP%/*}"
     NODE_IP="${NODE_IP:-$(ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2; exit}' | cut -d/ -f1)}"
@@ -92,14 +101,35 @@ data:
       iptables -t nat -I PREROUTING 1 -s "${SUBNET}" -d "${GATEWAY_IP}" -p "${proto}" --dport 53 \
         -j DNAT --to-destination "${VPN_DNS_IP}:53"
     done
-    # The Traefik pod may be on another node. Let the general MASQUERADE below
-    # SNAT the tunnel source to this node so the reply returns through this
-    # WireGuard session; the vpn entrypoint/allowlist still gates the route.
+    # Remove the RETURN rules from previous runs before re-adding the current
+    # one, so a changed target does not leave a stale bypass behind.
     for old_port in 30443 30444 "${VPN_PORT}" "9443"; do
       while iptables -t nat -D POSTROUTING -s "${SUBNET}" -d 127.0.0.1 -p tcp --dport "${old_port}" -j RETURN 2>/dev/null; do :; done
       while iptables -t nat -D POSTROUTING -s "${SUBNET}" -d "${NODE_IP}" -p tcp --dport "${old_port}" -j RETURN 2>/dev/null; do :; done
       while iptables -t nat -D POSTROUTING -s "${SUBNET}" -d "${TRAEFIK_VPN_HOST}" -p tcp --dport "${old_port}" -j RETURN 2>/dev/null; do :; done
     done
+
+    # A vpn-only route matches the peer address, so a same-node Traefik must
+    # see the tunnel source, not a node/CNI address. Only a local target can
+    # keep it: when Traefik is on another node the reply would leave that
+    # node's wg0 (same address, no session), so those flows are SNATed below.
+    target_is_local() {
+      route=$(ip route get "$1" 2>/dev/null | head -1)
+      case "$route" in
+        *" via "*) return 1 ;;
+      esac
+      dev=$(printf '%s' "$route" | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+      case "$dev" in
+        cali*|veth*|cni*|flannel*|docker*|lxc*|br-*|lo) return 0 ;;
+      esac
+      return 1
+    }
+    VPN_TARGET_PORT="9443"
+    [ -n "${TRAEFIK_VPN_HOST_OVERRIDE:-}" ] && VPN_TARGET_PORT="${VPN_PORT}"
+    if target_is_local "${TRAEFIK_VPN_HOST}"; then
+      iptables -t nat -I POSTROUTING 1 -s "${SUBNET}" -d "${TRAEFIK_VPN_HOST}" \
+        -p tcp --dport "${VPN_TARGET_PORT}" -j RETURN
+    fi
 
     # Send the rest of the client traffic to the cluster out of the node; the
     # node already has ip_forward set, and kube-proxy/flannel route the cluster
