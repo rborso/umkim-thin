@@ -132,6 +132,9 @@ spec:
             {{- if .Values.storageSocket }}
             - { name: storage-socket, mountPath: /run/umkim-thin }
             {{- end }}
+            {{- range .Values.backupTargets }}
+            - { name: backup-{{ .name }}, mountPath: /backups/{{ .name }} }
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -140,6 +143,21 @@ spec:
           hostPath:
             path: {{ .Values.storageSocket | quote }}
             type: DirectoryOrCreate
+        {{- end }}
+        {{- range .Values.backupTargets }}
+        - name: backup-{{ .name }}
+          {{- if .nfs }}
+          nfs:
+            server: {{ .nfs.server | quote }}
+            path: {{ .nfs.path | quote }}
+          {{- else if .pvc }}
+          persistentVolumeClaim:
+            claimName: {{ .pvc.claimName | quote }}
+          {{- else if .hostPath }}
+          hostPath:
+            path: {{ .hostPath.path | quote }}
+            type: Directory
+          {{- end }}
         {{- end }}
         - name: state
           persistentVolumeClaim:

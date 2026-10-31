@@ -38,6 +38,16 @@ forwardAuthMiddleware: identity-authelia@file
 # console Storage section; HA uses Longhorn/external NFS instead.
 storageSocket: ""
 
+# Extra places the console can write backups, each mounted at /backups/<name>
+# and selectable in the Backups screen. The console PVC (/data/backups) is
+# always available. Example:
+#   backupTargets:
+#     - name: nfs
+#       nfs: {server: 192.0.2.10, path: /export/umkim-thin-backups}
+#     - name: usb
+#       hostPath: {path: /srv/backups}
+backupTargets: []
+
 # State/config storage. The chart always creates the PVC; the installer selects
 # the class: local-path for single, longhorn-rwo for HA.
 persistence:

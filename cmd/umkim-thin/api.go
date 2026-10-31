@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -140,34 +142,44 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	go updates.Start(context.Background())
 
 	// Backups: one archive per run (console state, installer seed, app
-	// inventory) plus a VolumeSnapshot per application PVC. The schedule runs
-	// in the background; a restart does not trigger an immediate backup.
-	backups := backup.New(backup.Config{
-		Dir:        cfg.BackupDir,
-		StateDir:   cfg.StateDir,
-		SeedDir:    cfg.BackupSeedDir,
-		Helm:       cfg.Helm,
-		Kubectl:    cfg.Kubectl,
-		Kubeconfig: cfg.Kubeconfig,
-		Version:    cfg.Version,
-		Zone:       cfg.Zone,
-		Keep:       cfg.BackupKeep,
-		Snapshots:  cfg.BackupSnapshots,
-	})
-	if cfg.BackupInterval > 0 {
-		go func() {
-			t := time.NewTicker(cfg.BackupInterval)
-			defer t.Stop()
-			for range t.C {
-				a, err := backups.Create(context.Background(), "scheduled")
-				if err != nil {
-					log.Printf("backup: scheduled run failed: %v", err)
-					continue
-				}
-				log.Printf("backup: wrote %s (%d files, %d snapshots)", a.Name, a.Files, a.Snapshots)
-			}
-		}()
+	// inventory) plus a VolumeSnapshot per application PVC. The schedule is
+	// editable from the console and stored on the PVC; the installer's env
+	// values are only the initial default.
+	defSchedule := backup.Schedule{
+		Enabled:   cfg.BackupInterval > 0,
+		Interval:  "24h",
+		Keep:      cfg.BackupKeep,
+		Snapshots: cfg.BackupSnapshots,
+		DataMode:  backup.DataSnapshot,
 	}
+	if !cfg.BackupSnapshots {
+		defSchedule.DataMode = backup.DataOff
+	}
+	if cfg.BackupInterval > 0 {
+		defSchedule.Interval = backup.FormatInterval(cfg.BackupInterval)
+	}
+	sched := backup.NewScheduleStore(filepath.Join(cfg.StateDir, "backup-schedule.json"), defSchedule)
+	backups := backup.New(backup.Config{
+		Dir:         cfg.BackupDir,
+		StateDir:    cfg.StateDir,
+		SeedDir:     cfg.BackupSeedDir,
+		Helm:        cfg.Helm,
+		Kubectl:     cfg.Kubectl,
+		Kubeconfig:  cfg.Kubeconfig,
+		Version:     cfg.Version,
+		Zone:        cfg.Zone,
+		Keep:        cfg.BackupKeep,
+		Snapshots:   cfg.BackupSnapshots,
+		Schedule:    sched,
+		HelperImage: cfg.ConsoleImage,
+	})
+	go backups.RunSchedule(context.Background(), sched, func(a backup.Archive, err error) {
+		if err != nil {
+			log.Printf("backup: scheduled run failed: %v", err)
+			return
+		}
+		log.Printf("backup: wrote %s (%d files, %d snapshots, %d copies)", a.Name, a.Files, a.Snapshots, a.Data)
+	})
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -814,31 +826,118 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		cfg := app.ConfigFromEnv()
+		s := sched.Get()
 		resp := map[string]any{
 			"dir":       backups.Dir(),
-			"keep":      cfg.BackupKeep,
-			"snapshots": cfg.BackupSnapshots,
-			"enabled":   cfg.BackupInterval > 0,
-			"interval":  cfg.BackupInterval.String(),
+			"target":    backups.Dir(),
+			"targets":   backups.Targets(),
+			"keep":      s.Keep,
+			"snapshots": s.Snapshots,
+			"dataMode":  s.Mode(),
+			"enabled":   s.Enabled,
+			"interval":  s.Interval,
 			"archives":  list,
 		}
+		var newest time.Time
 		if len(list) > 0 {
-			resp["last"] = list[0].Created
-			if cfg.BackupInterval > 0 {
-				resp["next"] = list[0].Created.Add(cfg.BackupInterval)
-			}
+			newest = list[0].Created
+			resp["last"] = newest
+		}
+		if next := backup.NextRun(s, newest, time.Now()); !next.IsZero() {
+			resp["next"] = next
 		}
 		writeJSON(w, resp)
 	})
+	// The schedule is edited from the Backups screen: enabling it, the
+	// interval, retention and the snapshot switch all apply to the running
+	// loop without a restart.
+	mutating(mux, "PUT /api/backups/schedule", func(w http.ResponseWriter, r *http.Request) {
+		var s backup.Schedule
+		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if s.Target != "" {
+			found := false
+			for _, t := range backups.Targets() {
+				if t.Path != s.Target {
+					continue
+				}
+				found = true
+				if !t.Writable {
+					http.Error(w, "the selected backup target is not writable", http.StatusBadRequest)
+					return
+				}
+				break
+			}
+			if !found {
+				http.Error(w, "unknown backup target; pick one from GET /api/backups", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := sched.Set(s); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		saved := sched.Get()
+		audit(r, auth, "backup-schedule", "",
+			fmt.Sprintf("enabled=%t interval=%s keep=%d data=%s", saved.Enabled, saved.Interval, saved.Keep, saved.Mode()))
+		writeJSON(w, saved)
+	})
 	mutating(mux, "POST /api/backups", func(w http.ResponseWriter, r *http.Request) {
-		a, err := backups.Create(r.Context(), "manual")
+		// An empty body (or {"all":true}) is a full backup, which is what the
+		// upgrade pre-backup and older clients send. A body with an apps or
+		// volumes array is a selection, even when the array is empty (that is
+		// an explicit "nothing", rejected by CreateSelected).
+		var req struct {
+			Apps    []string `json:"apps"`
+			Volumes []string `json:"volumes"`
+			All     bool     `json:"all"`
+		}
+		var sel *backup.Selection
+		if r.Body != nil {
+			err := json.NewDecoder(r.Body).Decode(&req)
+			if err != nil && !errors.Is(err, io.EOF) {
+				http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if !req.All && (req.Apps != nil || req.Volumes != nil) {
+			sel = &backup.Selection{Apps: req.Apps, Volumes: req.Volumes}
+		}
+		a, err := backups.CreateSelected(r.Context(), "manual", sel)
+		if err != nil {
+			code := http.StatusInternalServerError
+			if errors.Is(err, backup.ErrSelection) {
+				code = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), code)
+			return
+		}
+		audit(r, auth, "backup-create", a.Name, backupScopeLabel(a))
+		writeJSON(w, a)
+	})
+	// A platform backup is a separate kind: the cluster objects, the host and
+	// console state, and the platform volumes (identity, Traefik). It never
+	// includes application data.
+	mutating(mux, "POST /api/backups/platform", func(w http.ResponseWriter, r *http.Request) {
+		a, err := backups.CreatePlatform(r.Context(), "manual")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		audit(r, auth, "backup-create", a.Name, fmt.Sprintf("%d files, %d snapshots", a.Files, a.Snapshots))
+		audit(r, auth, "backup-platform", a.Name, backupScopeLabel(a))
 		writeJSON(w, a)
+	})
+	// The selection view: which apps and volumes a backup can include. It is
+	// separate from the archive list so polling the list stays cheap.
+	mux.HandleFunc("GET /api/backups/scope", func(w http.ResponseWriter, r *http.Request) {
+		view, err := backups.Scope()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, view)
 	})
 	mux.HandleFunc("GET /api/backups/{name}/download", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
@@ -851,9 +950,37 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
 		http.ServeFile(w, r, p)
 	})
+	// One volume's file copy (when the storage cannot snapshot). The volume is
+	// "namespace/pvc" because the PVC name is not unique across namespaces.
+	mux.HandleFunc("GET /api/backups/{name}/data", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		vol := r.URL.Query().Get("volume")
+		mf, err := backups.Manifest(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		for _, d := range mf.Data {
+			if d.File == "" || d.Namespace+"/"+d.PVC != vol {
+				continue
+			}
+			file := filepath.Join(backups.Dir(), filepath.Base(d.File))
+			if _, err := os.Stat(file); err != nil {
+				http.Error(w, "the data copy is missing from the backup directory", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/gzip")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(d.File)))
+			http.ServeFile(w, r, file)
+			return
+		}
+		http.Error(w, "no such volume copy in this archive", http.StatusNotFound)
+	})
 	mutating(mux, "POST /api/backups/{name}/restore", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Confirm bool `json:"confirm"`
+			Confirm  bool `json:"confirm"`
+			Data     bool `json:"data"`
+			Platform bool `json:"platform"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if !req.Confirm {
@@ -866,7 +993,24 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		audit(r, auth, "backup-restore", name, fmt.Sprintf("%d files, safety %s", len(rep.Restored), rep.SafetyArchive))
+		if req.Data {
+			vols, err := backups.RestoreVolumes(r.Context(), name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			rep.Volumes = vols
+		}
+		if req.Platform {
+			applied, err := backups.ApplyPlatform(r.Context(), name)
+			rep.Applied = applied
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		audit(r, auth, "backup-restore", name,
+			fmt.Sprintf("%d files, safety %s, data=%t platform=%t", len(rep.Restored), rep.SafetyArchive, req.Data, req.Platform))
 		writeJSON(w, rep)
 	})
 	mutating(mux, "DELETE /api/backups/{name}", func(w http.ResponseWriter, r *http.Request) {
@@ -1112,6 +1256,19 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		writeJSON(w, peers)
 	})
+	// The panel shows the endpoint and whether the gateway exists: a client
+	// config with no endpoint, or with no gateway to dial, is the usual reason
+	// "the VPN does not work".
+	mux.HandleFunc("GET /api/wg/status", func(w http.ResponseWriter, r *http.Request) {
+		st := wg.New(wg.ConfigFromEnv()).Status()
+		writeJSON(w, map[string]any{
+			"endpoint":             st.Endpoint,
+			"subnet":               st.Subnet,
+			"clients":              st.Clients,
+			"gatewayInstalled":     st.Installed,
+			"trustedAccessEnabled": app.ConfigFromEnv().TrustedAccessEnabled,
+		})
+	})
 	mutating(mux, "POST /api/wg/clients", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name string `json:"name"`
@@ -1121,13 +1278,17 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			return
 		}
 		audit(r, auth, "wg-create", req.Name, "")
-		c, err := wg.New(wg.ConfigFromEnv()).Create(req.Name)
+		cfg := wg.ConfigFromEnv()
+		m := wg.New(cfg)
+		c, err := m.Create(req.Name)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		resp := map[string]any{
 			"name": c.Name, "address": c.Address, "publicKey": c.PublicKey, "config": c.Config,
+			"filename": wg.FileName(c.Name), "endpoint": cfg.Endpoint,
+			"gatewayInstalled": m.Status().Installed,
 		}
 		// The config is ~400 bytes; keep the QR large enough that phone
 		// scanners do not misread a section header.
@@ -1464,4 +1625,17 @@ func sameOrigin(r *http.Request) bool {
 func audit(r *http.Request, auth *consoleAuth, action, name, detail string) {
 	user, _ := auth.currentUser(r)
 	log.Printf("audit user=%q action=%s app=%q %s", user, action, name, detail)
+}
+
+// backupScopeLabel describes what a backup covered, for the audit log.
+func backupScopeLabel(a backup.Archive) string {
+	kind := a.Kind
+	if kind == "" {
+		kind = backup.KindData
+	}
+	scope := "full"
+	if a.Selection != nil {
+		scope = fmt.Sprintf("partial (%d apps, %d volumes)", len(a.Selection.Apps), len(a.Selection.Volumes))
+	}
+	return fmt.Sprintf("%s %s; %d files, %d snapshots, %d copies", kind, scope, a.Files, a.Snapshots, a.Data)
 }

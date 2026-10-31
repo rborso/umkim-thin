@@ -124,6 +124,7 @@ PY
 
 grep -q '^UMKIM_THIN_ZONE=example.com$' "$tmp/render/config.env" || fail "zone missing from config.env"
 grep -q '^UMKIM_THIN_IDENTITY_CHART=/data/chart-mirror/identity-' "$tmp/render/config.env" || fail "identity chart path missing"
+grep -q '^UMKIM_THIN_WG_ENDPOINT=wg.example.com:51820$' "$tmp/render/config.env" || fail "WireGuard endpoint is not wg.<zone>:<port>"
 grep -q '^consoleHost: "console.example.com"$' "$tmp/render/console-values.yml" || fail "console host missing"
 grep -q '^  portalHost: "auth.example.com"$' "$tmp/render/identity-values.yml" || fail "portal host missing"
 ok "generated config has the expected values"
@@ -131,6 +132,14 @@ ok "generated config has the expected values"
 mode=$(stat -c '%a' "$tmp/render/identity-values.yml")
 [ "$mode" = "600" ] || fail "identity-values.yml mode is $mode, want 600"
 ok "identity values are 0600"
+
+# An endpoint that already carries a port must not get a second one; the
+# Ansible template used to append it unconditionally.
+./install.sh --render-only --zone example.com --email admin@example.com \
+  --wg-endpoint wg.example.com:51999 --out "$tmp/render-wg" >/dev/null
+grep -q '^UMKIM_THIN_WG_ENDPOINT=wg.example.com:51999$' "$tmp/render-wg/config.env" \
+  || fail "an explicit WireGuard endpoint port was doubled"
+ok "an explicit WireGuard endpoint port is kept"
 
 echo "== chart mirror names =="
 mirror="$tmp/mirror"

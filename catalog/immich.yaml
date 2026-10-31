@@ -13,8 +13,11 @@ links:
 
 chart:
   ref: oci://ghcr.io/rborso/charts/immich
-  version: 0.1.9
+  version: 0.1.10
   versions:
+    - version: 0.1.10
+      appVersion: 3.3.5
+      channel: stable
     - version: 0.1.9
       appVersion: 3.3.5
       channel: stable

@@ -31,9 +31,22 @@ Everything is written with mode 0600 in a 0700 directory.
 After the first install the console takes a backup every 24 hours and keeps the
 last seven: the console state, the installer seed, the installed app inventory
 and the Helm values each app was installed with, plus a storage snapshot per
-application PVC where the driver supports it. **Backups** in the console lists
-them, takes one now, downloads it, and restores it. See
+application PVC where the driver supports it — or a full file copy of the
+volume when it does not (the schedule's **Data** mode). **Backups** in the console lists
+them, takes one now (optionally narrowed to selected apps and volumes),
+downloads it, and restores it. The automatic schedule (on/off, interval,
+retention, snapshots) is edited in the same screen. See
 [`../backup.md`](../backup.md) for what is in an archive and what is not.
+
+**Platform backup** (same screen) is the other half: every Kubernetes object
+(including Secrets), the console/host state and the identity stack's volumes
+(LLDAP, Authelia, Traefik ACME). It does not contain application data. Restoring
+it is a manual sequence — see [`../backup.md`](../backup.md#platform-backup).
+
+Restoring a volume copy is `backup restore <name> --data --confirm` (or the
+checkbox in the dialog): the app is stopped, the copy extracted into its PVC,
+and the app started again. The full wipe-and-rebuild sequence is in
+[`../disaster-recovery.md`](../disaster-recovery.md).
 
 The host-side `install.sh --backup` below is still the only thing that captures
 the **etcd** datastore. Keep using it (and copy its output off the host) before a

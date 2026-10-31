@@ -47,11 +47,14 @@ page:
   to the upstream website/source; the install panel repeats those links and
   shows the full licence notice and any non-commercial warning.
 - **Access** — **Invitations** and **WireGuard clients**, the two person/device
-  onboarding surfaces.
+  onboarding surfaces. The WireGuard panel shows the endpoint the generated
+  configs dial and whether the gateway is installed, so a peer is never created
+  against a missing gateway or an unset endpoint.
 - **Storage** — local-host disks/RAID/NFS exports and external NFS
   StorageClasses; see [`storage.md`](storage.md).
 - **Certificates** — manual TLS certificates and the default wildcard.
-- **Backups** — the schedule, the archives, "Back up now", download, restore
+- **Backups** — the editable automatic schedule, data mode and target, the archives, "Back up now" (data) and "Platform backup", and a restore dialog with optional volume/object restore
+  (optionally narrowed to selected apps and volumes), download, restore
   and delete; see [`backup.md`](backup.md).
 
 The header keeps only the platform links (portal, home, console), the running
@@ -401,7 +404,7 @@ and backup code, so a feature cannot exist in only one of them.
 | Access → WireGuard | `umkim-thin wg client create\|list\|delete` |
 | Storage | `umkim-thin storage disks\|plan\|apply\|verify\|list\|remove` (`plan` and `verify` mount an external export once, like the Plan button) |
 | Certificates | `umkim-thin cert add\|list\|default\|remove` |
-| Backups | `umkim-thin backup list\|create\|verify\|restore\|prune` |
+| Backups | `umkim-thin backup list\|create\|platform\|scope\|schedule\|verify\|restore\|prune` |
 | Header version + update chip | `umkim-thin version [--offline] [--json]` |
 | Effective config | `umkim-thin config [--json]` |
 
@@ -440,10 +443,14 @@ to poll; a long install or upgrade blocks the terminal instead.
 | GET | `/api/catalog` | catalog entries, including chart/application licences and upstream links |
 | GET | `/api/config` | zone, portal, `homeUrl`, running `version`, default classes and `mediaAccessMode` |
 | GET | `/api/version` | running version, newest published release, `available`, release URL and the last check time |
-| GET | `/api/backups` | schedule, retention and the archives with their manifests |
-| POST | `/api/backups` | write an archive now (state, seed, app inventory, PVC snapshots) |
+| GET | `/api/backups` | schedule, targets (with free space), retention and the archives with their manifests |
+| GET | `/api/backups/scope` | the apps and volumes a selective backup can include |
+| PUT | `/api/backups/schedule` | `{enabled,interval,keep,dataMode,target}` (`dataMode`: off, snapshot, auto, copy; `target`: a path from GET); saves the schedule and applies it without a restart |
+| POST | `/api/backups` | write a data backup now; `{"apps":["immich"],"volumes":["immich/immich-data"]}` narrows it, an empty body or `{"all":true}` is a full backup |
+| POST | `/api/backups/platform` | write a platform backup (cluster objects, console/host state, identity/Traefik volumes) |
 | GET | `/api/backups/{name}/download` | the archive itself |
-| POST | `/api/backups/{name}/restore` | `{confirm:true}`; restores state and seed after writing a safety archive |
+| GET | `/api/backups/{name}/data?volume=ns/pvc` | one volume file copy (when the storage cannot snapshot) |
+| POST | `/api/backups/{name}/restore` | `{confirm:true,data,platform}`; restores state and seed after writing a safety archive; `data` extracts the volume copies (stops workloads), `platform` applies the object export |
 | DELETE | `/api/backups/{name}` | delete an archive and the snapshots it recorded |
 | GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence, upstream links) |
 | POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, `mediaAccessMode`, per-PVC `pvcs`, and per-container `resources` overrides (async job) |
@@ -456,6 +463,9 @@ to poll; a long install or upgrade blocks the terminal instead.
 | POST | `/api/apps/{name}/upgrade` | `{version, confirmBackup}`; atomic upgrade job |
 | DELETE | `/api/apps/{name}?purge=` | uninstall (purge deletes data) |
 | GET | `/api/status` | Applications aggregate (45 s cache) |
+| GET | `/api/wg/clients` | WireGuard peers |
+| GET | `/api/wg/status` | the endpoint clients dial, the tunnel subnet, the peer count and whether the gateway DaemonSet exists |
+| POST | `/api/wg/clients` | `{name}`; returns the peer, its config, a sanitized `.conf` filename, the endpoint and `gatewayInstalled` |
 | GET | `/api/storage` | host exports/arrays plus external NFS exports |
 | GET | `/api/storage/disks` | local blank/used disk inventory |
 | POST | `/api/storage/plan` | local or external plan (`kind` selects the path) |
@@ -508,10 +518,12 @@ UMKIM_THIN_BUILDER_IMAGE=gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:...
 UMKIM_THIN_BUILD_NAMESPACE=umkim-thin-build
 UMKIM_THIN_BOOTSTRAP_NODE=<first server's hostname>
 
-# Backups: one archive per run on the console PVC, plus a snapshot per app PVC
+# Backups: one archive per run on the console PVC, plus a snapshot per app PVC.
+# The interval/keep/snapshots here are the initial default; the console's
+# Backups screen owns them after the first save (state/backup-schedule.json).
 UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=7                 # 0 keeps everything
-UMKIM_THIN_BACKUP_INTERVAL=24h           # 0 or off disables the schedule
+UMKIM_THIN_BACKUP_INTERVAL=24h           # 0 or off starts disabled
 UMKIM_THIN_BACKUP_SNAPSHOTS=true
 
 # Console release check (read-only; false for an air-gapped install)
@@ -529,7 +541,10 @@ UMKIM_THIN_WG_NAMESPACE=wireguard
 UMKIM_THIN_WG_SUBNET=192.168.168.0/24            # HA default: 192.168.169.0/24
 UMKIM_THIN_WG_SERVER_IP=192.168.168.1
 UMKIM_THIN_WG_PORT=51820
-UMKIM_THIN_WG_ENDPOINT=<public-address>:51820
+# Public host clients dial. The port is appended when it is missing; a value
+# with a port is kept as-is. Empty means "not configured", and the console
+# refuses to create a client config that could never handshake.
+UMKIM_THIN_WG_ENDPOINT=wg.example.com:51820
 ```
 
 `install.sh` writes the first storage block with `local-path` and

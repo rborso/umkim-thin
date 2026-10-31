@@ -100,6 +100,15 @@
   .chip.ok { background: var(--ok-bg); color: var(--ok-ink) }
   .chip.err { background: var(--err-bg); color: var(--err-ink) }
   .chip.warn { background: var(--warn-bg); color: var(--warn-ink) }
+  .scope-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin: .6rem 0 }
+  .scope-head { display: flex; align-items: center; gap: .4rem; margin-bottom: .35rem }
+  .scope-head button { padding: .1rem .5rem; font-size: .78rem }
+  .scope-list { max-height: 14rem; overflow: auto; border: 1px solid var(--line); border-radius: .5rem; padding: .4rem .6rem }
+  .scope-list label { display: flex; gap: .45rem; align-items: baseline; padding: .12rem 0; font-size: .86rem }
+  .scope-list .meta { color: var(--muted); font-size: .78rem; margin-left: auto; text-align: right }
+  .schedule { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: .6rem; background: #fbfcfe; font-size: .88rem; margin-bottom: .4rem }
+  .schedule label { display: flex; align-items: center; gap: .35rem }
+  .schedule input:not([type="checkbox"]) { padding: .2rem .35rem }
   #apps-updated { font-size: .82rem; margin-left: .5rem }
   .job-progress { overflow-wrap: anywhere; }
   #app-detail { display: none; margin-top: 1rem }
@@ -303,6 +312,7 @@
         <input id="wg-name" placeholder="client name" required>
         <button type="submit" class="primary">Create client</button>
       </form>
+      <p class="sub" id="wg-status" style="margin:.6rem 0 0"></p>
       <div id="wg-result">
         <img id="wg-qr" alt="WireGuard config QR" style="width:320px; image-rendering:pixelated; border:1px solid var(--line); border-radius:.5rem">
         <pre id="wg-config"></pre>
@@ -464,16 +474,57 @@
           <h2>Backups</h2>
           <p class="sub">One archive per run: console state (invites, app state, WireGuard peers, per-app Helm values), the installer seed, the installed app inventory, and a storage snapshot per application PVC. The archive is metadata; the snapshot is the data.</p>
         </div>
-        <div><button id="backup-now" class="primary">Back up now</button> <span id="backup-status" class="muted" role="status" aria-live="polite"></span></div>
+        <div><button id="backup-now" class="primary">Back up now</button> <button id="backup-platform">Platform backup…</button> <span id="backup-status" class="muted" role="status" aria-live="polite"></span></div>
       </div>
-      <p class="hint" id="backup-schedule"></p>
+      <div class="schedule" id="backup-schedule-form">
+        <label class="check"><input type="checkbox" id="backup-auto"> Automatic backups</label>
+        <label>Every <input id="backup-interval" list="backup-intervals" placeholder="24h" size="6"></label>
+        <datalist id="backup-intervals">
+          <option value="6h"></option>
+          <option value="12h"></option>
+          <option value="24h"></option>
+          <option value="48h"></option>
+          <option value="168h"></option>
+        </datalist>
+        <label>Keep <input id="backup-keep" type="number" min="0" step="1" style="width:4.5rem"></label>
+        <label>Data <select id="backup-data-mode">
+          <option value="off">metadata only</option>
+          <option value="snapshot">snapshots when supported</option>
+          <option value="auto">snapshot, else full copy</option>
+          <option value="copy">full copy (slow)</option>
+        </select></label>
+        <label>Target <select id="backup-target"></select></label>
+        <button type="button" id="backup-schedule-save">Save</button>
+        <span id="backup-schedule-status" class="muted" role="status" aria-live="polite"></span>
+      </div>
+      <p class="hint" id="backup-schedule-next"></p>
+      <details id="backup-scope" style="margin:.6rem 0 1rem">
+        <summary>Choose apps and volumes <span id="backup-scope-summary" class="muted"></span></summary>
+        <div class="scope-grid">
+          <div>
+            <div class="scope-head"><strong>Apps</strong>
+              <button type="button" id="backup-apps-all">All</button>
+              <button type="button" id="backup-apps-none">None</button>
+            </div>
+            <div id="backup-apps" class="scope-list"><span class="muted">loading…</span></div>
+          </div>
+          <div>
+            <div class="scope-head"><strong>Volumes</strong>
+              <button type="button" id="backup-vols-all">All</button>
+              <button type="button" id="backup-vols-none">None</button>
+            </div>
+            <div id="backup-vols" class="scope-list"><span class="muted">loading…</span></div>
+          </div>
+        </div>
+        <p class="hint">The console state is always included. This choice sets which apps are recorded for a reinstall and which volumes get a storage snapshot. Ticking an app also ticks its volumes. A volume marked <em>no snapshot</em> is on NFS or local-path, which the storage cannot snapshot. Choose a data mode with <em>full copy</em> to capture those files (slow), or back them up on the server.</p>
+      </details>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Created</th><th>Version</th><th>Apps</th><th>Files</th><th>Snapshots</th><th>Size</th><th></th></tr></thead>
-          <tbody id="backups"><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
+          <thead><tr><th>Created</th><th>Kind</th><th>Version</th><th>Apps</th><th>Files</th><th>Snapshots</th><th>Data</th><th>Size</th><th></th></tr></thead>
+          <tbody id="backups"><tr><td colspan="9" class="muted">loading…</td></tr></tbody>
         </table>
       </div>
-      <p class="hint">A restore puts the console state back and writes a safety archive first; it never touches application data. Bring the data back from the snapshots listed for the archive, then reinstall the missing apps (<code>umkim-thin backup restore &lt;name&gt; --apps</code>).</p>
+      <p class="hint">A <strong>data backup</strong> covers the console state and the apps/volumes you select. A <strong>platform backup</strong> covers the cluster itself: every Kubernetes object (including Secrets), the console/host state and the identity stack's volumes. Restoring either puts the console state back and writes a safety archive first; applying a platform object export or a volume copy is a deliberate manual step.</p>
     </div>
   </section>
 </main>
@@ -557,7 +608,9 @@
   </form>
   <div class="modal-body">
     <p id="restore-summary" class="muted"></p>
-    <p class="hint">This replaces the console's current state (invites, app state, WireGuard peers, per-app values) and the identity seed. A safety archive of the current state is written first. Application data is not touched: recreate the PVCs from the archive's snapshots first.</p>
+    <p class="hint">This replaces the console's current state (invites, app state, WireGuard peers, per-app values) and the identity seed. A safety archive of the current state is written first.</p>
+    <label class="check" id="restore-data-row"><input type="checkbox" id="restore-data"> Also restore the volume copies (stops the affected apps while it runs)</label>
+    <label class="check" id="restore-platform-row" hidden><input type="checkbox" id="restore-platform"> Apply the platform object export (recreates cluster objects)</label>
     <p id="restore-status" class="hint" role="status" aria-live="polite"></p>
     <div class="modal-actions">
       <button type="button" id="restore-cancel">Cancel</button>
@@ -656,6 +709,7 @@ function activateTab(name, updateHash = true) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   }
+  if (name === 'backups') loadBackupScope();
 }
 
 document.querySelectorAll('.tab').forEach(button => {
@@ -979,24 +1033,117 @@ function humanSize(bytes) {
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
+// BACKUP_SCOPE is what the console offers for a selective backup: the
+// application releases and PVCs. Null means the scope could not be read, and
+// "Back up now" falls back to a full backup (the old behavior).
+let BACKUP_SCOPE = null;
+
+async function loadBackupScope() {
+  const appsBox = document.getElementById('backup-apps');
+  const volsBox = document.getElementById('backup-vols');
+  if (!appsBox || !volsBox) return;
+  // Keep the operator's ticks across a tab switch; only remember what they
+  // turned off, so an app installed meanwhile starts selected.
+  const prev = BACKUP_SCOPE ? selectedBackupScope() : null;
+  try {
+    const view = await (await fetch('/api/backups/scope')).json();
+    BACKUP_SCOPE = view;
+    appsBox.innerHTML = '';
+    volsBox.innerHTML = '';
+    const apps = view.apps || [];
+    const vols = view.volumes || [];
+    const offApps = prev ? new Set(apps.map(a => a.name).filter(n => !prev.apps.includes(n))) : new Set();
+    const offVols = prev ? new Set(vols.map(v => v.namespace + '/' + v.pvc).filter(v => !prev.volumes.includes(v))) : new Set();
+    if (!apps.length) appsBox.innerHTML = '<span class="muted">no application releases</span>';
+    for (const a of apps) {
+      appsBox.appendChild(scopeRow('app', a.name, `${a.namespace || '?'} · ${a.chart || ''}-${a.chartVersion || ''}`, a.name, !offApps.has(a.name)));
+    }
+    if (!vols.length) volsBox.innerHTML = '<span class="muted">no application volumes</span>';
+    for (const v of vols) {
+      const id = v.namespace + '/' + v.pvc;
+      const meta = [v.app || 'unmapped', v.size || '', v.csi ? 'snapshot' : 'no snapshot'].filter(Boolean).join(' · ');
+      // Default to the volumes the storage can actually snapshot; a non-CSI
+      // volume stays checked only if the operator checked it before.
+      const checked = !offVols.has(id) && (v.csi || (prev !== null && prev.volumes.includes(id)));
+      volsBox.appendChild(scopeRow('volume', id, meta, v.app || '', checked));
+    }
+    updateBackupScopeSummary();
+  } catch (err) {
+    BACKUP_SCOPE = null;
+    appsBox.innerHTML = '<span class="muted">selection unavailable; Back up now takes a full backup</span>';
+    volsBox.innerHTML = '';
+    const summary = document.getElementById('backup-scope-summary');
+    if (summary) summary.textContent = '';
+  }
+}
+
+function scopeRow(kind, value, meta, app, checked) {
+  const label = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = checked;
+  cb.dataset[kind === 'app' ? 'app' : 'volume'] = value;
+  if (app) cb.dataset.app = app;
+  cb.addEventListener('change', () => {
+    // Ticking an app ticks the volumes that belong to it.
+    if (kind === 'app') {
+      for (const v of document.querySelectorAll('#backup-vols input')) {
+        if (v.dataset.app === value) v.checked = cb.checked;
+      }
+    }
+    updateBackupScopeSummary();
+  });
+  const text = document.createElement('span');
+  text.textContent = value;
+  const note = document.createElement('span');
+  note.className = 'meta';
+  note.textContent = meta;
+  label.appendChild(cb);
+  label.appendChild(text);
+  label.appendChild(note);
+  return label;
+}
+
+function selectedBackupScope() {
+  const apps = [...document.querySelectorAll('#backup-apps input:checked')].map(i => i.dataset.app);
+  const volumes = [...document.querySelectorAll('#backup-vols input:checked')].map(i => i.dataset.volume);
+  return { apps, volumes };
+}
+
+function updateBackupScopeSummary() {
+  const el = document.getElementById('backup-scope-summary');
+  if (!el) return;
+  if (!BACKUP_SCOPE) { el.textContent = ''; return; }
+  const total = (BACKUP_SCOPE.apps || []).length + (BACKUP_SCOPE.volumes || []).length;
+  if (!total) { el.textContent = '— nothing to select'; return; }
+  const sel = selectedBackupScope();
+  let text = `— ${sel.apps.length} of ${(BACKUP_SCOPE.apps || []).length} apps, ` +
+    `${sel.volumes.length} of ${(BACKUP_SCOPE.volumes || []).length} volumes`;
+  if (!sel.apps.length && !sel.volumes.length) text += ' (pick at least one)';
+  el.textContent = text;
+}
+
+function setBackupScopeAll(selector, checked) {
+  for (const cb of document.querySelectorAll(selector + ' input')) cb.checked = checked;
+  updateBackupScopeSummary();
+}
+
+function scopeTitle(sel) {
+  if (!sel) return '';
+  const parts = [];
+  if ((sel.apps || []).length) parts.push('apps: ' + sel.apps.join(', '));
+  if ((sel.volumes || []).length) parts.push('volumes: ' + sel.volumes.join(', '));
+  return parts.join('; ') || 'state only';
+}
+
 async function loadBackups() {
   const rows = document.getElementById('backups');
-  const schedule = document.getElementById('backup-schedule');
   try {
     const data = await (await fetch('/api/backups')).json();
-    if (schedule) {
-      const bits = [];
-      bits.push(data.enabled ? `Automatic: every ${esc(data.interval)}` : 'Automatic backups are off');
-      if (data.keep) bits.push(`keep ${esc(String(data.keep))}`);
-      bits.push(data.snapshots ? 'storage snapshots on' : 'storage snapshots off');
-      if (data.last) bits.push(`last ${new Date(data.last).toLocaleString()}`);
-      if (data.next) bits.push(`next ${new Date(data.next).toLocaleString()}`);
-      bits.push(`<code>${esc(data.dir || '')}</code>`);
-      schedule.innerHTML = bits.join(' · ');
-    }
+    applyBackupSchedule(data);
     const list = data.archives || [];
     if (!list.length) {
-      rows.innerHTML = '<tr><td colspan="7" class="muted">No backups yet. Use Back up now.</td></tr>';
+      rows.innerHTML = '<tr><td colspan="9" class="muted">No backups yet. Use Back up now.</td></tr>';
       return;
     }
     rows.innerHTML = '';
@@ -1006,9 +1153,22 @@ async function loadBackups() {
       const snapshots = a.snapshots ? `${a.snapshots}${a.warnings && a.warnings.length ? ' ⚠' : ''}` : '—';
       const warn = (a.warnings || []).length
         ? ` title="${esc(a.warnings.join(' · '))}"` : '';
-      tr.innerHTML = `<td>${esc(created)}${a.note ? `<br><span class="muted">${esc(a.note)}</span>` : ''}${a.error ? `<br><span class="chip err">${esc(a.error)}</span>` : ''}</td>` +
+      const scope = a.partial
+        ? ` <span class="chip warn" title="${esc(scopeTitle(a.selection))}">partial</span>` : '';
+      const kind = a.kind === 'platform'
+        ? '<span class="chip warn" title="cluster objects + platform volumes">platform</span>'
+        : '<span class="chip">data</span>';
+      const dataCell = (a.dataVolumes || []).map(d => {
+        const label = `${d.namespace}/${d.pvc} (${humanSize(d.size)})`;
+        const href = '/api/backups/' + encodeURIComponent(a.name) + '/data?volume=' +
+          encodeURIComponent(d.namespace + '/' + d.pvc);
+        return `<a href="${href}" title="download the file copy">${esc(label)}</a>`;
+      }).join('<br>') || '—';
+      tr.innerHTML = `<td>${esc(created)}${a.note ? `<br><span class="muted">${esc(a.note)}</span>` : ''}${scope}${a.error ? `<br><span class="chip err">${esc(a.error)}</span>` : ''}</td>` +
+        `<td>${kind}</td>` +
         `<td>${a.version ? `<code>${esc(a.version)}</code>` : '—'}</td>` +
-        `<td>${a.apps}</td><td>${a.files}</td><td${warn}>${snapshots}</td><td>${humanSize(a.size)}</td>`;
+        `<td>${a.apps}</td><td>${a.files}</td><td${warn}>${snapshots}</td>` +
+        `<td>${dataCell}</td><td>${humanSize(a.size)}</td>`;
       const td = document.createElement('td');
       const dl = document.createElement('a');
       dl.className = 'button';
@@ -1030,23 +1190,136 @@ async function loadBackups() {
       rows.appendChild(tr);
     }
   } catch (err) {
-    rows.innerHTML = `<tr><td colspan="7" class="muted">${esc(String(err.message || err))}</td></tr>`;
+    rows.innerHTML = `<tr><td colspan="9" class="muted">${esc(String(err.message || err))}</td></tr>`;
+  }
+}
+
+// applyBackupSchedule fills the schedule editor and the next/last summary from
+// GET /api/backups. The schedule itself is saved with PUT /api/backups/schedule.
+function applyBackupSchedule(data) {
+  const auto = document.getElementById('backup-auto');
+  if (!auto) return;
+  auto.checked = !!data.enabled;
+  const interval = document.getElementById('backup-interval');
+  interval.value = data.interval || '24h';
+  interval.disabled = !data.enabled;
+  document.getElementById('backup-keep').value = data.keep ?? 7;
+  document.getElementById('backup-data-mode').value = data.dataMode || (data.snapshots ? 'snapshot' : 'off');
+  const targetSelect = document.getElementById('backup-target');
+  targetSelect.innerHTML = '';
+  for (const t of data.targets || []) {
+    const opt = document.createElement('option');
+    opt.value = t.path;
+    opt.textContent = `${t.name} — ${t.path}` + (t.writable ? '' : ' (not writable)');
+    opt.disabled = !t.writable;
+    targetSelect.appendChild(opt);
+  }
+  if (data.target) targetSelect.value = data.target;
+  const bits = [];
+  bits.push(data.enabled ? 'Automatic backups are on' : 'Automatic backups are off');
+  if (data.enabled && data.next) bits.push(`next ${new Date(data.next).toLocaleString()}`);
+  if (data.last) bits.push(`last ${new Date(data.last).toLocaleString()}`);
+  const active = (data.targets || []).find(t => t.path === data.target);
+  if (active && active.freeBytes) bits.push(`${humanSize(active.freeBytes)} free`);
+  bits.push(`archives in <code>${esc(data.dir || '')}</code>`);
+  document.getElementById('backup-schedule-next').innerHTML = bits.join(' · ');
+}
+
+async function saveBackupSchedule() {
+  const status = document.getElementById('backup-schedule-status');
+  const btn = document.getElementById('backup-schedule-save');
+  const body = {
+    enabled: document.getElementById('backup-auto').checked,
+    interval: document.getElementById('backup-interval').value.trim(),
+    keep: Number(document.getElementById('backup-keep').value || 0),
+    dataMode: document.getElementById('backup-data-mode').value,
+    target: document.getElementById('backup-target').value,
+  };
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    const res = await fetch('/api/backups/schedule', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(await responseError(res));
+    status.textContent = 'Saved';
+    await loadBackups();
+  } catch (err) {
+    status.textContent = 'Not saved: ' + String(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// The API answers errors as plain text (http.Error). Response.statusText is
+// empty on HTTP/2, so the body is the only place a real message can come from.
+async function responseError(res) {
+  const text = (await res.text()).trim();
+  if (!text) return `HTTP ${res.status}`;
+  try {
+    const body = JSON.parse(text);
+    if (body && body.message) return body.message;
+  } catch (_) { /* plain text */ }
+  return text;
+}
+
+async function createPlatformBackup() {
+  if (!confirm('Platform backup: exports every Kubernetes object (including Secrets), the console and host state, and the identity/Traefik volumes. Application data is not included. Continue?')) return;
+  const btn = document.getElementById('backup-platform');
+  const status = document.getElementById('backup-status');
+  btn.disabled = true;
+  status.textContent = 'Writing a platform backup…';
+  try {
+    const res = await fetch('/api/backups/platform', { method: 'POST' });
+    const text = await res.text();
+    let body = {};
+    try { body = JSON.parse(text); } catch (_) { /* plain-text error */ }
+    if (!res.ok) throw new Error((body && body.message) || text.trim() || `HTTP ${res.status}`);
+    status.textContent = `Wrote ${body.name} (platform, ${body.files} files, ${body.data || 0} copies)` +
+      ((body.warnings || []).length ? ` — ${body.warnings.length} warning(s)` : '');
+    await loadBackups();
+  } catch (err) {
+    status.textContent = 'Platform backup failed: ' + String(err.message || err);
+  } finally {
+    btn.disabled = false;
   }
 }
 
 async function createBackup() {
   const btn = document.getElementById('backup-now');
   const status = document.getElementById('backup-status');
+  let payload;
+  if (BACKUP_SCOPE) {
+    const sel = selectedBackupScope();
+    if (!sel.apps.length && !sel.volumes.length) {
+      status.textContent = 'Select at least one app or volume (or use All).';
+      return;
+    }
+    payload = JSON.stringify(sel);
+  }
   btn.disabled = true;
-  status.textContent = 'Backing up…';
+  status.textContent = payload ? 'Backing up the selection…' : 'Backing up…';
   try {
-    const res = await fetch('/api/backups', { method: 'POST' });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || res.statusText);
-    status.textContent = `Wrote ${body.name} (${body.files} files, ${body.snapshots} snapshots)`;
+    const res = await fetch('/api/backups', {
+      method: 'POST',
+      headers: payload ? { 'Content-Type': 'application/json' } : {},
+      body: payload,
+    });
+    const text = await res.text();
+    let body = {};
+    try { body = JSON.parse(text); } catch (_) { /* plain-text error */ }
+    if (!res.ok) throw new Error((body && body.message) || text.trim() || `HTTP ${res.status}`);
+    const kind = body.partial ? 'partial' : 'full';
+    const warns = body.warnings || [];
+    status.textContent = `Wrote ${body.name} (${kind}, ${body.files} files, ${body.snapshots} snapshots)` +
+      (warns.length ? ` — ${warns.length} warning${warns.length > 1 ? 's' : ''}` : '');
+    status.title = warns.join(' · ');
     await loadBackups();
   } catch (err) {
     status.textContent = 'Backup failed: ' + String(err.message || err);
+    status.title = '';
   } finally {
     btn.disabled = false;
   }
@@ -1054,8 +1327,17 @@ async function createBackup() {
 
 function openRestore(a) {
   restoreArchive = a.name;
+  const platform = a.kind === 'platform';
   document.getElementById('restore-summary').textContent =
-    `Archive ${a.name} from ${new Date(a.created).toLocaleString()} (${a.apps} apps, ${a.snapshots} snapshots).`;
+    `Archive ${a.name} from ${new Date(a.created).toLocaleString()} (${platform ? 'platform' : 'data'}, ` +
+    `${a.data || 0} volume copies, ${a.snapshots} snapshots).`;
+  const dataBox = document.getElementById('restore-data');
+  dataBox.checked = false;
+  dataBox.disabled = !(a.data > 0);
+  document.getElementById('restore-data-row').hidden = !(a.data > 0);
+  const platformBox = document.getElementById('restore-platform');
+  platformBox.checked = false;
+  document.getElementById('restore-platform-row').hidden = !platform;
   document.getElementById('restore-status').textContent = '';
   const dialog = document.getElementById('restore-dialog');
   if (typeof dialog.showModal === 'function') dialog.showModal();
@@ -1072,12 +1354,26 @@ async function startRestore() {
     const res = await fetch('/api/backups/' + encodeURIComponent(restoreArchive) + '/restore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm: true }),
+      body: JSON.stringify({
+        confirm: true,
+        data: document.getElementById('restore-data').checked,
+        platform: document.getElementById('restore-platform').checked,
+      }),
     });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || res.statusText);
-    status.textContent = `Restored ${body.restored.length} files; safety archive ${body.safetyArchive}.` +
-      (body.snapshots && body.snapshots.length ? ' Recreate the app PVCs from the listed snapshots before reinstalling.' : '');
+    const text = await res.text();
+    let body = {};
+    try { body = JSON.parse(text); } catch (_) { /* plain-text error */ }
+    if (!res.ok) throw new Error((body && body.message) || text.trim() || `HTTP ${res.status}`);
+    let line = `Restored ${body.restored.length} files; safety archive ${body.safetyArchive}.`;
+    if (body.volumes && body.volumes.length) {
+      const ok = body.volumes.filter(v => v.restored).length;
+      line += ` ${ok}/${body.volumes.length} volume copies restored.`;
+      const failed = body.volumes.filter(v => v.error);
+      if (failed.length) line += ` Failed: ${failed.map(v => v.namespace + '/' + v.pvc).join(', ')}.`;
+    }
+    if (body.applied && body.applied.length) line += ` Applied ${body.applied.length} platform objects.`;
+    if (body.snapshots && body.snapshots.length) line += ' Recreate the app PVCs from the listed snapshots before reinstalling.';
+    status.textContent = line;
     await loadBackups();
   } catch (err) {
     status.textContent = 'Restore failed: ' + String(err.message || err);
@@ -1090,7 +1386,7 @@ async function deleteBackup(name) {
   if (!confirm(`Delete ${name}? Its storage snapshots are removed too.`)) return;
   try {
     const res = await fetch('/api/backups/' + encodeURIComponent(name), { method: 'DELETE' });
-    if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    if (!res.ok) throw new Error(await responseError(res));
     note(`deleted ${name}`, 'ok');
     await loadBackups();
   } catch (err) { note(String(err.message || err), 'err'); }
@@ -2411,6 +2707,26 @@ async function loadWg() {
   } catch (_) { rows.innerHTML = '<tr><td colspan="4">WireGuard unavailable</td></tr>'; }
 }
 
+// The endpoint is what the downloaded config dials; show it, because a wrong
+// (or missing) one is the usual reason a peer never handshakes.
+async function loadWgStatus() {
+  const el = document.getElementById('wg-status');
+  try {
+    const s = await (await fetch('/api/wg/status')).json();
+    const parts = [];
+    parts.push(s.endpoint
+      ? `Endpoint <code>${esc(s.endpoint)}</code>`
+      : 'No endpoint configured: set UMKIM_THIN_WG_ENDPOINT and restart the console before creating clients.');
+    parts.push(s.gatewayInstalled
+      ? 'gateway installed'
+      : 'gateway not installed — install <strong>WireGuard gateway</strong> from the Catalog');
+    parts.push(s.trustedAccessEnabled
+      ? 'same-URL app access on'
+      : 'same-URL app access off — app hostnames resolve publicly over the tunnel until <code>UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true</code>');
+    el.innerHTML = parts.join(' · ');
+  } catch (_) { el.textContent = ''; }
+}
+
 async function revokeWg(name) {
   if (!confirm(`Revoke WireGuard client ${name}?`)) return;
   try {
@@ -2418,7 +2734,7 @@ async function revokeWg(name) {
     if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
     note(`revoked ${name}`, 'ok');
   } catch (err) { note(String(err.message || err), 'err'); }
-  finally { loadWg(); }
+  finally { loadWg(); loadWgStatus(); }
 }
 
 document.getElementById('wg-form').addEventListener('submit', async (ev) => {
@@ -2437,14 +2753,19 @@ document.getElementById('wg-form').addEventListener('submit', async (ev) => {
     const qr = document.getElementById('wg-qr');
     if (out.qr) { qr.src = out.qr; qr.style.display = 'inline-block'; } else { qr.style.display = 'none'; }
     document.getElementById('wg-download').onclick = () => {
+      // A raw client name can contain spaces, and a text/plain blob makes some
+      // browsers save it as .txt (which WireGuard refuses to import). Use the
+      // sanitized name the API returns and an opaque type.
+      const file = out.filename || (String(out.name || 'wireguard-client')
+        .toLowerCase().replace(/[^a-z0-9._]+/g, '-').replace(/^-+|-+$/g, '') || 'wireguard-client') + '.conf';
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([out.config], { type: 'text/plain' }));
-      a.download = out.name + '.conf'; a.click(); URL.revokeObjectURL(a.href);
+      a.href = URL.createObjectURL(new Blob([out.config], { type: 'application/octet-stream' }));
+      a.download = file; a.click(); URL.revokeObjectURL(a.href);
     };
     document.getElementById('wg-result').style.display = 'block';
     document.getElementById('wg-name').value = '';
   } catch (err) { note(String(err.message || err), 'err'); }
-  finally { loadWg(); }
+  finally { loadWg(); loadWgStatus(); }
 });
 
 let STORAGE_DISKS = [];
@@ -2834,6 +3155,15 @@ document.getElementById('upgrade-cancel').onclick = () => document.getElementByI
 document.getElementById('upgrade-start').onclick = startUpgrade;
 document.getElementById('upgrade-backup-now').onclick = backupBeforeUpgrade;
 document.getElementById('backup-now').onclick = createBackup;
+document.getElementById('backup-platform').onclick = createPlatformBackup;
+document.getElementById('backup-apps-all').onclick = () => setBackupScopeAll('#backup-apps', true);
+document.getElementById('backup-apps-none').onclick = () => setBackupScopeAll('#backup-apps', false);
+document.getElementById('backup-vols-all').onclick = () => setBackupScopeAll('#backup-vols', true);
+document.getElementById('backup-vols-none').onclick = () => setBackupScopeAll('#backup-vols', false);
+document.getElementById('backup-schedule-save').onclick = saveBackupSchedule;
+document.getElementById('backup-auto').onchange = () => {
+  document.getElementById('backup-interval').disabled = !document.getElementById('backup-auto').checked;
+};
 document.getElementById('restore-cancel').onclick = () => document.getElementById('restore-dialog').close();
 document.getElementById('restore-start').onclick = startRestore;
 document.getElementById('restore-dialog').addEventListener('close', () => { restoreArchive = null; });
@@ -2855,6 +3185,7 @@ document.getElementById('upgrade-dialog').addEventListener('close', () => {
   loadGroups();
   loadInvites();
   loadWg();
+  loadWgStatus();
   loadCerts();
   loadStorage();
   loadBackups();

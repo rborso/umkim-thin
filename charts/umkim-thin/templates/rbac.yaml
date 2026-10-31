@@ -16,16 +16,21 @@ metadata:
   name: umkim-thin-console
 rules:
   - apiGroups: [""]
-    resources: [namespaces, secrets, configmaps, services, serviceaccounts, endpoints, persistentvolumeclaims, persistentvolumes, pods, pods/log, events]
+    resources: [namespaces, secrets, configmaps, services, serviceaccounts, endpoints, persistentvolumeclaims, persistentvolumes, pods, pods/log, pods/exec, events]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: ["apps"]
     resources: [deployments, statefulsets, daemonsets, replicasets]
     verbs: [get, list, watch, create, update, patch, delete]
+  # The backup restore scales a workload to zero while it extracts a volume,
+  # then back; that is the scale subresource, not the workload itself.
+  - apiGroups: ["apps"]
+    resources: [deployments/scale, statefulsets/scale]
+    verbs: [get, update, patch]
   - apiGroups: ["batch"]
     resources: [jobs, cronjobs]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: ["networking.k8s.io"]
-    resources: [ingresses, networkpolicies]
+    resources: [ingresses, ingressclasses, networkpolicies]
     verbs: [get, list, watch, create, update, patch, delete]
   # Some charts publish Traefik CRs directly (Gitea's SSH IngressRouteTCP;
   # middleware/TLS options). Helm needs to read and write them.

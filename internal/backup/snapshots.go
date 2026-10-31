@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -27,74 +28,218 @@ var platformNamespaces = map[string]bool{
 	"traefik":          true,
 }
 
-// snapshotPVCs takes one VolumeSnapshot per application PVC. The data half of
-// a backup is the storage's job: mounting every volume here would fight the
-// running workloads and their access modes. A cluster without the snapshot CRD
-// or a class is not an error — the archive is still valid, with a warning.
-func (m *Manager) snapshotPVCs(_ context.Context, ts time.Time) ([]SnapshotRecord, string) {
-	class, err := m.snapshotClass()
-	if err != nil {
-		return nil, "application data was not snapshotted: " + err.Error()
-	}
+// pvcRecord is one PersistentVolumeClaim the backup can offer or snapshot.
+type pvcRecord struct {
+	Namespace string
+	Name      string
+	Volume    string // the bound PV, used to decide CSI support
+	Size      string
+	Class     string
+}
+
+// pvcs lists every PVC in the cluster.
+func (m *Manager) pvcs() ([]pvcRecord, error) {
 	out, err := m.cfg.Run(m.cfg.Kubectl, "", "--kubeconfig", m.cfg.Kubeconfig,
 		"get", "pvc", "-A", "-o", "json")
 	if err != nil {
-		return nil, "application data was not snapshotted: " + shortErr(err)
+		return nil, err
 	}
-	var pvcs struct {
+	var doc struct {
 		Items []struct {
 			Metadata struct {
 				Name      string `json:"name"`
 				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 			Spec struct {
-				VolumeName string `json:"volumeName"`
+				VolumeName       string `json:"volumeName"`
+				StorageClassName string `json:"storageClassName"`
+				Resources        struct {
+					Requests map[string]string `json:"requests"`
+				} `json:"resources"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal([]byte(out), &pvcs); err != nil {
-		return nil, "application data was not snapshotted: " + shortErr(err)
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		return nil, err
+	}
+	recs := make([]pvcRecord, 0, len(doc.Items))
+	for _, p := range doc.Items {
+		recs = append(recs, pvcRecord{
+			Namespace: p.Metadata.Namespace,
+			Name:      p.Metadata.Name,
+			Volume:    p.Spec.VolumeName,
+			Size:      p.Spec.Resources.Requests["storage"],
+			Class:     p.Spec.StorageClassName,
+		})
+	}
+	return recs, nil
+}
+
+// Scope lists what a selective backup can include: application releases and
+// application PVCs. Platform namespaces are excluded: their data is the
+// console archive itself or is recreated by the installer.
+func (m *Manager) Scope() (ScopeView, error) {
+	view := ScopeView{Apps: []AppRecord{}, Volumes: []VolumeRecord{}}
+	apps, err := m.apps()
+	if err != nil {
+		return view, fmt.Errorf("reading the app inventory: %w", err)
+	}
+	appByNamespace := map[string]string{}
+	for _, a := range apps {
+		if platformNamespaces[a.Namespace] {
+			continue
+		}
+		view.Apps = append(view.Apps, a)
+		if _, ok := appByNamespace[a.Namespace]; !ok {
+			appByNamespace[a.Namespace] = a.Name
+		}
+	}
+	pvcs, err := m.pvcs()
+	if err != nil {
+		return view, fmt.Errorf("listing volumes: %w", err)
 	}
 	csi, err := m.csiVolumes()
 	if err != nil {
-		return nil, "application data was not snapshotted: " + shortErr(err)
+		return view, fmt.Errorf("listing persistent volumes: %w", err)
 	}
-	stamp := ts.Format("20060102T150405Z")
-	var recs []SnapshotRecord
-	var skipped []string
-	for _, p := range pvcs.Items {
-		ns, name := p.Metadata.Namespace, p.Metadata.Name
-		if ns == "" || name == "" || platformNamespaces[ns] {
+	for _, p := range pvcs {
+		if p.Namespace == "" || p.Name == "" || platformNamespaces[p.Namespace] {
 			continue
 		}
-		// The snapshot API is a CSI feature: an NFS (or local-path) volume has
-		// no CSI source and the controller refuses it. Back those up where the
-		// data lives (the NFS server or a VM snapshot) and say so.
-		if !csi[p.Spec.VolumeName] {
-			skipped = append(skipped, ns+"/"+name)
+		view.Volumes = append(view.Volumes, VolumeRecord{
+			Namespace: p.Namespace,
+			PVC:       p.Name,
+			App:       appByNamespace[p.Namespace],
+			Size:      p.Size,
+			Class:     p.Class,
+			CSI:       csi[p.Volume],
+		})
+	}
+	sort.Slice(view.Volumes, func(i, j int) bool {
+		if view.Volumes[i].Namespace != view.Volumes[j].Namespace {
+			return view.Volumes[i].Namespace < view.Volumes[j].Namespace
+		}
+		return view.Volumes[i].PVC < view.Volumes[j].PVC
+	})
+	return view, nil
+}
+
+// backupVolumes backs up volume data according to mode. A CSI snapshot is the
+// fast, storage-level copy; when the storage cannot snapshot (NFS, local-path,
+// no VolumeSnapshotClass) the fallback is a full file copy streamed out of the
+// volume. The selection limits both. Unknown selected volumes are an error;
+// everything else is a warning, so a metadata archive is still written.
+func (m *Manager) backupVolumes(ctx context.Context, ts time.Time, sel *Selection, mode, archiveBase string) ([]SnapshotRecord, []DataRecord, []string, error) {
+	if mode == DataOff || (sel != nil && len(sel.Volumes) == 0) {
+		return nil, nil, nil, nil
+	}
+	pvcs, err := m.pvcs()
+	if err != nil {
+		return nil, nil, []string{"volume data was not backed up: " + shortErr(err)}, nil
+	}
+	csi, err := m.csiVolumes()
+	if err != nil {
+		return nil, nil, []string{"volume data was not backed up: " + shortErr(err)}, nil
+	}
+	selected := map[string]bool{}
+	if sel != nil {
+		for _, v := range sel.Volumes {
+			selected[v] = true
+		}
+		known := map[string]bool{}
+		for _, p := range pvcs {
+			if p.Namespace == "" || p.Name == "" || platformNamespaces[p.Namespace] {
+				continue
+			}
+			known[p.Namespace+"/"+p.Name] = true
+		}
+		var unknown []string
+		for _, v := range sel.Volumes {
+			if !known[v] {
+				unknown = append(unknown, v)
+			}
+		}
+		if len(unknown) > 0 {
+			return nil, nil, nil, fmt.Errorf("%w: unknown volume(s): %s (application PVCs are namespace/name)", ErrSelection, strings.Join(unknown, ", "))
+		}
+	}
+	var targets []pvcRecord
+	for _, p := range pvcs {
+		if p.Namespace == "" || p.Name == "" || platformNamespaces[p.Namespace] {
 			continue
 		}
-		snap := snapshotName(stamp, name)
-		doc := snapshotYAML(snap, ns, name, class)
-		if _, err := m.cfg.Run(m.cfg.Kubectl, doc, "--kubeconfig", m.cfg.Kubeconfig,
-			"apply", "-f", "-"); err != nil {
-			recs = append(recs, SnapshotRecord{Namespace: ns, PVC: name, Class: class, Error: shortErr(err)})
+		if sel != nil && !selected[p.Namespace+"/"+p.Name] {
 			continue
 		}
-		recs = append(recs, SnapshotRecord{Namespace: ns, PVC: name, Snapshot: snap, Class: class})
+		targets = append(targets, p)
 	}
-	if len(recs) == 0 {
-		if len(skipped) > 0 {
-			return nil, "application data was not snapshotted: no CSI-backed PVC (skipped " + strings.Join(skipped, ", ") + ")"
+
+	var warns []string
+	var snaps []SnapshotRecord
+	snapshotted := map[string]bool{}
+	if mode == DataSnapshot || mode == DataAuto {
+		class, classErr := m.snapshotClass()
+		if classErr != nil {
+			if mode == DataSnapshot {
+				warns = append(warns, "application data was not snapshotted: "+classErr.Error())
+			}
+			// auto: every volume falls through to the file copy below.
+		} else {
+			stamp := ts.Format("20060102T150405Z")
+			for _, p := range targets {
+				if !csi[p.Volume] {
+					continue
+				}
+				snap := snapshotName(stamp, p.Name)
+				doc := snapshotYAML(snap, p.Namespace, p.Name, class)
+				if _, err := m.cfg.Run(m.cfg.Kubectl, doc, "--kubeconfig", m.cfg.Kubeconfig,
+					"apply", "-f", "-"); err != nil {
+					snaps = append(snaps, SnapshotRecord{Namespace: p.Namespace, PVC: p.Name, Class: class, Error: shortErr(err)})
+					continue
+				}
+				snaps = append(snaps, SnapshotRecord{Namespace: p.Namespace, PVC: p.Name, Snapshot: snap, Class: class})
+				snapshotted[p.Namespace+"/"+p.Name] = true
+			}
+			if len(snaps) > 0 {
+				m.waitReady(snaps)
+				for i := range snaps {
+					if snaps[i].Snapshot != "" && snaps[i].Error == "" && !snaps[i].Ready {
+						snapshotted[snaps[i].Namespace+"/"+snaps[i].PVC] = false
+					}
+				}
+			}
+			if mode == DataSnapshot {
+				var skipped []string
+				for _, p := range targets {
+					if !csi[p.Volume] {
+						skipped = append(skipped, p.Namespace+"/"+p.Name)
+					}
+				}
+				if len(skipped) > 0 {
+					warns = append(warns, "these volumes are not CSI-backed and were not snapshotted (back them up at the storage, or choose the full-copy data mode): "+strings.Join(skipped, ", "))
+				}
+				if len(targets) == 0 {
+					warns = append(warns, "no application PVCs to snapshot")
+				}
+			}
 		}
-		return nil, "no application PVCs to snapshot"
 	}
-	warn := ""
-	if len(skipped) > 0 {
-		warn = "these PVCs are not CSI-backed and were not snapshotted (back them up at the storage): " + strings.Join(skipped, ", ")
+
+	var data []DataRecord
+	if mode == DataCopy || mode == DataAuto {
+		for _, p := range targets {
+			key := p.Namespace + "/" + p.Name
+			if snapshotted[key] {
+				continue
+			}
+			rec := m.copyVolume(ctx, p.Namespace, p.Name, archiveBase)
+			data = append(data, rec)
+			if rec.Error != "" {
+				warns = append(warns, "copying "+key+": "+rec.Error)
+			}
+		}
 	}
-	m.waitReady(recs)
-	return recs, warn
+	return snaps, data, warns, nil
 }
 
 // csiVolumes returns the persistent volumes that are CSI-backed, keyed by PV
@@ -221,7 +366,7 @@ spec:
 // deleteSnapshots removes the snapshots an archive recorded. It is best effort:
 // a pruned archive must not fail because a snapshot was already gone.
 func (m *Manager) deleteSnapshots(a Archive) {
-	mf, err := readManifest(filepath.Join(m.cfg.Dir, a.Name))
+	mf, err := readManifest(filepath.Join(m.displayDir(), a.Name))
 	if err != nil {
 		return
 	}

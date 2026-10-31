@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,9 +36,22 @@ import (
 // Schema is the manifest version. A restore refuses a newer schema.
 const Schema = 1
 
+// ErrSelection marks a backup request whose selection cannot be fulfilled
+// (empty, unknown names, or volumes the storage cannot snapshot). Callers map
+// it to a client error instead of an internal failure.
+var ErrSelection = errors.New("invalid backup selection")
+
+// Archive kinds. A data backup carries the console state, the app inventory
+// and the selected app volumes; a platform backup carries the whole cluster
+// (object export, host/console state and the identity stack's volumes).
+const (
+	KindData     = "data"
+	KindPlatform = "platform"
+)
+
 // nameRE is the only archive name shape the API and CLI accept. It rules out
 // path separators before any path is built from user input.
-var nameRE = regexp.MustCompile(`^umkim-thin-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.tar\.gz$`)
+var nameRE = regexp.MustCompile(`^umkim-thin-[0-9]{8}T[0-9]{6}Z(-platform)?(-[0-9]+)?\.tar\.gz$`)
 
 // seedRestoreFiles are the seed files a restore puts back. config.env is
 // archived for reference but not restored: the installer owns it, and
@@ -74,6 +88,18 @@ type Config struct {
 	Keep int
 	// Snapshots enables the CSI VolumeSnapshot half.
 	Snapshots bool
+	// Schedule, when set, supplies the live retention and snapshot switches the
+	// console edits; it overrides Keep and Snapshots.
+	Schedule *ScheduleStore
+	// TargetRoot holds the extra targets the chart mounts (/backups/<name>).
+	TargetRoot string
+	// SelfNamespace is the console's own namespace. A platform apply skips the
+	// Deployment there so restoring objects cannot restart the process doing
+	// it. Defaults to the pod's service-account namespace.
+	SelfNamespace string
+	// HelperImage runs the volume file copy (tar). Defaults to the console
+	// image, which the installer imports on the node that runs the console.
+	HelperImage string
 	// SnapshotWait bounds how long Create waits for the snapshots to become
 	// ready (default 90s), polling every SnapshotPoll (default 3s).
 	SnapshotWait time.Duration
@@ -82,6 +108,10 @@ type Config struct {
 	Now func() time.Time
 	// Run executes a tool (with optional stdin). Injectable for tests.
 	Run func(name, stdin string, args ...string) (string, error)
+	// RunStream executes a tool and copies its stdout into w (the volume copy).
+	RunStream func(ctx context.Context, name string, w io.Writer, args ...string) error
+	// RunStreamIn executes a tool with r as stdin (the volume restore).
+	RunStreamIn func(ctx context.Context, name string, r io.Reader, args ...string) error
 }
 
 // AppRecord is one installed catalog release at backup time.
@@ -93,6 +123,42 @@ type AppRecord struct {
 	AppVersion   string `json:"appVersion,omitempty"`
 	Revision     string `json:"revision,omitempty"`
 	Status       string `json:"status,omitempty"`
+}
+
+// Selection narrows a backup to specific apps and volumes. A nil selection is
+// a full backup: every application release and every application PVC. Apps are
+// Helm release names (the catalog app name); volumes are "namespace/pvc".
+//
+// The console state is always archived whole. It is small, global and shared
+// between apps (invites, peers, app state); filtering it would restore a
+// console that disagrees with itself. The selection controls the app inventory
+// recorded for a reinstall and which volumes get a storage snapshot.
+type Selection struct {
+	Apps    []string `json:"apps,omitempty"`
+	Volumes []string `json:"volumes,omitempty"`
+}
+
+// Empty reports whether the selection names nothing.
+func (s *Selection) Empty() bool {
+	return s == nil || (len(s.Apps) == 0 && len(s.Volumes) == 0)
+}
+
+// VolumeRecord is one application PVC offered for a selective backup.
+type VolumeRecord struct {
+	Namespace string `json:"namespace"`
+	PVC       string `json:"pvc"`
+	App       string `json:"app,omitempty"`
+	Size      string `json:"size,omitempty"`
+	Class     string `json:"class,omitempty"`
+	// CSI is false for NFS and local-path volumes: the snapshot API cannot
+	// copy those, so they are listed (and selectable) with that caveat.
+	CSI bool `json:"csi"`
+}
+
+// ScopeView is what a selective backup can include.
+type ScopeView struct {
+	Apps    []AppRecord    `json:"apps"`
+	Volumes []VolumeRecord `json:"volumes"`
 }
 
 // FileRecord is one archived file with its checksum.
@@ -114,16 +180,36 @@ type SnapshotRecord struct {
 	Error string `json:"error,omitempty"`
 }
 
+// DataRecord is one file copy of a volume, used when the storage cannot
+// snapshot it. The copy is a crash-consistent tar of the mounted files.
+type DataRecord struct {
+	Namespace string `json:"namespace"`
+	PVC       string `json:"pvc"`
+	// File is the sidecar archive next to the metadata archive.
+	File   string `json:"file,omitempty"`
+	Size   int64  `json:"size,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+	Method string `json:"method"` // "copy"
+	Error  string `json:"error,omitempty"`
+}
+
 // Manifest is the archive's index. It is the first entry in the tar.
 type Manifest struct {
-	Schema    int              `json:"schema"`
-	Created   time.Time        `json:"created"`
-	Version   string           `json:"version,omitempty"`
-	Zone      string           `json:"zone,omitempty"`
-	Note      string           `json:"note,omitempty"`
+	Schema  int       `json:"schema"`
+	Created time.Time `json:"created"`
+	Version string    `json:"version,omitempty"`
+	Zone    string    `json:"zone,omitempty"`
+	Note    string    `json:"note,omitempty"`
+	// Kind is "data" or "platform"; empty means data (archives written before
+	// the two kinds were separated).
+	Kind      string           `json:"kind,omitempty"`
 	Apps      []AppRecord      `json:"apps,omitempty"`
 	Snapshots []SnapshotRecord `json:"snapshots,omitempty"`
+	Data      []DataRecord     `json:"data,omitempty"`
 	Files     []FileRecord     `json:"files"`
+	// Selection is set for a selective backup; nil means the archive covers
+	// every app and every application volume.
+	Selection *Selection `json:"selection,omitempty"`
 	// Warnings are non-fatal gaps (no snapshot class, an unreadable directory).
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -136,10 +222,18 @@ type Archive struct {
 	Version   string    `json:"version,omitempty"`
 	Zone      string    `json:"zone,omitempty"`
 	Note      string    `json:"note,omitempty"`
+	Kind      string    `json:"kind,omitempty"`
 	Apps      int       `json:"apps"`
 	Files     int       `json:"files"`
 	Snapshots int       `json:"snapshots"`
-	Warnings  []string  `json:"warnings,omitempty"`
+	// Data counts the volume file copies (when the storage cannot snapshot).
+	Data        int          `json:"data,omitempty"`
+	DataBytes   int64        `json:"dataBytes,omitempty"`
+	DataVolumes []DataRecord `json:"dataVolumes,omitempty"`
+	// Partial marks a selective backup, with the selection that produced it.
+	Partial   bool       `json:"partial,omitempty"`
+	Selection *Selection `json:"selection,omitempty"`
+	Warnings  []string   `json:"warnings,omitempty"`
 	// Verified is set by Verify: the archive matches its manifest.
 	Verified bool   `json:"verified"`
 	Error    string `json:"error,omitempty"`
@@ -149,12 +243,31 @@ type Archive struct {
 	modTime time.Time
 }
 
+// VolumeRestore is the outcome of extracting one recorded volume copy back
+// into its PVC.
+type VolumeRestore struct {
+	Namespace string `json:"namespace"`
+	PVC       string `json:"pvc"`
+	File      string `json:"file,omitempty"`
+	Restored  bool   `json:"restored,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 // RestoreReport says what a restore did.
 type RestoreReport struct {
 	SafetyArchive string           `json:"safetyArchive,omitempty"`
 	Restored      []string         `json:"restored"`
 	Skipped       []string         `json:"skipped,omitempty"`
 	Snapshots     []SnapshotRecord `json:"snapshots,omitempty"`
+	// Platform marks a platform archive.
+	Platform bool `json:"platform,omitempty"`
+	// Volumes is the outcome of --data (the volume copies put back).
+	Volumes []VolumeRestore `json:"volumes,omitempty"`
+	// Applied lists the object kinds a platform restore applied.
+	Applied []string `json:"applied,omitempty"`
+	// Data lists the volume file copies; the operator extracts them into a
+	// volume, the console never overwrites live data.
+	Data []DataRecord `json:"data,omitempty"`
 }
 
 // Manager reads and writes the backup directory.
@@ -180,35 +293,96 @@ func New(cfg Config) *Manager {
 	if cfg.SnapshotPoll <= 0 {
 		cfg.SnapshotPoll = 3 * time.Second
 	}
+	if cfg.TargetRoot == "" {
+		cfg.TargetRoot = "/backups"
+	}
+	if cfg.SelfNamespace == "" {
+		if raw, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+			cfg.SelfNamespace = strings.TrimSpace(string(raw))
+		}
+	}
 	if cfg.Run == nil {
 		cfg.Run = func(name, stdin string, args ...string) (string, error) {
 			return runTool(cfg.Kubeconfig, name, stdin, args...)
+		}
+	}
+	if cfg.RunStream == nil {
+		cfg.RunStream = func(ctx context.Context, name string, w io.Writer, args ...string) error {
+			return runToolStream(ctx, cfg.Kubeconfig, name, w, args...)
+		}
+	}
+	if cfg.RunStreamIn == nil {
+		cfg.RunStreamIn = func(ctx context.Context, name string, r io.Reader, args ...string) error {
+			return runToolStreamIn(ctx, cfg.Kubeconfig, name, r, args...)
 		}
 	}
 	return &Manager{cfg: cfg}
 }
 
 // Dir is the archive directory.
-func (m *Manager) Dir() string { return m.cfg.Dir }
+func (m *Manager) Dir() string { return m.displayDir() }
 
-// Create builds one archive and prunes older ones.
+// Create builds one full archive and prunes older ones.
 func (m *Manager) Create(ctx context.Context, note string) (Archive, error) {
-	if err := os.MkdirAll(m.cfg.Dir, 0o755); err != nil {
+	return m.CreateSelected(ctx, note, nil)
+}
+
+// policy returns the retention and data mode in force: the console schedule
+// when present, otherwise the installer's defaults.
+func (m *Manager) policy() (keep int, mode string) {
+	keep = m.cfg.Keep
+	mode = DataOff
+	if m.cfg.Snapshots {
+		mode = DataSnapshot
+	}
+	if m.cfg.Schedule != nil {
+		keep, mode = m.cfg.Schedule.Policy()
+	}
+	return keep, mode
+}
+
+// CreateSelected builds one archive with the current policy. A nil selection
+// covers every app and every application volume. A non-nil selection records
+// only the named apps in the inventory and snapshots only the named volumes;
+// unknown names are an error, so a typo cannot silently produce an archive
+// that covers nothing.
+func (m *Manager) CreateSelected(ctx context.Context, note string, sel *Selection) (Archive, error) {
+	keep, mode := m.policy()
+	return m.createSelected(ctx, note, sel, keep, mode)
+}
+
+// createSelected is CreateSelected with an explicit policy, so a safety archive
+// can be metadata-only and must not prune anything.
+func (m *Manager) createSelected(ctx context.Context, note string, sel *Selection, keep int, mode string) (Archive, error) {
+	if sel != nil {
+		sel = cleanSelection(sel)
+		if sel.Empty() {
+			return Archive{}, fmt.Errorf("%w: choose at least one app or volume, or take a full backup", ErrSelection)
+		}
+	}
+	dir, err := m.targetDir()
+	if err != nil {
+		return Archive{}, err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Archive{}, fmt.Errorf("backup directory: %w", err)
 	}
 	now := m.cfg.Now().UTC().Truncate(time.Second)
-	staging, err := os.MkdirTemp(m.cfg.Dir, ".staging-")
+	name := uniqueArchiveName(dir, now, KindData)
+	staging, err := os.MkdirTemp(dir, ".staging-")
 	if err != nil {
 		return Archive{}, err
 	}
 	defer os.RemoveAll(staging)
 
 	mf := Manifest{
-		Schema:  Schema,
-		Created: now,
-		Version: m.cfg.Version,
-		Zone:    m.cfg.Zone,
-		Note:    note,
+		Schema:    Schema,
+		Created:   now,
+		Version:   m.cfg.Version,
+		Zone:      m.cfg.Zone,
+		Note:      note,
+		Kind:      KindData,
+		Selection: sel,
 	}
 
 	if err := m.stageTree(staging, "state", m.cfg.StateDir, stateSkipDirs, &mf); err != nil {
@@ -221,41 +395,56 @@ func (m *Manager) Create(ctx context.Context, note string) (Archive, error) {
 			return Archive{}, err
 		}
 	}
-	mf.Apps = m.apps()
 
-	if m.cfg.Snapshots {
-		recs, warn := m.snapshotPVCs(ctx, now)
-		mf.Snapshots = recs
-		if warn != "" {
-			mf.Warnings = append(mf.Warnings, warn)
+	apps, appErr := m.apps()
+	if sel == nil {
+		// A full backup is still useful without the inventory; say so instead
+		// of pretending the archive knows every app.
+		if appErr != nil {
+			mf.Warnings = append(mf.Warnings, "the app inventory is unavailable: "+shortErr(appErr))
+		}
+		mf.Apps = apps
+	} else {
+		if appErr != nil {
+			return Archive{}, fmt.Errorf("reading the app inventory to validate the selection: %w", appErr)
+		}
+		if mf.Apps, err = selectApps(apps, sel.Apps); err != nil {
+			return Archive{}, err
 		}
 	}
 
-	name := archiveName(now)
-	if _, err := os.Stat(filepath.Join(m.cfg.Dir, name)); err == nil {
-		for i := 2; ; i++ {
-			candidate := fmt.Sprintf("umkim-thin-%s-%d.tar.gz", now.Format("20060102T150405Z"), i)
-			if _, err := os.Stat(filepath.Join(m.cfg.Dir, candidate)); err != nil {
-				name = candidate
-				break
+	snaps, data, warns, err := m.backupVolumes(ctx, now, sel, mode, strings.TrimSuffix(name, ".tar.gz"))
+	if err != nil {
+		return Archive{}, err
+	}
+	mf.Snapshots, mf.Data = snaps, data
+	mf.Warnings = append(mf.Warnings, warns...)
+	// A sidecar copy is only useful next to the archive; remove the copies if
+	// the metadata archive cannot be written.
+	cleanupData := func() {
+		for _, d := range mf.Data {
+			if d.File != "" {
+				os.Remove(filepath.Join(dir, d.File))
 			}
 		}
 	}
 
 	raw, err := json.MarshalIndent(mf, "", "  ")
 	if err != nil {
+		cleanupData()
 		return Archive{}, err
 	}
 	if err := os.WriteFile(filepath.Join(staging, "manifest.json"), raw, 0o600); err != nil {
+		cleanupData()
 		return Archive{}, err
 	}
-	target := filepath.Join(m.cfg.Dir, name)
+	target := filepath.Join(dir, name)
 	if err := writeArchive(target, staging); err != nil {
 		os.Remove(target)
 		return Archive{}, err
 	}
-	if m.cfg.Keep > 0 {
-		if _, err := m.prune(m.cfg.Keep, name); err != nil {
+	if keep > 0 {
+		if _, err := m.prune(keep, name); err != nil {
 			mf.Warnings = append(mf.Warnings, "pruning old backups: "+err.Error())
 		}
 	}
@@ -268,8 +457,84 @@ func (m *Manager) Create(ctx context.Context, note string) (Archive, error) {
 	return a, nil
 }
 
-func archiveName(t time.Time) string {
-	return "umkim-thin-" + t.Format("20060102T150405Z") + ".tar.gz"
+// cleanSelection trims and dedupes a selection, returning nil when it names
+// nothing.
+func cleanSelection(sel *Selection) *Selection {
+	out := &Selection{Apps: cleanNames(sel.Apps), Volumes: cleanNames(sel.Volumes)}
+	if out.Empty() {
+		return nil
+	}
+	return out
+}
+
+func cleanNames(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// selectApps keeps the requested releases and rejects names the cluster does
+// not know (or platform releases, which are not application data).
+func selectApps(all []AppRecord, want []string) ([]AppRecord, error) {
+	if len(want) == 0 {
+		return nil, nil
+	}
+	byName := make(map[string]AppRecord, len(all))
+	for _, a := range all {
+		byName[a.Name] = a
+	}
+	var out []AppRecord
+	var unknown []string
+	for _, name := range want {
+		a, ok := byName[name]
+		if !ok {
+			unknown = append(unknown, name)
+			continue
+		}
+		if platformNamespaces[a.Namespace] {
+			unknown = append(unknown, name+" (platform release)")
+			continue
+		}
+		out = append(out, a)
+	}
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("%w: unknown app(s): %s", ErrSelection, strings.Join(unknown, ", "))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// uniqueArchiveName returns the first free name for a kind, appending -2, -3
+// when two runs land in the same second.
+func uniqueArchiveName(dir string, t time.Time, kind string) string {
+	name := archiveName(t, kind)
+	if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+		return name
+	}
+	base := strings.TrimSuffix(name, ".tar.gz")
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d.tar.gz", base, i)
+		if _, err := os.Stat(filepath.Join(dir, candidate)); err != nil {
+			return candidate
+		}
+	}
+}
+
+func archiveName(t time.Time, kind string) string {
+	base := "umkim-thin-" + t.Format("20060102T150405Z")
+	if kind == KindPlatform {
+		base += "-platform"
+	}
+	return base + ".tar.gz"
 }
 
 // stageTree copies a directory into the staging area, recording checksums.
@@ -365,12 +630,11 @@ func stageFile(staging, prefix, root, src string, info os.FileInfo, mf *Manifest
 	return nil
 }
 
-// apps records the installed catalog releases from Helm. A cluster that is
-// unreachable (or a test) simply yields no app inventory.
-func (m *Manager) apps() []AppRecord {
+// apps records the installed catalog releases from Helm.
+func (m *Manager) apps() ([]AppRecord, error) {
 	out, err := m.cfg.Run(m.cfg.Helm, "", "list", "-A", "-o", "json", "--kubeconfig", m.cfg.Kubeconfig)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var releases []struct {
 		Name       string `json:"name"`
@@ -381,7 +645,7 @@ func (m *Manager) apps() []AppRecord {
 		Status     string `json:"status"`
 	}
 	if err := json.Unmarshal([]byte(out), &releases); err != nil {
-		return nil
+		return nil, fmt.Errorf("helm list: %w", err)
 	}
 	var recs []AppRecord
 	for _, r := range releases {
@@ -393,7 +657,7 @@ func (m *Manager) apps() []AppRecord {
 		})
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].Name < recs[j].Name })
-	return recs
+	return recs, nil
 }
 
 // splitChart turns "gitea-0.1.20" into ("gitea", "0.1.20"). The version is the
@@ -478,7 +742,11 @@ func writeArchive(target, staging string) error {
 // List returns the archives newest first. A corrupt archive is listed with its
 // error instead of hiding it.
 func (m *Manager) List() ([]Archive, error) {
-	entries, err := os.ReadDir(m.cfg.Dir)
+	dir, err := m.targetDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []Archive{}, nil
@@ -495,7 +763,7 @@ func (m *Manager) List() ([]Archive, error) {
 			continue
 		}
 		a := Archive{Name: e.Name(), Size: info.Size(), Created: info.ModTime(), modTime: info.ModTime()}
-		mf, err := readManifest(filepath.Join(m.cfg.Dir, e.Name()))
+		mf, err := readManifest(filepath.Join(dir, e.Name()))
 		if err != nil {
 			a.Error = err.Error()
 		} else {
@@ -556,27 +824,43 @@ func (m *Manager) Manifest(name string) (Manifest, error) {
 	if !nameRE.MatchString(name) {
 		return Manifest{}, fmt.Errorf("invalid backup name %q", name)
 	}
-	return readManifest(filepath.Join(m.cfg.Dir, name))
+	dir, err := m.targetDir()
+	if err != nil {
+		return Manifest{}, err
+	}
+	return readManifest(filepath.Join(dir, name))
 }
 
-// Verify recomputes every checksum and compares it with the manifest.
+// Verify recomputes every checksum (the archive and the sidecar copies).
 func (m *Manager) Verify(name string) (Archive, error) {
+	a, _, err := m.verifyArchive(name, true)
+	return a, err
+}
+
+// verifyArchive checks the archive's own files. data also hashes the sidecar
+// copies; a restore skips that, because the extraction reads them anyway and
+// a corrupt copy fails the tar/gzip CRC.
+func (m *Manager) verifyArchive(name string, data bool) (Archive, Manifest, error) {
 	if !nameRE.MatchString(name) {
-		return Archive{}, fmt.Errorf("invalid backup name %q", name)
+		return Archive{}, Manifest{}, fmt.Errorf("invalid backup name %q", name)
 	}
-	file := filepath.Join(m.cfg.Dir, name)
+	dir, err := m.targetDir()
+	if err != nil {
+		return Archive{}, Manifest{}, err
+	}
+	file := filepath.Join(dir, name)
 	info, err := os.Stat(file)
 	if err != nil {
-		return Archive{}, err
+		return Archive{}, Manifest{}, err
 	}
 	mf, sums, err := scanArchive(file)
 	if err != nil {
-		return Archive{Name: name, Size: info.Size(), Error: err.Error()}, err
+		return Archive{Name: name, Size: info.Size(), Error: err.Error()}, Manifest{}, err
 	}
 	a := archiveFrom(name, info.Size(), mf)
 	if mf.Schema > Schema {
 		a.Error = fmt.Sprintf("archive schema %d is newer than this console (%d)", mf.Schema, Schema)
-		return a, fmt.Errorf("%s", a.Error)
+		return a, mf, fmt.Errorf("%s", a.Error)
 	}
 	want := make(map[string]string, len(mf.Files))
 	for _, f := range mf.Files {
@@ -585,15 +869,21 @@ func (m *Manager) Verify(name string) (Archive, error) {
 	for p, sum := range sums {
 		if w, ok := want[p]; !ok || w != sum {
 			a.Error = "checksum mismatch: " + p
-			return a, fmt.Errorf("%s", a.Error)
+			return a, mf, fmt.Errorf("%s", a.Error)
 		}
 	}
 	if len(sums) != len(want) {
 		a.Error = "the archive is missing files its manifest lists"
-		return a, fmt.Errorf("%s", a.Error)
+		return a, mf, fmt.Errorf("%s", a.Error)
+	}
+	if data {
+		if err := m.verifyData(mf); err != nil {
+			a.Error = err.Error()
+			return a, mf, err
+		}
 	}
 	a.Verified = true
-	return a, nil
+	return a, mf, nil
 }
 
 // safeEntry rejects archive paths that could escape the restore target.
@@ -607,7 +897,8 @@ func safeEntry(name string) bool {
 	if clean != name || strings.HasPrefix(clean, "..") || path.IsAbs(clean) {
 		return false
 	}
-	return strings.HasPrefix(clean, "state/") || strings.HasPrefix(clean, "seed/")
+	return strings.HasPrefix(clean, "state/") || strings.HasPrefix(clean, "seed/") ||
+		strings.HasPrefix(clean, "platform/")
 }
 
 // scanArchive returns the manifest and the checksums it actually contains.
@@ -674,7 +965,11 @@ func (m *Manager) Restore(name string) (RestoreReport, error) {
 	if _, err := m.Verify(name); err != nil {
 		return RestoreReport{}, fmt.Errorf("refusing to restore %s: %w", name, err)
 	}
-	mf, _, err := scanArchive(filepath.Join(m.cfg.Dir, name))
+	dir, err := m.targetDir()
+	if err != nil {
+		return RestoreReport{}, err
+	}
+	mf, _, err := scanArchive(filepath.Join(dir, name))
 	if err != nil {
 		return RestoreReport{}, err
 	}
@@ -684,16 +979,18 @@ func (m *Manager) Restore(name string) (RestoreReport, error) {
 	// Hold the archive open across the safety backup: with a small retention
 	// count the safety archive itself can prune the one being restored, and the
 	// open handle keeps the data readable.
-	f, err := os.Open(filepath.Join(m.cfg.Dir, name))
+	f, err := os.Open(filepath.Join(dir, name))
 	if err != nil {
 		return RestoreReport{}, err
 	}
 	defer f.Close()
-	safety, err := m.Create(context.Background(), "pre-restore of "+name)
+	// The safety archive is metadata only and does not prune: a restore must
+	// not spend hours copying every volume, nor delete the archive it protects.
+	safety, err := m.createSelected(context.Background(), "pre-restore of "+name, nil, 0, DataOff)
 	if err != nil {
 		return RestoreReport{}, fmt.Errorf("safety backup before restore: %w", err)
 	}
-	rep := RestoreReport{SafetyArchive: safety.Name, Snapshots: mf.Snapshots}
+	rep := RestoreReport{SafetyArchive: safety.Name, Snapshots: mf.Snapshots, Data: mf.Data, Platform: mf.Kind == KindPlatform}
 	if err := m.extract(f, &rep); err != nil {
 		return rep, err
 	}
@@ -791,6 +1088,10 @@ func (m *Manager) prune(keep int, protect string) ([]string, error) {
 	if keep < 0 {
 		return nil, fmt.Errorf("keep must be >= 0")
 	}
+	dir, err := m.targetDir()
+	if err != nil {
+		return nil, err
+	}
 	list, err := m.List()
 	if err != nil {
 		return nil, err
@@ -801,19 +1102,26 @@ func (m *Manager) prune(keep int, protect string) ([]string, error) {
 		if a.Name == protect {
 			continue
 		}
-		if err := os.Remove(filepath.Join(m.cfg.Dir, a.Name)); err != nil {
+		// Read the manifest before deleting the archive: it lists the
+		// snapshots and data copies that go with it.
+		m.deleteSnapshots(a)
+		m.deleteData(a)
+		if err := os.Remove(filepath.Join(dir, a.Name)); err != nil {
 			return removed, err
 		}
 		removed = append(removed, a.Name)
-		m.deleteSnapshots(a)
 	}
 	return removed, nil
 }
 
-// Delete removes one archive and its snapshots.
+// Delete removes one archive, its snapshots and its data copies.
 func (m *Manager) Delete(name string) error {
 	if !nameRE.MatchString(name) {
 		return fmt.Errorf("invalid backup name %q", name)
+	}
+	dir, err := m.targetDir()
+	if err != nil {
+		return err
 	}
 	list, err := m.List()
 	if err != nil {
@@ -822,7 +1130,8 @@ func (m *Manager) Delete(name string) error {
 	for _, a := range list {
 		if a.Name == name {
 			m.deleteSnapshots(a)
-			return os.Remove(filepath.Join(m.cfg.Dir, name))
+			m.deleteData(a)
+			return os.Remove(filepath.Join(dir, name))
 		}
 	}
 	return fmt.Errorf("no backup named %s", name)
@@ -833,7 +1142,11 @@ func (m *Manager) Path(name string) (string, error) {
 	if !nameRE.MatchString(name) {
 		return "", fmt.Errorf("invalid backup name %q", name)
 	}
-	p := filepath.Join(m.cfg.Dir, name)
+	dir, err := m.targetDir()
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, name)
 	if _, err := os.Stat(p); err != nil {
 		return "", err
 	}
@@ -849,9 +1162,27 @@ func archiveFrom(name string, size int64, mf Manifest) Archive {
 			ok++
 		}
 	}
+	// File copies are counted the same way: a record with an error is a gap.
+	data := 0
+	var dataBytes int64
+	var dataVolumes []DataRecord
+	for _, d := range mf.Data {
+		if d.File == "" || d.Error != "" {
+			continue
+		}
+		data++
+		dataBytes += d.Size
+		dataVolumes = append(dataVolumes, d)
+	}
+	kind := mf.Kind
+	if kind == "" {
+		kind = KindData
+	}
 	return Archive{
 		Name: name, Size: size, Created: mf.Created, Version: mf.Version,
-		Zone: mf.Zone, Note: mf.Note, Apps: len(mf.Apps), Files: len(mf.Files),
-		Snapshots: ok, Warnings: mf.Warnings,
+		Zone: mf.Zone, Note: mf.Note, Kind: kind, Apps: len(mf.Apps), Files: len(mf.Files),
+		Snapshots: ok, Data: data, DataBytes: dataBytes, DataVolumes: dataVolumes,
+		Partial: mf.Selection != nil, Selection: mf.Selection,
+		Warnings: mf.Warnings,
 	}
 }
