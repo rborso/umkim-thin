@@ -64,6 +64,10 @@ Useful flags:
 | `--render-only --out DIR` | Generate the values/config without root or a cluster |
 | `--acme-staging` | Use the Let's Encrypt staging CA (certificates are untrusted; for testing) |
 | `--skip-dns-check` | Install before DNS has propagated (the portal will not get a certificate until it does) |
+| `--wg-endpoint <host>` | Public address WireGuard clients dial (default `wg.<zone>`; the port is appended unless you include it) |
+| `--trusted-access` | Let VPN clients use the public app URL (the app's own login); kept across re-runs |
+| `--backup-nfs <server:/path>` | Mount an NFS export as a selectable backup target (kept across re-runs) |
+| `--no-trusted-management` | Turn off the management bypass (needed when no management CIDR is set) |
 | `--reuse-k3s` | Use an existing k3s (advanced; the installer will not reinstall it) |
 
 ## What the command does

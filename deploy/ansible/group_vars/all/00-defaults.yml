@@ -32,7 +32,13 @@ k3s_version: ""
 helm_version: v3.16.3
 
 # WireGuard gateway
-wg_endpoint: ""                     # public host:port clients dial (no port)
+wg_endpoint: ""                     # public host clients dial (host or host:port)
+# The endpoint a generated client config carries. The port is appended only
+# when the value has none, so "wg.example.com:51820" is not doubled. An empty
+# endpoint stays empty: the console then refuses to create a client instead of
+# handing out a config that cannot handshake.
+wg_endpoint_host: "{{ wg_endpoint | default('', true) | trim | regex_replace('^[A-Za-z][A-Za-z0-9+.-]*://', '') | regex_replace('/+$', '') }}"
+wg_public_endpoint: "{{ (wg_endpoint_host ~ ':' ~ wg_port) if (wg_endpoint_host != '' and ':' not in wg_endpoint_host) else wg_endpoint_host }}"
 wg_subnet: 192.168.168.0/24
 wg_server_ip: 192.168.168.1
 # Traefik NodePort the gateway DNATs VPN :443 to. 30443 (websecure) is used when

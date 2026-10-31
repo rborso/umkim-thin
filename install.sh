@@ -40,6 +40,14 @@ HELM_VERSION="3.16.3"
 K3S_CHANNEL="${K3S_CHANNEL:-stable}"
 WG_PORT="${WG_PORT:-51820}"
 WG_ENDPOINT="${WG_ENDPOINT:-}"
+# Optional NFS backup target, "server:/path", mounted at /backups/nfs.
+BACKUP_NFS="${BACKUP_NFS:-}"
+# Trusted access is sticky: an empty value means "reuse config.env" (see
+# reuse_previous_values), so a re-run never flips a security switch silently.
+TRUSTED_ACCESS_ENABLED="${TRUSTED_ACCESS_ENABLED:-}"
+TRUSTED_MANAGEMENT_ENABLED="${TRUSTED_MANAGEMENT_ENABLED:-}"
+TRUSTED_MANAGEMENT_CIDRS="${TRUSTED_MANAGEMENT_CIDRS:-}"
+TRUSTED_MANAGEMENT_EXCLUDE_CIDRS="${TRUSTED_MANAGEMENT_EXCLUDE_CIDRS:-}"
 HELM=""
 BASE_DN="dc=umkim,dc=thin"
 CONSOLE_NAMESPACE="umkim-thin"
@@ -79,6 +87,19 @@ Options:
   --skip-preflight      Skip OS/resource/command checks (not recommended).
   --skip-dns-check      Do not require auth.<zone>/console.<zone> to resolve.
   --skip-port-check     Do not require ports 80/443/6443/51820 to be free.
+  --wg-endpoint <host>  Public WireGuard address clients dial (default
+                        wg.<zone>); the port is appended unless you give one.
+  --backup-nfs <server:/path>
+                        Mount an NFS export as a selectable backup target
+                        (kept across re-runs; see Backups in the console).
+  --trusted-access      Let VPN clients use the public app URL (the app's own
+                        login); off by default, kept across re-runs.
+  --no-trusted-access   Turn the VPN bypass off explicitly.
+  --trusted-management-cidrs <csv>
+                        Source ranges allowed to skip Authelia (management).
+  --no-trusted-management
+                        Disable the management bypass (required when no CIDR
+                        is configured, e.g. behind a NAT that rewrites sources).
   --dry-run             Check and print the plan; make no changes.
   --render-only         Write the generated values to --out (no root, no changes).
   --out <dir>           Output directory for --render-only or --backup.
@@ -115,6 +136,15 @@ while [ $# -gt 0 ]; do
     --skip-preflight)  SKIP_PREFLIGHT=1; shift ;;
     --skip-dns-check)  SKIP_DNS_CHECK=1; shift ;;
     --skip-port-check) SKIP_PORT_CHECK=1; shift ;;
+    --wg-endpoint)     WG_ENDPOINT="${2:?--wg-endpoint needs a value}"; shift 2 ;;
+    --wg-endpoint=*)   WG_ENDPOINT="${1#*=}"; shift ;;
+    --backup-nfs)      BACKUP_NFS="${2:?--backup-nfs needs server:/path}"; shift 2 ;;
+    --backup-nfs=*)    BACKUP_NFS="${1#*=}"; shift ;;
+    --trusted-access)  TRUSTED_ACCESS_ENABLED=true; shift ;;
+    --no-trusted-access) TRUSTED_ACCESS_ENABLED=false; shift ;;
+    --trusted-management-cidrs) TRUSTED_MANAGEMENT_CIDRS="${2:?--trusted-management-cidrs needs a value}"; shift 2 ;;
+    --trusted-management-cidrs=*) TRUSTED_MANAGEMENT_CIDRS="${1#*=}"; shift ;;
+    --no-trusted-management) TRUSTED_MANAGEMENT_ENABLED=false; shift ;;
     --dry-run)         DRY_RUN=1; shift ;;
     --render-only)     RENDER_ONLY=1; shift ;;
     --version)         printf 'umkim-thin installer %s\n' "$VERSION"; exit 0 ;;
@@ -160,6 +190,60 @@ reuse_previous_values() {
       info "reusing email $EMAIL from the existing install"
     fi
   fi
+
+  # Keep a custom WireGuard endpoint on an upgrade; the port is re-appended
+  # from WG_PORT, so strip it (and the doubled form older templates wrote).
+  if [ -z "$WG_ENDPOINT" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_WG_ENDPOINT=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      got=${got#*://}
+      got=${got%/}
+      while [ "${got%:$WG_PORT}" != "$got" ]; do
+        got=${got%:$WG_PORT}
+      done
+      if [ -n "$got" ]; then
+        WG_ENDPOINT="$got"
+        info "reusing WireGuard endpoint $WG_ENDPOINT from $cfg"
+      fi
+    fi
+  fi
+
+  if [ -z "$BACKUP_NFS" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_BACKUP_TARGET_NFS=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      BACKUP_NFS="$got"
+      info "reusing NFS backup target $BACKUP_NFS from $cfg"
+    fi
+  fi
+
+  # Trusted access is a security switch: a re-run must not silently flip it.
+  # An explicit flag or environment value wins; otherwise the file decides.
+  if [ -z "$TRUSTED_ACCESS_ENABLED" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_TRUSTED_ACCESS_ENABLED=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      TRUSTED_ACCESS_ENABLED="$got"
+      info "reusing trusted access ($got) from $cfg"
+    fi
+  fi
+  if [ -z "$TRUSTED_MANAGEMENT_ENABLED" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      TRUSTED_MANAGEMENT_ENABLED="$got"
+    fi
+  fi
+  if [ -z "$TRUSTED_MANAGEMENT_CIDRS" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      TRUSTED_MANAGEMENT_CIDRS="$got"
+    fi
+  fi
+  if [ -z "$TRUSTED_MANAGEMENT_EXCLUDE_CIDRS" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      TRUSTED_MANAGEMENT_EXCLUDE_CIDRS="$got"
+    fi
+  fi
+  return 0
 }
 
 validate_inputs() {
@@ -198,7 +282,28 @@ validate_inputs() {
       fi
     fi
   fi
-  WG_ENDPOINT="${WG_ENDPOINT:-$ZONE}"
+  # wg.<zone> is the documented public name for the tunnel; override it with
+  # --wg-endpoint when the DNS record lives elsewhere. Only computed when the
+  # zone is known (an upgrade without flags keeps the value from config.env).
+  if [ -n "$ZONE" ]; then
+    WG_ENDPOINT="${WG_ENDPOINT:-wg.$ZONE}"
+  fi
+}
+
+# wg_endpoint_host_port normalizes the public endpoint to host:port. A value
+# that already carries a port is kept, so "--wg-endpoint wg.example.com:51820"
+# does not become "wg.example.com:51820:51820".
+wg_endpoint_host_port() {
+  local e
+  e=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  e=${e#*://}
+  e=${e%/}
+  e=$(printf '%s' "$e" | sed 's/[[:space:]]//g')
+  case "$e" in
+    "") printf '' ;;
+    *:*) printf '%s' "$e" ;;
+    *) printf '%s:%s' "$e" "$WG_PORT" ;;
+  esac
 }
 
 need_root() {
@@ -211,17 +316,21 @@ need_cmd() {
 
 check_os() {
   [ -r /etc/os-release ] || die "/etc/os-release is missing; this installer supports Rocky Linux 9/10"
-  # shellcheck disable=SC1091
-  . /etc/os-release
-  case "${ID:-}" in
+  # Read os-release in a subshell: sourcing it here would overwrite this
+  # script's own VERSION (the release tag baked into the image).
+  local os_id os_version os_pretty
+  os_id=$(. /etc/os-release; printf '%s' "${ID:-}")
+  os_version=$(. /etc/os-release; printf '%s' "${VERSION_ID:-}")
+  os_pretty=$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-}")
+  case "$os_id" in
     rocky) ;;
-    *) die "unsupported OS '${ID:-unknown}'; this path supports Rocky Linux 9/10 (the Ansible path covers other RHEL-family hosts)" ;;
+    *) die "unsupported OS '${os_id:-unknown}'; this path supports Rocky Linux 9/10 (the Ansible path covers other RHEL-family hosts)" ;;
   esac
-  case "${VERSION_ID:-}" in
+  case "$os_version" in
     9|9.*|10|10.*) ;;
-    *) warn "Rocky Linux ${VERSION_ID:-unknown} is not a tested release; 9 and 10 are supported" ;;
+    *) warn "Rocky Linux ${os_version:-unknown} is not a tested release; 9 and 10 are supported" ;;
   esac
-  info "OS: ${PRETTY_NAME:-$ID}"
+  info "OS: ${os_pretty:-$os_id}"
 }
 
 check_arch() {
@@ -575,6 +684,16 @@ EOF
 }
 
 write_console_values() {
+  local backup_targets="backupTargets: []"
+  if [ -n "$BACKUP_NFS" ]; then
+    local srv path
+    srv=${BACKUP_NFS%%:*}
+    path=${BACKUP_NFS#*:}
+    if [ -z "$srv" ] || [ "$path" = "$BACKUP_NFS" ] || [ "${path#/}" = "$path" ]; then
+      die "--backup-nfs needs server:/absolute/path (got '$BACKUP_NFS')"
+    fi
+    backup_targets=$(printf 'backupTargets:\n  - name: nfs\n    nfs:\n      server: "%s"\n      path: "%s"' "$srv" "$path")
+  fi
   cat > "$STATE_DIR/console-values.yml" <<EOF
 # Generated by install.sh.
 image: "$IMAGE"
@@ -590,6 +709,7 @@ mirrorConfigMap: umkim-thin-mirror
 storageSocket: /run/umkim-thin
 podSecurity:
   seLinuxType: ""
+$backup_targets
 EOF
   chmod 644 "$STATE_DIR/console-values.yml"
 }
@@ -647,7 +767,7 @@ UMKIM_THIN_WG_SERVER_IP=$WG_SERVER_IP
 UMKIM_THIN_WG_PORT=$WG_PORT
 UMKIM_THIN_WG_TRAEFIK_PORT=30444
 UMKIM_THIN_TRAEFIK_NODE_IP=
-UMKIM_THIN_WG_ENDPOINT=$WG_ENDPOINT:$WG_PORT
+UMKIM_THIN_WG_ENDPOINT=$(wg_endpoint_host_port "$WG_ENDPOINT")
 UMKIM_THIN_WG_ALLOWED_IPS=10.42.0.0/16,10.43.0.0/16,192.168.168.0/24
 UMKIM_THIN_VPN_SUBNET=$WG_SUBNET
 UMKIM_THIN_VPN_DNS_IP=10.43.200.53
@@ -657,6 +777,7 @@ UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=${BACKUP_KEEP:-7}
 UMKIM_THIN_BACKUP_INTERVAL=${BACKUP_INTERVAL:-24h}
 UMKIM_THIN_BACKUP_SNAPSHOTS=${BACKUP_SNAPSHOTS:-true}
+UMKIM_THIN_BACKUP_TARGET_NFS=$BACKUP_NFS
 # The console's read-only release check (it asks the public release metadata
 # for a newer umkim-thin). Cached and silent on failure; set false when the
 # console has no egress, e.g. an air-gapped install.
@@ -1015,9 +1136,16 @@ open_firewall() {
 }
 
 print_summary() {
-  local admin localpass
+  local admin localpass wgline=""
   admin=$(secret_value secret_lldap_admin_password 2>/dev/null || true)
   localpass=$(secret_value secret_console_localadmin_password 2>/dev/null || true)
+  if [ -n "$WG_ENDPOINT" ]; then
+    wgline=$(printf '  WireGuard  %s  (optional; install the gateway from the catalog)' "$(wg_endpoint_host_port "$WG_ENDPOINT")")
+  fi
+  local bkline=""
+  if [ -n "$BACKUP_NFS" ]; then
+    bkline=$(printf '  Backups    %s  (selectable in the console)' "$BACKUP_NFS")
+  fi
   cat <<EOF
 
 ============================================================================
@@ -1028,6 +1156,8 @@ umkim-thin is installed.
   Home       https://home.$ZONE
   Directory  https://lldap.$ZONE  (admin / the password below)
   Breakglass localadmin / (the password printed by the installer)
+$wgline
+$bkline
 
 EOF
   if [ "$QUIET" -eq 0 ] && [ "$RENDER_ONLY" -eq 0 ] && [ -t 1 ]; then

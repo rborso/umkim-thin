@@ -274,7 +274,7 @@ echo "The executor must have ansible and passwordless SSH to all three servers,"
 echo "including itself if it is the first/bootstrap server."
 echo
 
-ask WG_ENDPOINT "WireGuard endpoint (VIP or stable node IP)" "$VIP"
+ask WG_ENDPOINT "WireGuard endpoint (public hostname clients dial)" "wg.$ZONE"
 ask WG_SUBNET "WireGuard tunnel subnet" "192.168.169.0/24"
 ask WG_SERVER_IP "WireGuard gateway address" "192.168.169.1"
 ask WG_PORT "WireGuard UDP port" "51820"

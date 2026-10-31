@@ -235,7 +235,7 @@ echo
 echo "The executor must have ansible and passwordless SSH to $VHOST."
 echo
 
-ask WG_ENDPOINT "WireGuard endpoint (public IP or hostname)" "$VHOST"
+ask WG_ENDPOINT "WireGuard endpoint (public hostname clients dial)" "wg.$ZONE"
 ask WG_SUBNET "WireGuard tunnel subnet" "192.168.168.0/24"
 ask WG_SERVER_IP "WireGuard gateway address" "192.168.168.1"
 ask WG_PORT "WireGuard UDP port" "51820"

@@ -497,10 +497,15 @@ matching router, so leave it off when you want real issuance.
 ## 8. WireGuard (optional)
 
 1. Forward `51820/udp` to the node (or the HA VIP).
+1. Set the public endpoint clients dial (`--wg-endpoint wg.<zone>`, the
+   default, or a host you forward UDP 51820 to). The console shows it next to
+   the client form.
 2. Install the **WireGuard gateway** from the catalog (or
    `/usr/local/bin/umkim-thin app install wireguard`).
 3. Console → **WireGuard clients** → create a client.
 4. Scan the QR code or download the `.conf`; import it into the WireGuard app.
+   The file is named after the client with spaces replaced (`laptop-2.conf`),
+   so WireGuard's importers accept it.
 
 The gateway runs as a `hostNetwork` DaemonSet with `NET_ADMIN`: every node has
 a local UDP 51820 listener. On HA, forward UDP 51820 to the VIP; the node that
@@ -513,7 +518,10 @@ when the VIP moves.
 ### Same-host trusted access
 
 To give native clients the public app URL over the VPN and/or management
-network, enable the trusted-access bypass in the generated `config.env`:
+network, enable the trusted-access bypass. `install.sh` has flags for it
+(`--trusted-access`, `--no-trusted-management`, `--trusted-management-cidrs`)
+and keeps the existing choice on a re-run; the Ansible path uses the same keys
+in the generated `config.env`:
 
 ```text
 UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true
