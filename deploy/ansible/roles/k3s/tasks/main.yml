@@ -70,7 +70,9 @@
 
 - name: init | wait for the API
   ansible.builtin.command:
-    cmd: /usr/local/bin/kubectl get --raw /readyz
+    # Use the k3s binary: the kubectl symlink is created further down, and a
+    # freshly installed host has no /usr/local/bin/kubectl yet.
+    cmd: /usr/local/bin/k3s kubectl get --raw /readyz
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: k3s_readyz

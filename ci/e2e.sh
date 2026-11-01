@@ -13,7 +13,9 @@ if [ "${1:-}" = "--full" ]; then
 fi
 export CI_PROFILE="${CI_PROFILE:-default}"
 export TARGET
-export PROVISION_ENV="deploy/provision-${TARGET}.env"
+# Honour an explicit env (e.g. a dev environment that is not the CI target's
+# default), otherwise use the target's own file.
+export PROVISION_ENV="${PROVISION_ENV:-deploy/provision-${TARGET}.env}"
 [ -f "$PROVISION_ENV" ] || { echo "missing $PROVISION_ENV (copy the .example and edit)" >&2; exit 2; }
 # shellcheck source=ci/lib.sh
 source ci/lib.sh
