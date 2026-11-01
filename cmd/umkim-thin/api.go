@@ -170,6 +170,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		Zone:        cfg.Zone,
 		Keep:        cfg.BackupKeep,
 		Snapshots:   cfg.BackupSnapshots,
+		BackupNFS:   cfg.BackupNFS,
 		Schedule:    sched,
 		HelperImage: cfg.ConsoleImage,
 	})

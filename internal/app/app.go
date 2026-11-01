@@ -104,6 +104,7 @@ type Config struct {
 	// Interval 0 disables the schedule; Keep 0 keeps every archive.
 	BackupDir       string
 	BackupSeedDir   string
+	BackupNFS       string
 	BackupKeep      int
 	BackupInterval  time.Duration
 	BackupSnapshots bool
@@ -181,6 +182,7 @@ func ConfigFromEnv() Config {
 
 		BackupDir:       env("UMKIM_THIN_BACKUP_DIR", stateDir+"/backups"),
 		BackupSeedDir:   env("UMKIM_THIN_SEED_DIR", "/etc/umkim-thin"),
+		BackupNFS:       env("UMKIM_THIN_BACKUP_TARGET_NFS", ""),
 		BackupKeep:      atoi(env("UMKIM_THIN_BACKUP_KEEP", "7")),
 		BackupInterval:  duration(env("UMKIM_THIN_BACKUP_INTERVAL", "24h")),
 		BackupSnapshots: boolEnv("UMKIM_THIN_BACKUP_SNAPSHOTS", true),

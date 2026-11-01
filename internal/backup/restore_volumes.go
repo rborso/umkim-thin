@@ -68,10 +68,26 @@ func (m *Manager) RestoreVolumesSelected(ctx context.Context, name string, only 
 			continue
 		}
 		rec := m.restoreVolume(ctx, d)
+		// A large copy over the exec stream can hit a transient API/stream
+		// timeout. The volume is still stopped and the helper is disposable, so
+		// one clean retry is safe and saves the whole restore.
+		if rec.Error != "" && transientRestoreError(rec.Error) {
+			rec = m.restoreVolume(ctx, d)
+		}
 		m.startWorkloads(ctx, refs)
 		out = append(out, rec)
 	}
 	return out, nil
+}
+
+// transientRestoreError reports a stream/transport failure worth retrying.
+func transientRestoreError(s string) bool {
+	for _, p := range []string{"i/o timeout", "connection reset", "unexpected EOF", "stream error", "EOF"} {
+		if strings.Contains(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreVolume streams one sidecar copy into its PVC through a read-write
@@ -87,16 +103,23 @@ func (m *Manager) restoreVolume(ctx context.Context, d DataRecord) VolumeRestore
 		rec.Error = err.Error()
 		return rec
 	}
-	src := filepath.Join(dir, filepath.Base(d.File))
-	f, err := os.Open(src)
-	if err != nil {
-		rec.Error = "opening the copy: " + shortErr(err)
-		return rec
+	nfs := ""
+	if m.cfg.BackupNFS != "" && strings.HasPrefix(dir, "/backups/") {
+		nfs = m.cfg.BackupNFS
 	}
-	defer f.Close()
+	src := filepath.Join(dir, filepath.Base(d.File))
+	var f *os.File
+	if nfs == "" {
+		f, err = os.Open(src)
+		if err != nil {
+			rec.Error = "opening the copy: " + shortErr(err)
+			return rec
+		}
+		defer f.Close()
+	}
 	pod := helperPodName(d.Namespace, d.PVC)
 	m.deleteHelperPod(d.Namespace, pod)
-	doc := helperPodYAML(pod, d.Namespace, d.PVC, m.cfg.HelperImage, false)
+	doc := helperPodYAML(pod, d.Namespace, d.PVC, m.cfg.HelperImage, false, "", nfs)
 	if _, err := m.cfg.Run(m.cfg.Kubectl, doc, "--kubeconfig", m.cfg.Kubeconfig, "apply", "-f", "-"); err != nil {
 		rec.Error = "creating the restore helper: " + shortErr(err)
 		return rec
@@ -107,9 +130,15 @@ func (m *Manager) restoreVolume(ctx context.Context, d DataRecord) VolumeRestore
 		rec.Error = "the restore helper did not start: " + shortErr(err)
 		return rec
 	}
-	err = m.cfg.RunStreamIn(ctx, m.cfg.Kubectl, f,
-		"--kubeconfig", m.cfg.Kubeconfig, "-n", d.Namespace, "exec", "-i", pod, "-c", "copy",
-		"--", "tar", "xzf", "-", "-C", "/data")
+	if nfs != "" {
+		_, err = m.cfg.Run(m.cfg.Kubectl, "", "--kubeconfig", m.cfg.Kubeconfig, "--request-timeout=1h",
+			"-n", d.Namespace, "exec", pod, "-c", "copy", "--",
+			"tar", "xzf", "/backups/"+filepath.Base(d.File), "-C", "/data")
+	} else {
+		err = m.cfg.RunStreamIn(ctx, m.cfg.Kubectl, f,
+			"--kubeconfig", m.cfg.Kubeconfig, "--request-timeout=3600s", "-n", d.Namespace, "exec", "-i", pod, "-c", "copy",
+			"--", "tar", "xzf", "-", "-C", "/data")
+	}
 	if err != nil {
 		rec.Error = "extracting the copy: " + shortErr(err)
 		return rec

@@ -93,6 +93,10 @@ type Config struct {
 	Schedule *ScheduleStore
 	// TargetRoot holds the extra targets the chart mounts (/backups/<name>).
 	TargetRoot string
+	// BackupNFS is the NFS export behind a mounted target, "server:path".
+	// When set, a restore helper mounts it and extracts the archive locally
+	// instead of streaming a large volume through the API server.
+	BackupNFS string
 	// SelfNamespace is the console's own namespace. A platform apply skips the
 	// Deployment there so restoring objects cannot restart the process doing
 	// it. Defaults to the pod's service-account namespace.

@@ -725,6 +725,7 @@ volumes. The console state is always archived whole: it is global and small.
 		Zone:        cfg.Zone,
 		Keep:        cfg.BackupKeep,
 		Snapshots:   cfg.BackupSnapshots,
+		BackupNFS:   cfg.BackupNFS,
 		Schedule:    sched,
 		HelperImage: cfg.ConsoleImage,
 	})

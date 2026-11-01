@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -31,10 +32,26 @@ func helperPodName(namespace, pvc string) string {
 // needed to read files owned by the application's UID (Postgres data is 0700);
 // the volume is read-only, the token is not mounted and the root filesystem is
 // read-only, so the pod can read and nothing else.
-func helperPodYAML(name, namespace, pvc, image string, readOnly bool) string {
+func helperPodYAML(name, namespace, pvc, image string, readOnly bool, nodeName, backupNFS string) string {
 	readOnlyAttr := "false"
 	if readOnly {
 		readOnlyAttr = "true"
+	}
+	nodeLine := ""
+	if nodeName != "" {
+		// A read-write-once volume is attached to the node running the app;
+		// the copy helper must mount it there or the attach fails.
+		nodeLine = "  nodeName: " + nodeName + "\n"
+	}
+	// A large restore can read the archive from the backup NFS inside the
+	// helper instead of streaming it through the API server.
+	var nfsMount, nfsVolume string
+	if backupNFS != "" {
+		if server, path, ok := strings.Cut(backupNFS, ":"); ok && server != "" && path != "" {
+			nfsMount = "        - name: backup\n          mountPath: /backups\n          readOnly: true\n"
+			nfsVolume = "    - name: backup\n      nfs:\n        server: " + fmt.Sprintf("%q", server) +
+				"\n        path: " + fmt.Sprintf("%q", path) + "\n        readOnly: true\n"
+		}
 	}
 	return fmt.Sprintf(`apiVersion: v1
 kind: Pod
@@ -46,7 +63,7 @@ metadata:
     umkim-thin/backup: "true"
 spec:
   restartPolicy: Never
-  automountServiceAccountToken: false
+%s  automountServiceAccountToken: false
   terminationGracePeriodSeconds: 0
   securityContext:
     seccompProfile:
@@ -68,12 +85,48 @@ spec:
         - name: data
           mountPath: /data
           readOnly: %s
-  volumes:
+%s  volumes:
     - name: data
       persistentVolumeClaim:
         claimName: %s
         readOnly: %s
-`, name, namespace, image, readOnlyAttr, pvc, readOnlyAttr)
+%s`, name, namespace, nodeLine, image, readOnlyAttr, nfsMount, pvc, readOnlyAttr, nfsVolume)
+}
+
+// volumeNode returns the node running a pod that mounts the claim. A
+// read-write-once volume is attached there; the copy helper must run on the
+// same node or the mount fails. It returns "" when no pod mounts the claim.
+func (m *Manager) volumeNode(ns, pvc string) string {
+	out, err := m.cfg.Run(m.cfg.Kubectl, "", "--kubeconfig", m.cfg.Kubeconfig, "-n", ns, "get", "pods", "-o", "json")
+	if err != nil {
+		return ""
+	}
+	var pods struct {
+		Items []struct {
+			Spec struct {
+				NodeName string `json:"nodeName"`
+				Volumes  []struct {
+					PersistentVolumeClaim *struct {
+						ClaimName string `json:"claimName"`
+					} `json:"persistentVolumeClaim"`
+				} `json:"volumes"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal([]byte(out), &pods) != nil {
+		return ""
+	}
+	for _, p := range pods.Items {
+		if p.Spec.NodeName == "" {
+			continue
+		}
+		for _, v := range p.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == pvc {
+				return p.Spec.NodeName
+			}
+		}
+	}
+	return ""
 }
 
 // copyVolume streams one PVC into <archiveBase>-data-<ns>-<pvc>.tar.gz. The
@@ -87,7 +140,7 @@ func (m *Manager) copyVolume(ctx context.Context, ns, pvc, archiveBase string) D
 	}
 	name := helperPodName(ns, pvc)
 	m.deleteHelperPod(ns, name)
-	doc := helperPodYAML(name, ns, pvc, m.cfg.HelperImage, true)
+	doc := helperPodYAML(name, ns, pvc, m.cfg.HelperImage, true, m.volumeNode(ns, pvc), "")
 	if _, err := m.cfg.Run(m.cfg.Kubectl, doc, "--kubeconfig", m.cfg.Kubeconfig, "apply", "-f", "-"); err != nil {
 		rec.Error = "creating the copy helper: " + shortErr(err)
 		return rec
@@ -101,7 +154,7 @@ func (m *Manager) copyVolume(ctx context.Context, ns, pvc, archiveBase string) D
 	// Size the volume first: a copy that cannot fit must fail before it fills
 	// the disk, not halfway through.
 	out, err := m.cfg.Run(m.cfg.Kubectl, "", "--kubeconfig", m.cfg.Kubeconfig,
-		"-n", ns, "exec", name, "-c", "copy", "--", "du", "-sk", "/data")
+		"--request-timeout=3600s", "-n", ns, "exec", name, "-c", "copy", "--", "du", "-sk", "/data")
 	if err != nil {
 		rec.Error = "measuring the volume: " + shortErr(err)
 		return rec
@@ -136,7 +189,7 @@ func (m *Manager) copyVolume(ctx context.Context, ns, pvc, archiveBase string) D
 	}
 	h := sha256.New()
 	err = m.cfg.RunStream(ctx, m.cfg.Kubectl, io.MultiWriter(f, h),
-		"--kubeconfig", m.cfg.Kubeconfig, "-n", ns, "exec", name, "-c", "copy",
+		"--kubeconfig", m.cfg.Kubeconfig, "--request-timeout=3600s", "-n", ns, "exec", name, "-c", "copy",
 		"--", "tar", "czf", "-", "-C", "/data", ".")
 	if cerr := f.Close(); err == nil {
 		err = cerr
