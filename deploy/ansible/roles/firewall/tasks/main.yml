@@ -59,6 +59,17 @@
         immediate: true
         state: enabled
 
+    # Extra networks an operator/agent may reach the API from (e.g. the lab
+    # network when the dev cluster runs on a public host).
+    - name: API server reachable from trusted management networks
+      ansible.posix.firewalld:
+        rich_rule: 'rule family="ipv4" source address="{{ item }}" port port="6443" protocol="tcp" accept'
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ (trusted_management_cidrs | default('')).split() }}"
+      when: trusted_management_enabled | default(false) | bool
+
     - name: trust the cluster networks
       ansible.posix.firewalld:
         zone: trusted
