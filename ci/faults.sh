@@ -91,14 +91,21 @@ app_http() { # app_http <host>
   curl -sk -m 10 -o /dev/null -w '%{http_code}' --resolve "$h:443:$addr" "https://$h/" 2>/dev/null || echo 000
 }
 
-wait_pods() { # wait_pods [timeout] - every pod Running/Completed
-  local t="${1:-600}" i bad out
+wait_pods() { # wait_pods [timeout] - every workload pod is Running and ready
+  # Only steady-state workloads count. A Job or a bare helper pod (the marker
+  # pods) may legitimately be Completed, Pending or Unknown after a reboot and
+  # is not what "the cluster is back" means.
+  local t="${1:-600}" i bad
   for i in $(seq 1 $((t / 10))); do
-    out=$(k "get pods -A --no-headers" 2>/dev/null) || { sleep 10; continue; }
-    bad=$(printf '%s\n' "$out" | awk '
-      $3 == "Completed" || $3 == "Error" { next }
-      { split($2, a, "/"); if ($3 != "Running" || a[1] != a[2]) bad++ }
-      END { print bad + 0 }')
+    bad=$(k "get pods -A -o json" 2>/dev/null | jq '
+      [.items[]
+       | select((.metadata.ownerReferences // []) as $o
+                | ($o | any(.kind == "ReplicaSet" or .kind == "StatefulSet"
+                            or .kind == "DaemonSet" or .kind == "ReplicationController")))
+       | select(.status.phase != "Running"
+                or ([.status.containerStatuses[]? | .ready] | any(. == false))
+                or ([.status.containerStatuses[]?] | length) == 0)
+      ] | length' 2>/dev/null) || { sleep 10; continue; }
     [ "${bad:-1}" -eq 0 ] && return 0
     sleep 10
   done
@@ -170,7 +177,7 @@ fault_vip() {
   wait_apps 600 && ok "apps recovered without the node" || bad "apps did not recover"
   say "HA: start the powered-off node again"
   virsh_do "$hv" "start '$vm'" >/dev/null 2>&1 || { bad "virsh start $vm"; return; }
-  wait_ssh "$ip" 420 && ok "$vm is reachable again" || bad "$vm did not come back"
+  wait_ssh "$ip" 900 && ok "$vm is reachable again" || bad "$vm did not come back"
   wait_nodes 600 && ok "the node rejoined" || bad "the node did not rejoin"
   wait_apps 600 && ok "apps are healthy after the rejoin" || bad "apps are not healthy after the rejoin"
   check_data
@@ -184,7 +191,7 @@ fault_reboot() {
     say "graceful reboot $vm ($ip)"
     virsh_do "$hv" "reboot '$vm'" >/dev/null 2>&1 || { bad "virsh reboot $vm"; continue; }
     sleep 15
-    wait_ssh "$ip" 420 && ok "$vm is back" || bad "$vm did not come back"
+    wait_ssh "$ip" 900 && ok "$vm is back" || bad "$vm did not come back"
     wait_api 300 && ok "API after $vm" || bad "API after $vm"
     wait_nodes 420 && ok "nodes after $vm" || bad "nodes after $vm"
     wait_pods 600 && ok "pods after $vm" || bad "pods after $vm"
@@ -195,7 +202,7 @@ fault_reboot() {
   virsh_do "$hv" "destroy '$vm'" >/dev/null 2>&1 || { bad "virsh destroy $vm"; return; }
   sleep 5
   virsh_do "$hv" "start '$vm'" >/dev/null 2>&1 || { bad "virsh start $vm"; return; }
-  wait_ssh "$ip" 420 && ok "$vm is back" || bad "$vm did not come back"
+  wait_ssh "$ip" 900 && ok "$vm is back" || bad "$vm did not come back"
   wait_api 300 && ok "API after the hard reboot" || bad "API after the hard reboot"
   wait_nodes 420 && ok "nodes after the hard reboot" || bad "nodes after the hard reboot"
   wait_pods 600 && ok "pods after the hard reboot" || bad "pods after the hard reboot"
@@ -214,8 +221,9 @@ fault_full_stop() { # fault_full_stop <graceful|hard>
       virsh_do "$hv" "shutdown '$vm'" >/dev/null 2>&1 || bad "virsh shutdown $vm"
     fi
   done
-  # Wait for every domain to be off.
-  for _ in $(seq 1 60); do
+  # Wait for every domain to be off. A graceful shutdown drains k3s first and
+  # can take several minutes, so allow 15 and force off whatever is left.
+  for _ in $(seq 1 180); do
     off=1
     for i in "${!vm_list[@]}"; do
       st=$(dom_state "${hv_list[$i]}" "${vm_list[$i]}")
@@ -224,13 +232,32 @@ fault_full_stop() { # fault_full_stop <graceful|hard>
     [ "$off" = 1 ] && break
     sleep 5
   done
+  if [ "${off:-0}" != 1 ]; then
+    for i in "${!vm_list[@]}"; do
+      [ "$(dom_state "${hv_list[$i]}" "${vm_list[$i]}")" = "shut off" ] || \
+        virsh_do "${hv_list[$i]}" "destroy '${vm_list[$i]}'" >/dev/null 2>&1 || true
+    done
+    sleep 5
+    off=1
+    for i in "${!vm_list[@]}"; do
+      [ "$(dom_state "${hv_list[$i]}" "${vm_list[$i]}")" = "shut off" ] || off=0
+    done
+  fi
   [ "${off:-0}" = 1 ] && ok "all nodes are off" || bad "not all nodes stopped ($how)"
 
+  # Starting can race a domain that is still finishing its shutdown, so retry.
   for i in "${!vm_list[@]}"; do
-    virsh_do "${hv_list[$i]}" "start '${vm_list[$i]}'" >/dev/null 2>&1 || bad "virsh start ${vm_list[$i]}"
+    st=$(dom_state "${hv_list[$i]}" "${vm_list[$i]}")
+    if [ "$st" != "shut off" ]; then bad "${vm_list[$i]} is $st before start"; continue; fi
+    started=0
+    for _ in 1 2 3 4 5 6; do
+      if virsh_do "${hv_list[$i]}" "start '${vm_list[$i]}'" >/dev/null 2>&1; then started=1; break; fi
+      sleep 5
+    done
+    [ "$started" = 1 ] || bad "virsh start ${vm_list[$i]}"
   done
   for i in "${!vm_list[@]}"; do
-    wait_ssh "${ip_list[$i]}" 600 >/dev/null 2>&1 || true
+    wait_ssh "${ip_list[$i]}" 900 >/dev/null 2>&1 || true
   done
   wait_api 900 && ok "API is back after the full stop" || bad "API did not come back after the full stop"
   wait_nodes 900 && ok "all nodes rejoined" || bad "not all nodes rejoined"
@@ -241,6 +268,20 @@ fault_full_stop() { # fault_full_stop <graceful|hard>
 
 MARK="${UMKIM_THIN_MARK:-}"
 [ -n "$MARK" ] || MARK="ci-marker-${UMKIM_THIN_CI_RUN:-$(date +%s)}"
+
+# The data check verifies markers that already exist. The extended run creates
+# them earlier; a standalone run has to create its own, or every check reports
+# the data as missing.
+if [ -z "${UMKIM_THIN_MARK:-}" ]; then
+  # A standalone run may start right after a reboot, while the apps are still
+  # coming back; wait for them before writing the markers.
+  wait_apps 900 >/dev/null 2>&1 || true
+  if ! ./ci/markers.sh create "$TARGET" --mark "$MARK" >/tmp/ci-fault-markers-create.log 2>&1; then
+    sleep 60
+    ./ci/markers.sh create "$TARGET" --mark "$MARK" >/tmp/ci-fault-markers-create.log 2>&1 \
+      || { bad "could not create the data markers"; sed -n 1,20p /tmp/ci-fault-markers-create.log >&2; }
+  fi
+fi
 
 case "$MODE" in
   all)

@@ -34,6 +34,16 @@ export PROVISION_ENV="${PROVISION_ENV:-deploy/provision-${TARGET}.env}"
 # shellcheck source=ci/lib.sh
 source ci/lib.sh
 
+# A helper pod killed mid-run (a reboot during the fault phase) stays in the
+# Unknown phase and would make the "every pod is back" assertion fail later.
+# Clean up anything a previous run left behind.
+node_root >/dev/null 2>&1 <<'EOS' || true
+K="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml /usr/local/bin/kubectl"
+for ns in $($K get pods -A -l app=ci-markers -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u); do
+  $K -n "$ns" delete pod -l app=ci-markers --ignore-not-found --grace-period=0 --force >/dev/null 2>&1 || true
+done
+EOS
+
 remote() {
   cat <<REMOTE
 set -u
@@ -102,7 +112,16 @@ paperless() {
     create)
       c=\$(code -H "Authorization: Token \$tok" -H 'Content-Type: application/json' \
         -d "{\"name\":\"\$MARK\"}" "http://\$ip:8000/api/tags/")
-      [ "\$c" = 201 ] && ok "paperless tag" || bad "paperless tag (\$c)" ;;
+      # Creating is idempotent: a marker left by an earlier phase (or a
+      # previous run) answers 400/409, so accept it when the tag is there.
+      if [ "\$c" = 201 ]; then
+        ok "paperless tag"
+      elif [ "\$c" = 400 ] || [ "\$c" = 409 ]; then
+        n=\$(curl -s -H "Authorization: Token \$tok" "http://\$ip:8000/api/tags/?name__iexact=\$MARK" | grep -c "\$MARK")
+        [ "\$n" -ge 1 ] && ok "paperless tag (exists)" || bad "paperless tag (\$c)"
+      else
+        bad "paperless tag (\$c)"
+      fi ;;
     verify)
       c=\$(curl -s -H "Authorization: Token \$tok" "http://\$ip:8000/api/tags/?name__iexact=\$MARK" | grep -c "\$MARK")
       [ "\$c" -ge 1 ] && ok "paperless tag" || bad "paperless tag missing" ;;
@@ -129,7 +148,15 @@ mealie() {
     create)
       c=\$(code -H "Authorization: Bearer \$tok" -H 'Content-Type: application/json' \
         -d "{\"name\":\"\$MARK\"}" "http://\$ip:9000/api/organizers/tags")
-      { [ "\$c" = 200 ] || [ "\$c" = 201 ]; } && ok "mealie tag (\$c)" || bad "mealie tag (\$c)" ;;
+      # Idempotent: an existing tag answers 400/409; accept it if it is there.
+      if [ "\$c" = 200 ] || [ "\$c" = 201 ]; then
+        ok "mealie tag (\$c)"
+      elif [ "\$c" = 400 ] || [ "\$c" = 409 ]; then
+        n=\$(curl -s -H "Authorization: Bearer \$tok" "http://\$ip:9000/api/organizers/tags" | grep -c "\$MARK")
+        [ "\$n" -ge 1 ] && ok "mealie tag (exists)" || bad "mealie tag (\$c)"
+      else
+        bad "mealie tag (\$c)"
+      fi ;;
     verify)
       c=\$(curl -s -H "Authorization: Bearer \$tok" "http://\$ip:9000/api/organizers/tags" | grep -c "\$MARK")
       [ "\$c" -ge 1 ] && ok "mealie tag" || bad "mealie tag missing" ;;
