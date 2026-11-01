@@ -185,7 +185,7 @@ data:
         kill -9 "$(cat "${DNS_PID}")" 2>/dev/null || true
         sleep 3
       fi
-      dnsmasq --conf-file="${DNS_CONF}" --pid-file="${DNS_PID}" || \
+      dnsmasq --no-hosts --no-poll --conf-file="${DNS_CONF}" --pid-file="${DNS_PID}" || \
         echo "==> dnsmasq failed to start"
     }
     configure_dns

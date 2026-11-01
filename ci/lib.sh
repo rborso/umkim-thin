@@ -27,24 +27,52 @@ bad()  { printf '  FAIL  %s\n' "$*"; fails=$((fails + 1)); }
 skip() { printf '  skip  %s\n' "$*"; }
 
 # node '<command>' : run a command on the primary node as the login user
-node() {
-  ssh -i "$KEY" -p "$JUMP_PORT" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
-    "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${VHOST} '$*'"
-}
-# node_root <<'EOS' ... EOS : run a script on the primary node as root
-node_root() {
-  ssh -i "$KEY" -p "$JUMP_PORT" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
-    "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${VHOST} 'sudo bash -s'"
-}
-
-# nodes_on <command> : run a shell command on every node of the target
-nodes_on() {
-  local cmd="$1" h
-  for h in $SERVERS; do
+# CI_ON_JUMP=1 means the scripts run on the jumphost itself (the CI host), so
+# the outer hop would be a no-op. The target and hypervisor keys are the
+# jumphost's own.
+if [ "${CI_ON_JUMP:-0}" = "1" ]; then
+  node() {
+    ssh -i "$KEY" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "${VUSER}@${VHOST}" "$*"
+  }
+  node_root() {
+    ssh -i "$KEY" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "${VUSER}@${VHOST}" 'sudo bash -s'
+  }
+  nodes_on() {
+    local cmd="$1" h
+    for h in $SERVERS; do
+      ssh -i "$KEY" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "${VUSER}@${h}" "$cmd" </dev/null
+    done
+  }
+  # node_at <ip> <command> : run on a specific node (HA survivors included)
+  node_at() {
+    local ip="$1"; shift
+    ssh -i "$KEY" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "${VUSER}@${ip}" "$*"
+  }
+else
+  node() {
     ssh -i "$KEY" -p "$JUMP_PORT" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
-      "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${h} '$cmd'" </dev/null
-  done
-}
+      "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${VHOST} '$*'"
+  }
+  # node_root <<'EOS' ... EOS : run a script on the primary node as root
+  node_root() {
+    ssh -i "$KEY" -p "$JUMP_PORT" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
+      "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${VHOST} 'sudo bash -s'"
+  }
+
+  # nodes_on <command> : run a shell command on every node of the target
+  nodes_on() {
+    local cmd="$1" h
+    for h in $SERVERS; do
+      ssh -i "$KEY" -p "$JUMP_PORT" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
+        "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${h} '$cmd'" </dev/null
+    done
+  }
+  node_at() {
+    local ip="$1"; shift
+    ssh -i "$KEY" -p "$JUMP_PORT" -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
+      "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${ip} '$*'"
+  }
+fi
 
 # trust_staging_roots: make the runner's TLS clients trust the Let's Encrypt
 # staging chain. Full runs use staging certificates for real (no production
@@ -120,21 +148,29 @@ EOS
 
 # pin_hosts <addr> <host>... : resolve the target's names straight to it. The
 # lab DNS points the zone at a public DDNS address, which does not hairpin, so
-# The lab runner pins the VIP.
+# the runner pins the ingress address. A lock keeps two parallel targets from
+# rewriting /etc/hosts at the same time.
 pin_hosts() {
   local addr="$1"; shift
   local tmp; tmp=$(mktemp)
-  awk -v hosts="$*" 'BEGIN { n=split(hosts, a, " "); for (i=1;i<=n;i++) drop[a[i]]=1 }
-    { keep=1; for (i=2;i<=NF;i++) if ($i in drop) keep=0; if (keep) print }' /etc/hosts > "$tmp"
-  for h in "$@"; do echo "$addr $h" >> "$tmp"; done
-  sudo cp "$tmp" /etc/hosts
+  (
+    flock 9
+    awk -v hosts="$*" 'BEGIN { n=split(hosts, a, " "); for (i=1;i<=n;i++) drop[a[i]]=1 }
+      { keep=1; for (i=2;i<=NF;i++) if ($i in drop) keep=0; if (keep) print }' /etc/hosts > "$tmp"
+    for h in "$@"; do echo "$addr $h" >> "$tmp"; done
+    sudo cp "$tmp" /etc/hosts
+  ) 9>/tmp/.umkim-thin-hosts.lock
   rm -f "$tmp"
 }
 
 # run_tags <tags> : re-run part of the playbook (already shipped by
-# provision.sh) on the jumphost, e.g. to apply policies once app namespaces
-# exist.
+# provision.sh) on the executor, e.g. to apply policies once app namespaces
+# exist. On the jumphost the playbook is local; elsewhere it is remote.
 run_tags() {
-  ssh -n -i "$KEY" -p "$JUMP_PORT" -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
-    "cd '${REMOTE_WORKDIR}/ansible' && ansible-playbook -i inventory.ini site.yml --tags $*"
+  if [ "${CI_ON_JUMP:-0}" = "1" ]; then
+    ( cd "${REMOTE_WORKDIR}/ansible" && ansible-playbook -i inventory.ini site.yml --tags "$@" )
+  else
+    ssh -n -i "$KEY" -p "$JUMP_PORT" -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP" \
+      "cd '${REMOTE_WORKDIR}/ansible' && ansible-playbook -i inventory.ini site.yml --tags $*"
+  fi
 }

@@ -100,7 +100,8 @@ test.describe('console', () => {
     // is the UI contract (a broken tab would break the page, not just the tab).
     await page.locator('#tab-backups-label').click();
     await expect(page.getByRole('heading', { name: 'Backups' })).toBeVisible();
-    await expect(page.locator('#backup-schedule')).not.toBeEmpty();
+    await expect(page.locator('#backup-schedule-form')).toBeVisible();
+    await expect(page.locator('#backup-schedule-next')).not.toBeEmpty();
     await expect(page.locator('#backup-now')).toBeVisible();
     const backups = await page.evaluate(async () => {
       const r = await fetch('/api/backups', { credentials: 'same-origin' });

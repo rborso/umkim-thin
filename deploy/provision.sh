@@ -147,6 +147,11 @@ fi
 [ -n "${console_selinux_type:-}" ] && printf 'console_selinux_type: "%s"\n' "${console_selinux_type}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${console_persistence_class:-}" ] && printf 'console_persistence_class: "%s"\n' "${console_persistence_class}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${console_state_size:-}" ] && printf 'console_state_size: "%s"\n' "${console_state_size}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${backup_nfs:-}" ] && printf 'backup_nfs: "%s"\n' "${backup_nfs}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${trusted_access_enabled:-}" ] && printf 'trusted_access_enabled: %s\n' "${trusted_access_enabled}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${trusted_management_enabled:-}" ] && printf 'trusted_management_enabled: %s\n' "${trusted_management_enabled}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${trusted_management_cidrs:-}" ] && printf 'trusted_management_cidrs: "%s"\n' "${trusted_management_cidrs}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${trusted_management_exclude_cidrs:-}" ] && printf 'trusted_management_exclude_cidrs: "%s"\n' "${trusted_management_exclude_cidrs}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${longhorn_replica_count:-}" ] && printf 'longhorn_replica_count: %s\n' "${longhorn_replica_count}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${longhorn_storage_over_provisioning_percentage:-}" ] && printf 'longhorn_storage_over_provisioning_percentage: %s\n' "${longhorn_storage_over_provisioning_percentage}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${longhorn_storage_minimal_available_percentage:-}" ] && printf 'longhorn_storage_minimal_available_percentage: %s\n' "${longhorn_storage_minimal_available_percentage}" >> "$stage/ansible/group_vars/all/99-local.yml"
@@ -167,8 +172,31 @@ inventory="$stage/ansible/inventory.ini"
 
 SSH=(ssh -i "$VSSH_KEY" -p "$JUMP_PORT" -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes "$JUMP")
 
+# CI_ON_JUMP=1 means this script already runs on the jumphost (the CI host):
+# the Ansible work and the staging directory are local, only the targets are
+# remote.
+if [ "${CI_ON_JUMP:-0}" = "1" ]; then
+  jump_run() { bash -c "$1"; }
+  ship_stage() {
+    rm -rf "$REMOTE_WORKDIR" && mkdir -p "$REMOTE_WORKDIR" && tar xzf - -C "$REMOTE_WORKDIR"
+  }
+  import_image() { # import_image <host>
+    ssh -i "$VSSH_KEY" -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 \
+      -o StrictHostKeyChecking=no -o BatchMode=yes "${VUSER}@$1" \
+      'sudo /usr/local/bin/k3s ctr images import -'
+  }
+else
+  jump_run() { "${SSH[@]}" "$1"; }
+  ship_stage() {
+    "${SSH[@]}" "rm -rf '${REMOTE_WORKDIR}' && mkdir -p '${REMOTE_WORKDIR}' && tar xzf - -C '${REMOTE_WORKDIR}'"
+  }
+  import_image() { # import_image <host>
+    "${SSH[@]}" "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@$1 'sudo /usr/local/bin/k3s ctr images import -'"
+  }
+fi
+
 run_playbook() {
-  "${SSH[@]}" "cd '${REMOTE_WORKDIR}/ansible' && ansible-playbook -i inventory.ini site.yml $*"
+  jump_run "cd '${REMOTE_WORKDIR}/ansible' && ansible-playbook -i inventory.ini site.yml $*"
 }
 
 # Build the console image and load it into each node's k3s (no registry needed).
@@ -189,8 +217,7 @@ build_and_import_image() {
     --build-arg "UMKIM_THIN_VERSION=${version}" -t localhost/umkim-thin:dev . >/dev/null
   for h in ${servers:-$VHOST}; do
     echo ">> importing the image into k3s on $h"
-    podman save --format docker-archive localhost/umkim-thin:dev | gzip -1 | "${SSH[@]}" \
-      "ssh -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o BatchMode=yes ${VUSER}@${h} 'sudo /usr/local/bin/k3s ctr images import -'" >/dev/null
+    podman save --format docker-archive localhost/umkim-thin:dev | gzip -1 | import_image "$h" >/dev/null
   done
 }
 
@@ -211,8 +238,7 @@ EOF
 }
 
 echo ">> shipping to ${JUMP}:${REMOTE_WORKDIR}"
-tar czf - -C "$stage" ansible | "${SSH[@]}" \
-  "rm -rf '${REMOTE_WORKDIR}' && mkdir -p '${REMOTE_WORKDIR}' && tar xzf - -C '${REMOTE_WORKDIR}'"
+tar czf - -C "$stage" ansible | ship_stage
 
 if [ "$#" -eq 0 ]; then
   # Full run: install the cluster (and everything but the console), load the

@@ -6,6 +6,10 @@ write-kubeconfig-mode: "0600"
 # distribution is automated (the current CI profile does this on HA).
 {% if secrets_encryption | default(true) | bool %}
 secrets-encryption: true
+# Large volume restores stream through the API; the default 60s request
+# timeout kills the exec stream mid-extract. The client sets its own timeout.
+kube-apiserver-arg:
+  - "request-timeout=1h"
 {% endif %}
 node-name: {{ ansible_hostname }}
 node-ip: {{ ansible_default_ipv4.address }}

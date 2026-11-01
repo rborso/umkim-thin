@@ -48,7 +48,8 @@ fi
 
 # The HA zone resolves to the public DDNS, which does not hairpin from the lab;
 # resolve the target's names straight to its VIP on the runner.
-if [ -n "${k3s_control_plane_vip:-}" ]; then
+ingress_addr="${k3s_control_plane_vip:-$VHOST}"
+if [ -n "$ingress_addr" ]; then
   app_hosts=$(ZONE="$ZONE" APPS="$apps" python3 - <<'PY'
 import json, os
 zone = os.environ["ZONE"]
@@ -69,7 +70,7 @@ PY
     *" nextcloud "*) extra_hosts="collabora.$ZONE" ;;
   esac
   # shellcheck disable=SC2086
-  pin_hosts "$k3s_control_plane_vip" "$PORTAL_HOST" "$CONSOLE_HOST" "$home_host" $app_hosts $extra_hosts
+  pin_hosts "$ingress_addr" "$PORTAL_HOST" "$CONSOLE_HOST" "$home_host" $app_hosts $extra_hosts
 fi
 
 # The private chart repos are cloned with this key (provision.sh inherits it).
@@ -93,6 +94,15 @@ done
 
 echo "==== $TARGET: provision ===="
 ./deploy/provision.sh
+
+if [ "${CERT_CACHE:-0}" = "1" ]; then
+  echo "==== $TARGET: certificate cache ===="
+  if [ "${CERT_REGEN:-0}" = "1" ]; then
+    ./ci/certs.sh restore "$TARGET" --regen
+  else
+    ./ci/certs.sh restore "$TARGET"
+  fi
+fi
 
 echo "==== $TARGET: install apps ($apps) ===="
 for a in $apps; do
@@ -139,15 +149,17 @@ if [ "$TARGET" = "single" ]; then
   ./tests/e2e/migration/migrate-single.sh
 fi
 
-echo "==== $TARGET: backups ===="
-# Create, verify and restore through the console's own CLI (the same code the
-# schedule and the Backups tab use). Apps are installed by now, so app values
-# and PVC snapshots are part of the archive.
-./ci/backup-check.sh "$TARGET"
+if [ "${SKIP_BACKUP:-0}" != "1" ]; then
+  echo "==== $TARGET: backups ===="
+  # Create, verify and restore through the console's own CLI (the same code the
+  # schedule and the Backups tab use). Apps are installed by now, so app values
+  # and PVC snapshots are part of the archive.
+  ./ci/backup-check.sh "$TARGET"
+fi
 
 echo "==== $TARGET: regular portal user ===="
 cleanup() { (cd "$repo_root" && ./ci/cleanup-ci.sh "$TARGET" "$run_id" >/dev/null 2>&1) || true; }
-trap cleanup EXIT
+if [ "${SKIP_CLEANUP:-0}" != "1" ]; then trap cleanup EXIT; fi
 ./ci/portal-user.sh "$TARGET"
 
 echo "==== $TARGET: build the app list ===="
@@ -247,6 +259,10 @@ cd tests/playwright
 # journeys stay informational.
 npx playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
 
+if [ "${JOURNEYS_GATING:-0}" = "1" ]; then
+  echo "==== $TARGET: functional user journeys (gating) ===="
+  npx playwright test journeys --workers=1
+else
 # Functional user journeys (client simulation): INFORMATIONAL. A failure here
 # must not fail the pipeline; it is written to a report for review instead.
 echo "==== $TARGET: functional user journeys (informational) ===="
@@ -301,5 +317,6 @@ for mark, title, err in rows:
 report.write_text("\n".join(lines) + "\n")
 print("\n".join(lines))
 PY
+fi
 
 echo "==== $TARGET: PASSED ===="

@@ -50,6 +50,17 @@
     sysctl_set: true
     reload: true
 
+- name: raise inotify limits for pod watchers
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-k3s.conf
+    sysctl_set: true
+    reload: true
+  loop:
+    - { name: fs.inotify.max_user_instances, value: '1024' }
+    - { name: fs.inotify.max_user_watches, value: '524288' }
+
 - name: keep the clock synced
   ansible.builtin.systemd_service:
     name: chronyd

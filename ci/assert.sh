@@ -305,9 +305,10 @@ case "$issuer" in
   "") skip "could not read the TLS certificate" ;;
   *)
     if [ "${UMKIM_THIN_STRICT_TLS:-0}" = "1" ]; then
-      # full: the certificate must come from ACME (staging), not the fallback
+      # full: the certificate must come from ACME (staging or production,
+      # depending on acme_staging), not the fallback.
       case "$issuer" in
-        *STAGING*) ok "tls issuer (acme staging): ${issuer#issuer=}" ;;
+        *STAGING*|*"Let's Encrypt"*) ok "tls issuer (acme): ${issuer#issuer=}" ;;
         *"umkim-thin lab CA"*) bad "full profile served the lab CA, not an ACME certificate" ;;
         *) bad "full profile served an unexpected issuer: ${issuer#issuer=}" ;;
       esac

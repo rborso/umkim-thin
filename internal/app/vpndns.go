@@ -19,9 +19,11 @@ func (in *Installer) vpnDNSPairs() []string {
 	var hosts []string
 	for _, name := range sortedKeys(c) {
 		for _, rs := range c[name].Routes {
-			host := rs.VPNHost
-			if host == "" {
-				host = rs.Host
+			// sameHost means the public host is also the VPN host; the legacy
+			// .vpn. name is not covered by the zone wildcard.
+			host := rs.Host
+			if !rs.SameHost && rs.VPNHost != "" {
+				host = rs.VPNHost
 			}
 			if !rs.TrustedVPN || host == "" {
 				continue

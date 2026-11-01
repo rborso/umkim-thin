@@ -58,7 +58,7 @@ spec:
                   echo "host-record=$host,$ip"
                 done < /dns/hosts
               } > /etc/dnsmasq.conf
-              exec dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf --log-facility=-
+              exec dnsmasq --no-daemon --no-hosts --no-poll --conf-file=/etc/dnsmasq.conf --log-facility=-
           ports:
             - name: dns-udp
               containerPort: 53

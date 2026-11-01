@@ -9,5 +9,14 @@ configMapName: umkim-thin-config
 seedSecretName: umkim-thin-secrets
 mirrorConfigMap: umkim-thin-mirror
 storageSocket: {{ (storage_socket | default("")) | to_json }}
+{% if backup_nfs is defined and backup_nfs %}
+backupTargets:
+  - name: nfs
+    nfs:
+      server: "{{ backup_nfs.split(':')[0] }}"
+      path: "{{ backup_nfs.split(':')[1] }}"
+{% else %}
+backupTargets: []
+{% endif %}
 podSecurity:
   seLinuxType: "{{ console_selinux_type | default('') }}"

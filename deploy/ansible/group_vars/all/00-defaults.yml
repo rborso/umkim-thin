@@ -57,7 +57,7 @@ update_check: true
 # Trusted-network bypass for the management network. Disabled by default; set
 # trusted_access_enabled and an explicit management CIDR list to opt in.
 trusted_access_enabled: false
-trusted_management_enabled: true
+trusted_management_enabled: false
 trusted_management_cidrs: ""
 # A public NAT/proxy that masquerades to an address inside the management CIDR
 # would otherwise match the ClientIP bypass. Put that address here.
@@ -81,6 +81,9 @@ netpol_wg_namespace: wireguard
 # topology differ between single and HA.
 console_persistence_class: "{{ storage_class_config }}"
 console_state_size: 2Gi
+# Optional NFS backup target, "server:/path"; the console mounts it at
+# /backups/nfs and it becomes a selectable backup target.
+backup_nfs: ""
 # The single-node storage agent is a host service; HA uses Longhorn/external
 # NFS. Derive the default from the inventory so a one-node target gets the
 # socket and an HA target does not.

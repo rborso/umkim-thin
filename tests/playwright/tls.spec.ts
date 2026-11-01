@@ -43,9 +43,11 @@ test.describe('tls', () => {
       expect(issuer, `issuer for ${host}`).not.toContain('TRAEFIK DEFAULT CERT');
       expect(issuer.length, `issuer present for ${host}`).toBeGreaterThan(0);
       if (strict) {
-        // A full run has no lab-CA fallback: the certificate must come from the
-        // ACME staging environment, which is what proves issuance works.
-        expect(issuer, `issuer for ${host} in full profile`).toMatch(/STAGING/i);
+        // A full run has no lab-CA fallback: the certificate must come from
+        // ACME. Staging uses the Let's Encrypt staging directory by default;
+        // the staging environments use production ACME with a certificate
+        // cache, so accept either public issuer.
+        expect(issuer, `issuer for ${host} in full profile`).toMatch(/STAGING|Let's Encrypt/i);
         expect(issuer, `issuer for ${host} must not be the lab CA`).not.toContain('umkim-thin lab CA');
       }
       // The leaf must actually cover the hostname it is served for.
