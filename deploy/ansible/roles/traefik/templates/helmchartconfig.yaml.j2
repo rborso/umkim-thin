@@ -78,6 +78,21 @@ spec:
     podSecurityContext:
       fsGroup: 65532
       fsGroupChangePolicy: OnRootMismatch
+    # The HTTP-01 challenge reaches Traefik through the Service, and klipper-lb
+    # rejects (RST -> "connection refused") while the pod has no ready endpoint.
+    # The stock probe checks at 2s and then every 10s, leaving a ~14s hole after
+    # a restart; ACME's startup attempt lands in it and never issues. Probe
+    # quickly so the endpoint exists before the resolver runs.
+    readinessProbe:
+      initialDelaySeconds: 1
+      periodSeconds: 2
+      timeoutSeconds: 2
+      failureThreshold: 1
+    livenessProbe:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
     deployment:
       initContainers:
         - name: volume-permissions

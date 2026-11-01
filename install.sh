@@ -379,7 +379,7 @@ prepare_host() {
     info "+ swapoff -a; comment swap entries in /etc/fstab"
   fi
   if [ "$DRY_RUN" -eq 0 ]; then
-    printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-k3s.conf
+    printf 'net.ipv4.ip_forward = 1\nfs.inotify.max_user_instances = 1024\nfs.inotify.max_user_watches = 524288\n' > /etc/sysctl.d/99-k3s.conf
     sysctl --system >/dev/null 2>&1 || warn "could not apply sysctl settings"
   else
     info "+ net.ipv4.ip_forward=1"
@@ -509,7 +509,7 @@ install_k3s() {
     if [ "$DRY_RUN" -eq 0 ]; then
       curl -sfL https://get.k3s.io |
         INSTALL_K3S_CHANNEL="$K3S_CHANNEL" \
-        INSTALL_K3S_EXEC="server --cluster-init --write-kubeconfig-mode 600 --tls-san auth.$ZONE --tls-san console.$ZONE" \
+        INSTALL_K3S_EXEC="server --cluster-init --write-kubeconfig-mode 600 --kube-apiserver-arg=request-timeout=1h --tls-san auth.$ZONE --tls-san console.$ZONE" \
         sh -
     else
       info "+ install k3s (channel $K3S_CHANNEL, embedded etcd, TLS SANs auth.$ZONE and console.$ZONE)"
@@ -857,6 +857,21 @@ $acme_extra
     podSecurityContext:
       fsGroup: 65532
       fsGroupChangePolicy: OnRootMismatch
+    # HTTP-01 reaches Traefik through the Service; klipper-lb rejects (RST ->
+    # "connection refused") while the pod has no ready endpoint. The stock probe
+    # checks at 2s then every 10s, leaving a ~14s hole after a restart, and
+    # ACME's startup attempt lands in it. Probe quickly so the endpoint exists
+    # before the resolver runs.
+    readinessProbe:
+      initialDelaySeconds: 1
+      periodSeconds: 2
+      timeoutSeconds: 2
+      failureThreshold: 1
+    livenessProbe:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
     deployment:
       strategy:
         type: Recreate
