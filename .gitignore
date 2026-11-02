@@ -26,6 +26,7 @@ playwright-report/
 /deploy/provision.env
 /deploy/provision-single.env
 /deploy/provision-ha.env
+/deploy/provision-dev-single.env
 /deploy/ansible/inventory.ini
 /deploy/ansible/artifacts/
 /deploy/ansible/collections/
