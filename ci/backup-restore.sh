@@ -53,7 +53,14 @@ cli backup schedule --interval off --data copy --target "$dir" >/dev/null 2>&1 |
 }
 
 say "create the markers (if they are not there yet)"
-./ci/markers.sh create "$TARGET" --mark "$MARK" || { bad "could not create the markers"; exit 1; }
+# The fault phase leaves the apps recovering from a hard reboot; their routes
+# answer before the backend APIs do, so retry before giving up.
+okmark=0
+for i in 1 2 3 4; do
+  if ./ci/markers.sh create "$TARGET" --mark "$MARK"; then okmark=1; break; fi
+  [ "$i" -lt 4 ] && { say "markers not ready yet; retrying in 30s"; sleep 30; }
+done
+[ "$okmark" = 1 ] || { bad "could not create the markers"; exit 1; }
 
 say "full data backup"
 out=$(cli backup create 2>&1)
