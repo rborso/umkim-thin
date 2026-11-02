@@ -86,6 +86,47 @@ wait_nodes() { # wait_nodes [timeout]
   return 1
 }
 
+# wait_survivors <powered-off-vm> [timeout] - every node but the lost one is
+# Ready. wait_nodes requires the whole list, and that can never happen while a
+# node is off: its object stays NotReady until it is deleted.
+wait_survivors() { # wait_survivors <skipped-vm> [timeout]
+  local skip="$1" t="${2:-420}" i out bad vm st
+  for i in $(seq 1 $((t / 5))); do
+    out=$(k "get nodes --no-headers" 2>/dev/null || true)
+    if [ -n "$out" ]; then
+      bad=0
+      for vm in "${vm_list[@]}"; do
+        [ "$vm" = "$skip" ] && continue
+        st=$(printf '%s\n' "$out" | awk -v n="$vm" '$1 == n { print $2 }')
+        [ "$st" = "Ready" ] || bad=1
+      done
+      [ "$bad" -eq 0 ] && return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+# graceful_reboot <vm> <hv>: shut the guest down, then power it on. `virsh
+# reboot` is a reset (libvirt documents it as the reset button), which leaves
+# Longhorn replicas mid-write and marks them failed; a planned reboot has to let
+# the guest stop its services first.
+graceful_reboot() { # graceful_reboot <vm> <hv>
+  local vm="$1" hv="$2" st=""
+  virsh_do "$hv" "shutdown '$vm'" >/dev/null 2>&1 || return 1
+  for _ in $(seq 1 120); do
+    st=$(dom_state "$hv" "$vm")
+    [ "$st" = "shut off" ] && break
+    sleep 5
+  done
+  if [ "$st" != "shut off" ]; then
+    say "$vm did not shut down in time; forcing it off"
+    virsh_do "$hv" "destroy '$vm'" >/dev/null 2>&1 || true
+    sleep 5
+  fi
+  virsh_do "$hv" "start '$vm'" >/dev/null 2>&1
+}
+
 app_http() { # app_http <host>
   local h="$1" addr="${k3s_control_plane_vip:-$VHOST}"
   curl -sk -m 10 -o /dev/null -w '%{http_code}' --resolve "$h:443:$addr" "https://$h/" 2>/dev/null || echo 000
@@ -209,7 +250,7 @@ fault_vip() {
   done
   [ "$moved" = 1 ] && ok "the VIP moved to a survivor" || bad "the VIP did not move"
   wait_api 300 && ok "API stayed available" || bad "API did not answer after the power loss"
-  wait_nodes 420 && ok "the survivors are Ready" || bad "survivors are not Ready"
+  wait_survivors "$vm" 420 && ok "the survivors are Ready" || bad "survivors are not Ready"
   # Longhorn's node-down grace is 5 minutes before it deletes the lost node's
   # pods; the reschedule and volume reattach come after that.
   wait_pods 1200 && ok "pods settled on the survivors" || bad "pods did not settle"
@@ -230,8 +271,8 @@ fault_reboot() {
   for i in "${!vm_list[@]}"; do
     vm=${vm_list[$i]}; hv=${hv_list[$i]}; ip=${ip_list[$i]}
     say "graceful reboot $vm ($ip)"
-    virsh_do "$hv" "reboot '$vm'" >/dev/null 2>&1 || { bad "virsh reboot $vm"; continue; }
-    sleep 15
+    graceful_reboot "$vm" "$hv" || { bad "graceful reboot $vm"; continue; }
+    sleep 5
     wait_ssh "$ip" 900 && ok "$vm is back" || bad "$vm did not come back"
     wait_api 300 && ok "API after $vm" || bad "API after $vm"
     wait_nodes 420 && ok "nodes after $vm" || bad "nodes after $vm"
