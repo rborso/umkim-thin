@@ -18,8 +18,11 @@ BRANCH="${BRANCH:-main}"
 SECRETS="${CI_SECRETS:-/etc/umkim-thin-ci}"
 CERT_CACHE="${CI_CERT_CACHE:-/mnt/data/mergerfs/share/ci/certs}"
 export CI_ON_JUMP=1 CI_CERT_CACHE
+# The jumphost's /tmp is a small tmpfs; the backup tests build archives under
+# TMPDIR and require a 2 GiB free-space margin.
+export TMPDIR="${TMPDIR_OVERRIDE:-$CI_ROOT/tmp}"
 
-mkdir -p "$CI_ROOT/work" "$CI_ROOT/results" "$CI_ROOT/state" "$CERT_CACHE"
+mkdir -p "$CI_ROOT/work" "$CI_ROOT/results" "$CI_ROOT/state" "$CI_ROOT/tmp" "$CERT_CACHE"
 ts() { date -u +%Y%m%dT%H%M%SZ; }
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 

@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo ">> packages"
-for p in git jq curl tar podman golang ansible-core wireguard-tools nodejs npm nss-tools; do
+for p in git jq curl tar podman golang ansible-core wireguard-tools nodejs npm nss-tools bind-utils; do
   rpm -q "$p" >/dev/null 2>&1 || sudo dnf -y install "$p" >/dev/null 2>&1 || echo "  MISSING $p"
 done
 
