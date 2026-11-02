@@ -29,8 +29,8 @@
       --set defaultSettings.storageOverProvisioningPercentage={{ longhorn_storage_over_provisioning_percentage }}
       --set defaultSettings.storageMinimalAvailablePercentage={{ longhorn_storage_minimal_available_percentage }}
       --set defaultSettings.replicaSoftAntiAffinity=false
-      --set defaultSettings.replicaZoneSoftAntiAffinity=false
-      --set defaultSettings.replicaDiskSoftAntiAffinity=false
+      --set defaultSettings.replicaZoneSoftAntiAffinity=true
+      --set defaultSettings.replicaDiskSoftAntiAffinity=true
       --set defaultSettings.autoSalvage=false
       --set defaultSettings.allowVolumeCreationWithDegradedAvailability=false
       --set defaultSettings.defaultDataLocality=disabled
@@ -56,8 +56,12 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   loop:
     - { name: replica-soft-anti-affinity, value: "false" }
-    - { name: replica-zone-soft-anti-affinity, value: "false" }
-    - { name: replica-disk-soft-anti-affinity, value: "false" }
+    # The lab nodes carry no zone labels; hard zone anti-affinity would allow
+    # only one replica. Node and disk anti-affinity stay hard.
+    - { name: replica-zone-soft-anti-affinity, value: "true" }
+    # One disk per node in the lab; hard disk anti-affinity cannot place 3
+    # replicas. Node anti-affinity stays hard.
+    - { name: replica-disk-soft-anti-affinity, value: "true" }
     - { name: auto-salvage, value: "false" }
     - { name: allow-volume-creation-with-degraded-availability, value: "false" }
     - { name: default-data-locality, value: "disabled" }
