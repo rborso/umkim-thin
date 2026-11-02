@@ -40,10 +40,12 @@ P=\$(sec servarr servarr-bootstrap QBITTORRENT_PASSWORD)
 [ -n "\$QB" ] && [ -n "\$U" ] && [ -n "\$P" ] || { bad "qBittorrent service/credentials"; exit 1; }
 
 echo "== qBittorrent: login and add Big Buck Bunny =="
-login=\$(curl -s -c /tmp/ci-qb.cookies --data-urlencode "username=\$U" --data-urlencode "password=\$P" "http://\$QB/api/v2/auth/login")
+# 5.1 returns 200 with "Ok."; 5.3 returns 204 with an empty body.
+login=\$(curl -s -o /tmp/ci-qb-login.out -w '%{http_code}' -c /tmp/ci-qb.cookies \
+  --data-urlencode "username=\$U" --data-urlencode "password=\$P" "http://\$QB/api/v2/auth/login")
 case "\$login" in
-  *Ok*) ok "qBittorrent login" ;;
-  *) bad "qBittorrent login: \$login"; exit 1 ;;
+  200|204) ok "qBittorrent login (HTTP \$login)" ;;
+  *) bad "qBittorrent login: HTTP \$login \$(cat /tmp/ci-qb-login.out 2>/dev/null)"; exit 1 ;;
 esac
 add=\$(curl -s -b /tmp/ci-qb.cookies \
   --data-urlencode "urls=\$MAGNET" \
@@ -52,6 +54,7 @@ add=\$(curl -s -b /tmp/ci-qb.cookies \
   "http://\$QB/api/v2/torrents/add")
 case "\$add" in
   *Ok*|"") ok "torrent added" ;;
+  *Conflict*) ok "torrent already added" ;;
   *) bad "torrent add: \$add" ;;
 esac
 
