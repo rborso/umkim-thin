@@ -229,21 +229,25 @@ jellyfin() {
   pw=\$(sec servarr servarr-bootstrap JELLYFIN_ADMIN_PASSWORD)
   ip=\$(ip servarr jellyfin)
   tok=\$(curl -s -H 'Content-Type: application/json' \
+    -H 'Authorization: MediaBrowser Client="ci", Device="ci", DeviceId="ci", Version="1.0"' \
     -H 'X-Emby-Authorization: MediaBrowser Client="ci", Device="ci", DeviceId="ci", Version="1.0"' \
     -d "{\"Username\":\"\$user\",\"Pw\":\"\$pw\"}" "http://\$ip/Users/AuthenticateByName" |
     sed -n 's/.*"AccessToken":"\([^"]*\)".*/\1/p')
   [ -n "\$tok" ] || { skip "jellyfin (admin not ready)"; return; }
+  # Jellyfin 12 disables the legacy X-Emby-Token by default; the standard
+  # MediaBrowser header carries the token, and 10.x still gets its header too.
+  jf="Authorization: MediaBrowser Client=\"ci\", Device=\"ci\", DeviceId=\"ci\", Version=\"1.0\", Token=\"\$tok\""
   case \$ACTION in
     create)
-      c=\$(code -X POST -H "X-Emby-Token: \$tok" "http://\$ip/Collections?Name=\$MARK")
+      c=\$(code -X POST -H "\$jf" -H "X-Emby-Token: \$tok" "http://\$ip/Collections?Name=\$MARK")
       [ "\$c" = 200 ] && ok "jellyfin collection" || bad "jellyfin collection (\$c)" ;;
     verify)
-      c=\$(curl -s -H "X-Emby-Token: \$tok" "http://\$ip/Items?Recursive=true&IncludeItemTypes=BoxSet&Fields=Name" | grep -c "\$MARK")
+      c=\$(curl -s -H "\$jf" -H "X-Emby-Token: \$tok" "http://\$ip/Items?Recursive=true&IncludeItemTypes=BoxSet&Fields=Name" | grep -c "\$MARK")
       [ "\$c" -ge 1 ] && ok "jellyfin collection" || bad "jellyfin collection missing" ;;
     delete)
-      id=\$(curl -s -H "X-Emby-Token: \$tok" "http://\$ip/Items?Recursive=true&IncludeItemTypes=BoxSet&Fields=Name" | jget "next((x['Id'] for x in d.get('Items',[]) if x.get('Name')=='$MARK'), '')")
+      id=\$(curl -s -H "\$jf" -H "X-Emby-Token: \$tok" "http://\$ip/Items?Recursive=true&IncludeItemTypes=BoxSet&Fields=Name" | jget "next((x['Id'] for x in d.get('Items',[]) if x.get('Name')=='$MARK'), '')")
       [ -n "\$id" ] || { ok "jellyfin collection already gone"; return; }
-      c=\$(code -X DELETE -H "X-Emby-Token: \$tok" "http://\$ip/Items/\$id")
+      c=\$(code -X DELETE -H "\$jf" -H "X-Emby-Token: \$tok" "http://\$ip/Items/\$id")
       [ "\$c" = 204 ] && ok "jellyfin collection removed" || bad "jellyfin collection delete (\$c)" ;;
   esac
 }

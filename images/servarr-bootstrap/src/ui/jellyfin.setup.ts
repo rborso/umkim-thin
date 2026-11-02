@@ -164,10 +164,7 @@ async function ensureJellyfinLibraries(config: BootstrapConfig): Promise<void> {
       'POST',
       `${base}/Library/VirtualFolders?name=${encodeURIComponent(library.name)}&collectionType=${library.collectionType}&paths=${encodeURIComponent(library.path)}&refreshLibrary=true`,
       {
-        headers: {
-          'X-Emby-Token': token,
-          'Content-Type': 'application/json',
-        },
+        headers: jellyfinTokenHeaders(token),
         body: {
           LibraryOptions: jellyfinLibraryOptions(library.path),
         },
@@ -187,7 +184,7 @@ async function getJellyfinVirtualFolders(
   token: string,
 ): Promise<JellyfinVirtualFolder[]> {
   return httpJson<JellyfinVirtualFolder[]>('GET', `${base}/Library/VirtualFolders`, {
-    headers: { 'X-Emby-Token': token },
+    headers: jellyfinTokenHeaders(token),
   });
 }
 
@@ -231,10 +228,7 @@ async function ensureJellyfinLibraryRealtimeMonitor(base: string, token: string)
       ...jellyfinLibraryOptions(library.path),
     };
     const response = await http('POST', `${base}/Library/VirtualFolders/LibraryOptions`, {
-      headers: {
-        'X-Emby-Token': token,
-        'Content-Type': 'application/json',
-      },
+      headers: jellyfinTokenHeaders(token),
       body: {
         Id: match.ItemId,
         LibraryOptions: libraryOptions,
@@ -263,7 +257,7 @@ interface JellyfinScheduledTask {
 async function setLibraryScanInterval(base: string, config: BootstrapConfig): Promise<void> {
   const token = await jellyfinAuthToken(base, config);
   const tasks = await httpJson<JellyfinScheduledTask[]>('GET', `${base}/ScheduledTasks`, {
-    headers: { 'X-Emby-Token': token },
+    headers: jellyfinTokenHeaders(token),
   });
   const task = tasks.find((t) => t.Key === 'RefreshLibrary');
   if (!task?.Id) {
@@ -275,16 +269,30 @@ async function setLibraryScanInterval(base: string, config: BootstrapConfig): Pr
     return;
   }
   await httpJson('POST', `${base}/ScheduledTasks/${task.Id}/Triggers`, {
-    headers: { 'X-Emby-Token': token, 'Content-Type': 'application/json' },
+    headers: jellyfinTokenHeaders(token),
     body: [{ Type: 'IntervalTrigger', IntervalTicks: wanted }],
   });
   console.log(`==> Jellyfin: library scan interval set to ${config.jellyfinLibraryScanMinutes}m`);
 }
 
+const JELLYFIN_CLIENT =
+  'MediaBrowser Client="servarr-bootstrap", Device="bootstrap", DeviceId="bootstrap-job", Version="1.0.0"';
+
+// Jellyfin 12 defaults EnableLegacyAuthorization to false and only reads the
+// standard Authorization header; 10.x reads X-Emby-Authorization/X-Emby-Token.
+// Send both so one bootstrap image works against either server.
 function jellyfinAuthHeaders(): Record<string, string> {
   return {
-    'X-Emby-Authorization':
-      'MediaBrowser Client="servarr-bootstrap", Device="bootstrap", DeviceId="bootstrap-job", Version="1.0.0"',
+    Authorization: JELLYFIN_CLIENT,
+    'X-Emby-Authorization': JELLYFIN_CLIENT,
+    'Content-Type': 'application/json',
+  };
+}
+
+function jellyfinTokenHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `${JELLYFIN_CLIENT}, Token="${token}"`,
+    'X-Emby-Token': token,
     'Content-Type': 'application/json',
   };
 }
@@ -485,10 +493,7 @@ async function createApiKeyViaApi(config: BootstrapConfig): Promise<string | und
   const token = await jellyfinAuthToken(base, config);
 
   const response = await http('POST', `${base}/Auth/Keys?app=Seerr`, {
-    headers: {
-      'X-Emby-Token': token,
-      'Content-Type': 'application/json',
-    },
+    headers: jellyfinTokenHeaders(token),
     body: {},
   });
   if (!response.ok && response.status !== 204) {
@@ -499,7 +504,7 @@ async function createApiKeyViaApi(config: BootstrapConfig): Promise<string | und
     'GET',
     `${base}/Auth/Keys`,
     {
-      headers: { 'X-Emby-Token': token },
+      headers: jellyfinTokenHeaders(token),
     },
   );
   const apiKey =

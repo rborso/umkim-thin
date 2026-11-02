@@ -97,7 +97,12 @@ test.describe('jellyfin directory login', () => {
       { what: `Jellyfin to authenticate ${user} against the directory`, timeoutMs: 120_000, intervalMs: 5000 },
     );
     const me = await ctx.get(`${base}/Users/Me`, {
-      headers: { ...authHeader, 'X-Emby-Token': token },
+      // Jellyfin 12 ignores the legacy X-Emby-Token unless legacy authorization
+      // is enabled; the standard MediaBrowser header carries the token.
+      headers: {
+        Authorization: `MediaBrowser Client="ci", Device="ci", DeviceId="ci-playwright", Version="1.0", Token="${token}"`,
+        'X-Emby-Token': token,
+      },
     });
     expect(me.status(), 'Jellyfin serves the authenticated user').toBe(200);
     expect((await me.json()).Name, 'the directory user is mapped into Jellyfin').toBe(user);

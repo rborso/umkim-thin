@@ -127,14 +127,16 @@ async function verifyJellyfin(
   if (!response.ok) {
     throw new Error('Verification failed: Jellyfin public info unavailable');
   }
+  const client =
+    'MediaBrowser Client="servarr-bootstrap", Device="bootstrap", DeviceId="bootstrap-job", Version="1.0.0"';
   const auth = await httpJson<{ AccessToken?: string }>('POST', `${base}/Users/AuthenticateByName`, {
     body: {
       Username: config.jellyfinAdminUser,
       Pw: config.jellyfinAdminPassword,
     },
     headers: {
-      'X-Emby-Authorization':
-        'MediaBrowser Client="servarr-bootstrap", Device="bootstrap", DeviceId="bootstrap-job", Version="1.0.0"',
+      Authorization: client,
+      'X-Emby-Authorization': client,
       'Content-Type': 'application/json',
     },
   });
@@ -148,7 +150,10 @@ async function verifyJellyfin(
       LibraryOptions?: { EnableRealtimeMonitor?: boolean };
     }>
   >('GET', `${base}/Library/VirtualFolders`, {
-    headers: { 'X-Emby-Token': auth.AccessToken },
+    headers: {
+      Authorization: `${client}, Token="${auth.AccessToken}"`,
+      'X-Emby-Token': auth.AccessToken,
+    },
   });
   for (const expected of [
     { name: 'Movies', path: '/media/movies' },
