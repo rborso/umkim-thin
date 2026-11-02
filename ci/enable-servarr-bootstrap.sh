@@ -20,7 +20,8 @@ cd "$(dirname "$0")/.."
 
 TARGET="${1:?usage: ci/enable-servarr-bootstrap.sh single|ha}"
 export TARGET
-export PROVISION_ENV="deploy/provision-${TARGET}.env"
+# Honour the caller's environment (e.g. the dev VPS), like the other scripts.
+export PROVISION_ENV="${PROVISION_ENV:-deploy/provision-${TARGET}.env}"
 [ -f "$PROVISION_ENV" ] || { echo "missing $PROVISION_ENV" >&2; exit 2; }
 # shellcheck source=ci/lib.sh
 source ci/lib.sh
