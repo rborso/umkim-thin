@@ -99,10 +99,20 @@ if ! sudo wg-quick up "$conf" >/tmp/ci-wg-up.log 2>&1; then
 fi
 ok "tunnel is up"
 
+# The gateway reads its peers from a mounted Secret and reloads every 10s.
+# Kubelet can take a while to propagate a fresh Secret to every node, so wait
+# up to 3 minutes; after 60s, restart the gateway to apply the peers at once.
 hs=0
-for _ in $(seq 1 20); do
+for i in $(seq 1 60); do
   if sudo wg show 2>/dev/null | grep -q "latest handshake"; then hs=1; break; fi
-  sleep 2
+  if [ "$i" -eq 20 ]; then
+    say "no handshake yet; restarting the gateway to apply the new peer"
+    node_root >/dev/null 2>&1 <<'EOS' || true
+K="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml /usr/local/bin/kubectl"
+$K -n wireguard rollout restart ds/wireguard-gateway >/dev/null 2>&1 || true
+EOS
+  fi
+  sleep 3
 done
 [ "$hs" = 1 ] && ok "handshake" || bad "no handshake"
 

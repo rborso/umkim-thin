@@ -112,6 +112,19 @@ wait_pods() { # wait_pods [timeout] - every workload pod is Running and ready
   return 1
 }
 
+wait_longhorn() { # wait_longhorn [timeout] - no volume is faulted/unknown
+  # A node loss leaves volumes degraded (that is fine: the surviving replicas
+  # serve); faulted or unknown volumes mean the apps cannot come back.
+  local t="${1:-600}" i bad
+  for i in $(seq 1 $((t / 10))); do
+    bad=$(k "get volumes.longhorn.io -n longhorn-system -o json" 2>/dev/null | jq '
+      [.items[] | select(.status.robustness != "healthy" and .status.robustness != "degraded")] | length' 2>/dev/null) || { sleep 10; continue; }
+    [ "${bad:-1}" -eq 0 ] && return 0
+    sleep 10
+  done
+  return 1
+}
+
 wait_apps() { # wait_apps [timeout]
   local t="${1:-600}" i a b c d
   for i in $(seq 1 $((t / 10))); do
@@ -174,7 +187,8 @@ fault_vip() {
   wait_api 300 && ok "API stayed available" || bad "API did not answer after the power loss"
   wait_nodes 420 && ok "the survivors are Ready" || bad "survivors are not Ready"
   wait_pods 600 && ok "pods settled on the survivors" || bad "pods did not settle"
-  wait_apps 600 && ok "apps recovered without the node" || bad "apps did not recover"
+  wait_longhorn 600 && ok "volumes are usable" || bad "volumes are not usable"
+  wait_apps 900 && ok "apps recovered without the node" || bad "apps did not recover"
   say "HA: start the powered-off node again"
   virsh_do "$hv" "start '$vm'" >/dev/null 2>&1 || { bad "virsh start $vm"; return; }
   wait_ssh "$ip" 900 && ok "$vm is reachable again" || bad "$vm did not come back"
@@ -195,7 +209,8 @@ fault_reboot() {
     wait_api 300 && ok "API after $vm" || bad "API after $vm"
     wait_nodes 420 && ok "nodes after $vm" || bad "nodes after $vm"
     wait_pods 600 && ok "pods after $vm" || bad "pods after $vm"
-    wait_apps 600 && ok "apps after $vm" || bad "apps after $vm"
+    wait_longhorn 600 && ok "volumes after $vm" || bad "volumes after $vm"
+    wait_apps 900 && ok "apps after $vm" || bad "apps after $vm"
   done
   vm=${vm_list[0]}; hv=${hv_list[0]}; ip=${ip_list[0]}
   say "hard reboot $vm ($ip)"
@@ -206,7 +221,8 @@ fault_reboot() {
   wait_api 300 && ok "API after the hard reboot" || bad "API after the hard reboot"
   wait_nodes 420 && ok "nodes after the hard reboot" || bad "nodes after the hard reboot"
   wait_pods 600 && ok "pods after the hard reboot" || bad "pods after the hard reboot"
-  wait_apps 600 && ok "apps after the hard reboot" || bad "apps after the hard reboot"
+  wait_longhorn 600 && ok "volumes after the hard reboot" || bad "volumes after the hard reboot"
+  wait_apps 900 && ok "apps after the hard reboot" || bad "apps after the hard reboot"
   check_data
 }
 
@@ -262,6 +278,7 @@ fault_full_stop() { # fault_full_stop <graceful|hard>
   wait_api 900 && ok "API is back after the full stop" || bad "API did not come back after the full stop"
   wait_nodes 900 && ok "all nodes rejoined" || bad "not all nodes rejoined"
   wait_pods 900 && ok "all pods are back" || bad "not all pods are back"
+  wait_longhorn 900 && ok "volumes are back" || bad "volumes are not back"
   wait_apps 900 && ok "apps are back" || bad "apps are not back"
   check_data
 }
