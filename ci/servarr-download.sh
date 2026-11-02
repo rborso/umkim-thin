@@ -54,6 +54,9 @@ add=\$(curl -s -b /tmp/ci-qb.cookies \
   "http://\$QB/api/v2/torrents/add")
 case "\$add" in
   *Ok*|"") ok "torrent added" ;;
+  # 5.3 returns a JSON result for the new add-torrent flow; an existing
+  # torrent is reported in the same body with failure_count > 0.
+  *added_torrent_ids*) ok "torrent added (JSON)" ;;
   *Conflict*) ok "torrent already added" ;;
   *) bad "torrent add: \$add" ;;
 esac
