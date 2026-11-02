@@ -25,7 +25,7 @@
       --set defaultSettings.storageMinimalAvailablePercentage={{ longhorn_storage_minimal_available_percentage }}
       # A node that is powered off must not keep its pods (and their volumes)
       # pinned forever: delete them so they reschedule on a survivor.
-      --set defaultSettings.nodeDownPodDeletionPolicy=delete-both-deployment-and-statefulset-pod
+      --set defaultSettings.nodeDownPodDeletionPolicy=delete-both-statefulset-and-deployment-pod
       --set persistence.defaultClass=false
       --wait --timeout 20m
   register: longhorn_install
