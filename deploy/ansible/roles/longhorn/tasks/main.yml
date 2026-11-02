@@ -57,7 +57,7 @@
   loop:
     - { name: replica-soft-anti-affinity, value: "false" }
     # The lab nodes carry no zone labels; hard zone anti-affinity would allow
-    # only one replica. Node and disk anti-affinity stay hard.
+    # only one replica. Node anti-affinity stays hard.
     - { name: replica-zone-soft-anti-affinity, value: "true" }
     # One disk per node in the lab; hard disk anti-affinity cannot place 3
     # replicas. Node anti-affinity stays hard.
