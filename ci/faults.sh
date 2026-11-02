@@ -141,12 +141,19 @@ wait_apps() { # wait_apps [timeout]
 }
 
 check_data() {
-  if ./ci/markers.sh verify "$TARGET" --mark "$MARK" >/tmp/ci-fault-markers.log 2>&1; then
-    ok "data markers survived"
-  else
-    bad "data markers are missing (see /tmp/ci-fault-markers.log)"
-    tail -20 /tmp/ci-fault-markers.log | sed 's/^/      /'
-  fi
+  # A route can answer while the app's backend is still starting (Nextcloud and
+  # Immich take a minute after a hard reboot), so retry before calling the data
+  # missing.
+  local i
+  for i in 1 2 3 4; do
+    if ./ci/markers.sh verify "$TARGET" --mark "$MARK" >/tmp/ci-fault-markers.log 2>&1; then
+      ok "data markers survived"
+      return 0
+    fi
+    [ "$i" -lt 4 ] && sleep 30
+  done
+  bad "data markers are missing (see /tmp/ci-fault-markers.log)"
+  tail -20 /tmp/ci-fault-markers.log | sed 's/^/      /'
 }
 
 wait_healthy() { # wait_healthy <label>
