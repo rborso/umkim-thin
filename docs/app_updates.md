@@ -169,13 +169,19 @@ Latest stable upstream releases as of 2026-11-02.
 - Check whether Mealie's OIDC discovery reaches Authelia through a public or an
   internal URL. An internal URL may be affected by the same SSRF policy.
 
-### 4. qBittorrent 5.1.4 → 5.3.0 (needs retest)
+### 4. qBittorrent 5.1.4 → 5.3.0 (resolved in v0.3.0)
 
 - WebUI/API behavior changed, including cross-site request detection via
   `Sec-Fetch-Site`, a new add-torrent flow, and session changes.
-- No explicit “breaking” flag, but the bootstrap's qBittorrent WebUI password
-  and login step, plus Prowlarr's download-client configuration, must be
-  re-tested.
+- 5.3 moved the WebUI credentials from `[Preferences] WebUI\Username` and
+  `WebUI\Password_PBKDF2` to `[WebUI] Username` / `Password_PBKDF2`. The
+  chart's init container writes the new layout and removes the old pair.
+- Login returns HTTP 204 with an empty body (5.1 returned `Ok.`) and the new
+  add-torrent flow returns a JSON object with `added_torrent_ids` (or
+  `failure_count` for an existing torrent). The CI download check accepts all
+  three forms.
+- The bootstrap's login, preferences, categories, Prowlarr download client
+  and the full import chain were re-tested on single and HA.
 
 ### 5. Paperless-ngx 3.3.0 → 3.4.1 (low/medium)
 
