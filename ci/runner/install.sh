@@ -35,6 +35,12 @@ echo ">> worker"
 sudo install -m 0755 ci/runner/worker.sh "$CI_ROOT/worker.sh"
 sudo -u "$USER_NAME" "$CI_ROOT/worker.sh" static || true
 
+# deploy/provision.sh runs the playbook on this host; it uses the ansible.posix
+# collection (sysctl, firewalld), which ansible-core does not ship.
+echo ">> ansible collections"
+sudo -u "$USER_NAME" ansible-galaxy collection install ansible.posix >/dev/null 2>&1 || \
+  echo "   WARN: could not install ansible.posix" >&2
+
 for f in provision-single.env provision-ha.env lab.env; do
   if [ ! -f "$SECRETS/$f" ]; then
     echo "   WARN: $SECRETS/$f is missing; runs that need it will fail" >&2
@@ -70,7 +76,7 @@ EOF
 
 sudo tee /etc/systemd/system/ci-nightly.service >/dev/null <<'EOF'
 [Unit]
-Description=umkim-thin CI: nightly extended run (single and HA in parallel)
+Description=umkim-thin CI: nightly extended run (HA)
 After=network-online.target
 
 [Service]
@@ -78,7 +84,10 @@ Type=oneshot
 User=linux
 Group=linux
 WorkingDirectory=/srv/ci
-ExecStart=/srv/ci/worker.sh extended both
+# This jumphost reaches the lab HA target only. The dev-single target is a VPS
+# it cannot log in to, and the lab single VM is managed by its owner; run those
+# from the agent host instead (see ci/runner/README.md).
+ExecStart=/srv/ci/worker.sh extended ha
 TimeoutStartSec=8h
 EOF
 
@@ -105,7 +114,7 @@ Type=oneshot
 User=linux
 Group=linux
 WorkingDirectory=/srv/ci
-ExecStart=/srv/ci/worker.sh extended both --regen-certs
+ExecStart=/srv/ci/worker.sh extended ha --regen-certs
 TimeoutStartSec=10h
 EOF
 

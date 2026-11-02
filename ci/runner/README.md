@@ -21,9 +21,13 @@ sudo ./ci/runner/install.sh
 | Unit | When | What |
 |---|---|---|
 | `ci-poll.timer` | every 5 min | fetch `main`; run `ci/static.sh` on a new commit |
-| `ci-nightly.timer` | 02:00 | `extended both` (single + HA in parallel) |
-| `ci-weekly.timer` | Sunday 06:00 | `extended both --regen-certs` |
+| `ci-nightly.timer` | 02:00 | `extended ha` |
+| `ci-weekly.timer` | Sunday 06:00 | `extended ha --regen-certs` |
 | `ci-results.service` | always | results on `http://<host>:8080/` |
+
+The timers run the HA target only: the jumphost can reach the lab HA nodes but
+not the dev-single VPS, and the lab single VM belongs to its owner. Run
+`extended single` from the agent host that can reach that VPS.
 
 ## On demand
 

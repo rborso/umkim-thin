@@ -9,6 +9,11 @@ for p in git jq curl tar podman golang ansible-core wireguard-tools nodejs npm n
   rpm -q "$p" >/dev/null 2>&1 || sudo dnf -y install "$p" >/dev/null 2>&1 || echo "  MISSING $p"
 done
 
+# The playbook uses ansible.posix.sysctl and ansible.posix.firewalld; those are
+# not part of ansible-core.
+echo ">> ansible collections"
+ansible-galaxy collection install ansible.posix >/dev/null
+
 echo ">> helm / kubectl"
 helm_version=3.16.3
 kubectl_version=1.32.0
