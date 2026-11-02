@@ -13,8 +13,11 @@ links:
 
 chart:
   ref: oci://ghcr.io/rborso/charts/actualbudget
-  version: 0.1.1
+  version: 0.1.2
   versions:
+    - version: 0.1.2
+      appVersion: 26.11.0
+      channel: stable
     - version: 0.1.1
       appVersion: 26.10.0
       channel: stable

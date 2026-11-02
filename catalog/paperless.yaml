@@ -13,8 +13,11 @@ links:
 
 chart:
   ref: oci://ghcr.io/rborso/charts/paperless
-  version: 0.1.12
+  version: 0.1.13
   versions:
+    - version: 0.1.13
+      appVersion: 3.4.1
+      channel: stable
     - version: 0.1.12
       appVersion: 3.3.0
       channel: stable

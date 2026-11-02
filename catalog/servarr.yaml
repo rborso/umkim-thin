@@ -14,8 +14,17 @@ links:
 
 chart:
   ref: oci://ghcr.io/rborso/charts/servarr
-  version: 0.2.27
+  version: 0.3.2
   versions:
+    - version: 0.3.2
+      appVersion: 1.0.0
+      channel: stable
+    - version: 0.3.1
+      appVersion: 1.0.0
+      channel: stable
+    - version: 0.3.0
+      appVersion: 1.0.0
+      channel: stable
     - version: 0.2.27
       appVersion: 1.0.0
       channel: stable
@@ -145,7 +154,9 @@ values:
       # the Longhorn nominal request small and let Advanced resize it if needed.
       configSize: 2Gi
     jellyfin:
-      configSize: 2Gi
+      # Jellyfin 12 needs 2 GiB free in /config/data/data; a 2 GiB volume
+      # reports ~1.9 GiB after filesystem overhead.
+      configSize: 3Gi
   bootstrap:
     # The chart's bootstrap runs a Playwright image built from this repo.
     # The console builds and imports it on demand; set bootstrap.image only
