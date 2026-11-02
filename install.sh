@@ -324,12 +324,22 @@ check_os() {
   os_pretty=$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-}")
   case "$os_id" in
     rocky) ;;
-    *) die "unsupported OS '${os_id:-unknown}'; this path supports Rocky Linux 9/10 (the Ansible path covers other RHEL-family hosts)" ;;
+    *)
+      # A dry run renders and checks the plan without touching the host, so it
+      # can validate the installer anywhere (the CI runner is Fedora).
+      if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        warn "unsupported OS '${os_id:-unknown}' (dry run: checking the plan only)"
+      else
+        die "unsupported OS '${os_id:-unknown}'; this path supports Rocky Linux 9/10 (the Ansible path covers other RHEL-family hosts)"
+      fi
+      ;;
   esac
-  case "$os_version" in
-    9|9.*|10|10.*) ;;
-    *) warn "Rocky Linux ${os_version:-unknown} is not a tested release; 9 and 10 are supported" ;;
-  esac
+  if [ "$os_id" = rocky ]; then
+    case "$os_version" in
+      9|9.*|10|10.*) ;;
+      *) warn "Rocky Linux ${os_version:-unknown} is not a tested release; 9 and 10 are supported" ;;
+    esac
+  fi
   info "OS: ${os_pretty:-$os_id}"
 }
 
