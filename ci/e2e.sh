@@ -6,11 +6,19 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 repo_root="$(pwd)"
 
-TARGET="${1:?usage: ci/e2e.sh single|ha [--full]}"
+TARGET="${1:?usage: ci/e2e.sh single|ha [--full] [--gate-only]}"
 shift || true
-if [ "${1:-}" = "--full" ]; then
-  CI_PROFILE=full
-fi
+for arg in "$@"; do
+  case "$arg" in
+    --full) CI_PROFILE=full ;;
+    # Run only the acceptance gate (and journeys) against an existing
+    # environment: no reset, provisioning, install or platform assert. This is
+    # how an agent host drives the gate while the target keeps its memory for
+    # the workloads.
+    --gate-only) GATE_ONLY=1 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
 export CI_PROFILE="${CI_PROFILE:-default}"
 export TARGET
 # Honour an explicit env (e.g. a dev environment that is not the CI target's
@@ -78,6 +86,7 @@ fi
 # The private chart repos are cloned with this key (provision.sh inherits it).
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -i $HOME/.ssh/chart -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new}"
 
+if [ "${GATE_ONLY:-0}" != "1" ]; then
 echo "==== $TARGET: reset ===="
 if [ "${SKIP_RESET:-0}" = "1" ]; then
   echo ">> SKIP_RESET=1: leaving the existing environment in place"
@@ -157,6 +166,8 @@ if [ "${SKIP_BACKUP:-0}" != "1" ]; then
   # schedule and the Backups tab use). Apps are installed by now, so app values
   # and PVC snapshots are part of the archive.
   ./ci/backup-check.sh "$TARGET"
+fi
+
 fi
 
 echo "==== $TARGET: regular portal user ===="
