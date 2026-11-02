@@ -186,9 +186,11 @@ fault_vip() {
   [ "$moved" = 1 ] && ok "the VIP moved to a survivor" || bad "the VIP did not move"
   wait_api 300 && ok "API stayed available" || bad "API did not answer after the power loss"
   wait_nodes 420 && ok "the survivors are Ready" || bad "survivors are not Ready"
-  wait_pods 600 && ok "pods settled on the survivors" || bad "pods did not settle"
-  wait_longhorn 600 && ok "volumes are usable" || bad "volumes are not usable"
-  wait_apps 900 && ok "apps recovered without the node" || bad "apps did not recover"
+  # Longhorn's node-down grace is 5 minutes before it deletes the lost node's
+  # pods; the reschedule and volume reattach come after that.
+  wait_pods 1200 && ok "pods settled on the survivors" || bad "pods did not settle"
+  wait_longhorn 1200 && ok "volumes are usable" || bad "volumes are not usable"
+  wait_apps 1200 && ok "apps recovered without the node" || bad "apps did not recover"
   say "HA: start the powered-off node again"
   virsh_do "$hv" "start '$vm'" >/dev/null 2>&1 || { bad "virsh start $vm"; return; }
   wait_ssh "$ip" 900 && ok "$vm is reachable again" || bad "$vm did not come back"
@@ -277,9 +279,9 @@ fault_full_stop() { # fault_full_stop <graceful|hard>
   done
   wait_api 900 && ok "API is back after the full stop" || bad "API did not come back after the full stop"
   wait_nodes 900 && ok "all nodes rejoined" || bad "not all nodes rejoined"
-  wait_pods 900 && ok "all pods are back" || bad "not all pods are back"
-  wait_longhorn 900 && ok "volumes are back" || bad "volumes are not back"
-  wait_apps 900 && ok "apps are back" || bad "apps are not back"
+  wait_pods 1200 && ok "all pods are back" || bad "not all pods are back"
+  wait_longhorn 1200 && ok "volumes are back" || bad "volumes are not back"
+  wait_apps 1200 && ok "apps are back" || bad "apps are not back"
   check_data
 }
 
