@@ -176,3 +176,18 @@ runner; `--pin` resolves the discovered app hosts (including Collabora and any
 Ingress hosts) to the target VIP. No hosted CI workflow invokes any of this:
 the lab tiers remain a deliberate manual run because the runner holds the
 credentials.
+
+## Dev target sizing
+
+The `dev-single` VPS (8 GiB RAM) runs all ten `ci_apps` plus identity, the
+console and Collabora. At idle that is roughly 6.5 GiB resident, leaving about
+1 GiB of headroom; Collabora grows during a document edit and pushes the peak
+higher. The host carries 4 GiB of swap, which keeps the gate and the journeys
+from being OOM-killed but is not free capacity: heavy swapping slows the
+OCR/indexing workloads that already dominate a deep run.
+
+This is intentional. Keep `ci_apps` complete on `dev-single` and do not run
+two deep targets against the same VPS; when a run needs more headroom, give the
+target more RAM rather than dropping an app from the coverage set. The HA
+target has three 8 GiB nodes in the same lab and does not share this limit.
+
