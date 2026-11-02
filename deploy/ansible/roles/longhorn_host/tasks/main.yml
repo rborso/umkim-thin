@@ -43,7 +43,7 @@
     fs="{{ longhorn_data_fs }}"
     opts="{{ longhorn_data_mount_options }}"
     if ! blkid -o value -s TYPE "$dev" >/dev/null 2>&1; then
-      mkfs."$fs" -f "$dev" >/dev/null
+      mkfs."$fs" "$dev" >/dev/null
     fi
     mount -o "$opts" "$dev" "$path"
     grep -q "^$dev " /etc/fstab || echo "$dev $path $fs $opts 0 0" >> /etc/fstab
