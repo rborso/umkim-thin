@@ -98,6 +98,20 @@ server_ip="${wg_server_ip:-192.168.168.1}"
 say() { printf '   %s\n' "$*"; }
 say "endpoint $endpoint, dns $dns_ip, server $server_ip"
 
+# A reused installation can still carry the chart's empty ConfigMap (the
+# console publishes it on install, which a gate-only or older run may predate).
+# Fill it from the installed app list so the split-DNS assertions are
+# meaningful; the console's own sync keeps it current on a fresh install.
+dns_hosts_len=$(node_root <<'EOS' 2>/dev/null || true
+K="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml /usr/local/bin/kubectl"
+$K -n wireguard get configmap wireguard-vpn-dns -o jsonpath='{.data.hosts}' 2>/dev/null | tr -d '[:space:]' | wc -c
+EOS
+)
+if [ "${dns_hosts_len:-0}" -eq 0 ]; then
+  say "split-DNS ConfigMap is empty; publishing the installed app hosts"
+  ensure_dns_hosts
+fi
+
 sudo modprobe wireguard >/dev/null 2>&1 || true
 sudo ip link del "$iface" >/dev/null 2>&1 || true
 if ! sudo wg-quick up "$conf" >/tmp/ci-wg-up.log 2>&1; then
