@@ -53,7 +53,13 @@ if [ "$CI_PROFILE" = "full" ]; then
   trust_staging_roots
   # Fail early if the zone does not point at this cluster (the ACME challenge
   # depends on it). The external vantage is a separate run: see ci/preflight.sh.
-  ./ci/preflight.sh "$TARGET" || { echo "preflight failed; refusing to run ACME" >&2; exit 1; }
+  # A run that will reset the target cannot check the ingress yet — the cluster
+  # is about to be rebuilt, so verify DNS now and the ingress after provisioning.
+  if [ "${GATE_ONLY:-0}" = "1" ]; then
+    ./ci/preflight.sh "$TARGET" || { echo "preflight failed; refusing to run ACME" >&2; exit 1; }
+  else
+    ./ci/preflight.sh "$TARGET" --dns-only || { echo "preflight failed; refusing to run ACME" >&2; exit 1; }
+  fi
 fi
 
 # The HA zone resolves to the public DDNS, which does not hairpin from the lab;
@@ -105,6 +111,13 @@ done
 
 echo "==== $TARGET: provision ===="
 ./deploy/provision.sh
+
+if [ "$CI_PROFILE" = "full" ]; then
+  echo "==== $TARGET: preflight (ingress) ===="
+  # DNS was checked before the reset; now that the ingress exists, confirm it
+  # answers for every name before ACME is exercised.
+  ./ci/preflight.sh "$TARGET" || { echo "preflight failed; refusing to run ACME" >&2; exit 1; }
+fi
 
 if [ "${CERT_CACHE:-0}" = "1" ]; then
   echo "==== $TARGET: certificate cache ===="

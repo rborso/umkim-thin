@@ -106,7 +106,15 @@ if [ "${1:-}" = "--external" ]; then
   exit $?
 fi
 
-TARGET="${1:?usage: ci/preflight.sh single|ha [--external]}"
+TARGET="${1:?usage: ci/preflight.sh single|ha [--dns-only]}"
+shift || true
+DNS_ONLY=0
+for a in "$@"; do
+  case "$a" in
+    --dns-only) DNS_ONLY=1 ;;
+    *) echo "unknown option: $a" >&2; exit 2 ;;
+  esac
+done
 export TARGET
 export PROVISION_ENV="${PROVISION_ENV:-deploy/provision-${TARGET}.env}"
 [ -f "$PROVISION_ENV" ] || { echo "missing $PROVISION_ENV" >&2; exit 2; }
@@ -138,15 +146,21 @@ if [ "${CI_PROFILE:-default}" = "full" ] && [ -z "${public_ip:-}" ]; then
   bad "public_ip is not set; a full run cannot confirm the zone points here"
 fi
 
-echo "== the cluster serves these names (via the ingress address) =="
-addr="${k3s_control_plane_vip:-$VHOST}"
-for h in $hosts; do
-  code="$(timeout 15 curl -ks -o /dev/null -w '%{http_code}' --resolve "$h:443:$addr" "https://$h/" 2>/dev/null)"
-  case "$code" in
-    000|"") bad "$h: no answer from $addr" ;;
-    *) ok "$h: answered at $addr (HTTP $code)" ;;
-  esac
-done
+if [ "$DNS_ONLY" = 1 ]; then
+  echo
+  echo "note: DNS-only checks (the target is about to be reset; the ingress is"
+  echo "      verified again after provisioning)."
+else
+  echo "== the cluster serves these names (via the ingress address) =="
+  addr="${k3s_control_plane_vip:-$VHOST}"
+  for h in $hosts; do
+    code="$(timeout 15 curl -ks -o /dev/null -w '%{http_code}' --resolve "$h:443:$addr" "https://$h/" 2>/dev/null)"
+    case "$code" in
+      000|"") bad "$h: no answer from $addr" ;;
+      *) ok "$h: answered at $addr (HTTP $code)" ;;
+    esac
+  done
+fi
 
 echo
 echo "note: the ACME challenge is validated from the internet, not from here."
