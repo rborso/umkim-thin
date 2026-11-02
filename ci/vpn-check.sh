@@ -83,6 +83,13 @@ sed -n '/^\[Interface\]/,$p' <<<"$out" | grep -v '^DNS =' >"$conf"
 [ -s "$conf" ] || { bad "the console did not return a client config"; exit 1; }
 endpoint="${wg_direct_endpoint:-}"
 [ -n "$endpoint" ] || { bad "wg_direct_endpoint is not set in $PROVISION_ENV"; exit 1; }
+# The console restarts the gateway after writing the peers Secret (that is how
+# a new peer becomes active immediately). Wait for that rollout, or the DNS and
+# app checks race the restart.
+node_root >/dev/null 2>&1 <<'EOS' || true
+K="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml /usr/local/bin/kubectl"
+$K -n wireguard rollout status ds/wireguard-gateway --timeout=180s >/dev/null 2>&1 || true
+EOS
 sed -i "s#^Endpoint = .*#Endpoint = ${endpoint}#" "$conf"
 chmod 600 "$conf"
 dns_ip=$(sed -n 's/^DNS = //p' <<<"$out" | head -1)
