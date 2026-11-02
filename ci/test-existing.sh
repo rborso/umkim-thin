@@ -292,13 +292,17 @@ echo "== create temporary portal user =="
 tail -5 "$REPORT_DIR/portal-user.log"
 
 cd tests/playwright
-[ -d node_modules ] || npm ci --no-audit --no-fund
-[ -d "$HOME/.cache/ms-playwright" ] || npx playwright install chromium
+# NODE_ENV=production (or npm's omit=dev) would omit @playwright/test; require
+# the local runner explicitly instead of letting npx fetch another version.
+if [ ! -x node_modules/.bin/playwright ]; then
+  NODE_ENV=development npm ci --no-audit --no-fund --include=dev
+fi
+[ -d "$HOME/.cache/ms-playwright" ] || ./node_modules/.bin/playwright install chromium
 
 echo "== application acceptance gate =="
 gate_rc=0
 set +e
-npx playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts \
+./node_modules/.bin/playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts \
   --output "$REPORT_DIR/artifacts" >"$REPORT_DIR/gate.log" 2>&1
 gate_rc=$?
 set -e
@@ -338,7 +342,7 @@ journey_rc=0
 if [ "$JOURNEYS" = "1" ]; then
   echo "== functional user journeys (informational) =="
   set +e
-  npx playwright test journeys --workers=1 --reporter=json \
+  ./node_modules/.bin/playwright test journeys --workers=1 --reporter=json \
     >"$REPORT_DIR/journeys.json" 2>"$REPORT_DIR/journeys.err"
   journey_rc=$?
   set -e

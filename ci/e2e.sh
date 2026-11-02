@@ -277,24 +277,29 @@ export UMKIM_THIN_ZONE="$ZONE" \
   UMKIM_THIN_AUTH_HOST="$PORTAL_HOST"
 
 cd tests/playwright
-[ -d node_modules ] || npm ci --no-audit --no-fund
-[ -d "$HOME/.cache/ms-playwright" ] || npx playwright install chromium
+# A runner may export NODE_ENV=production (or npm's omit=dev), which skips the
+# devDependencies and leaves @playwright/test out of node_modules; npx then
+# fetches an unrelated Playwright. Require the local runner explicitly.
+if [ ! -x node_modules/.bin/playwright ]; then
+  NODE_ENV=development npm ci --no-audit --no-fund --include=dev
+fi
+[ -d "$HOME/.cache/ms-playwright" ] || ./node_modules/.bin/playwright install chromium
 
 # Acceptance gate: routes/auth challenge, the directory-login matrix, TLS and
 # the console browser flow. These gate the pipeline; the deep functional user
 # journeys stay informational.
-npx playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
+./node_modules/.bin/playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
 
 if [ "${JOURNEYS_GATING:-0}" = "1" ]; then
   echo "==== $TARGET: functional user journeys (gating) ===="
-  npx playwright test journeys --workers=1
+  ./node_modules/.bin/playwright test journeys --workers=1
 else
 # Functional user journeys (client simulation): INFORMATIONAL. A failure here
 # must not fail the pipeline; it is written to a report for review instead.
 echo "==== $TARGET: functional user journeys (informational) ===="
 report="journey-report.txt"
 json="/tmp/umkim-journeys-$TARGET.json"   # per target: both run in parallel
-if npx playwright test journeys --workers=1 --reporter=json > "$json" 2>/tmp/umkim-journeys-"$TARGET".err; then
+if ./node_modules/.bin/playwright test journeys --workers=1 --reporter=json > "$json" 2>/tmp/umkim-journeys-"$TARGET".err; then
   :
 else
   echo ">> functional user journeys reported failures (see $report)"

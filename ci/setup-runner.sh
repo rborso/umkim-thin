@@ -41,7 +41,9 @@ sudo dnf -y install nss atk at-spi2-atk at-spi2-core cups-libs libdrm \
   libXcomposite libXdamage libXfixes libXrandr mesa-libgbm pango alsa-lib \
   libxkbcommon gtk3 liberation-fonts >/dev/null 2>&1 || true
 cd tests/playwright
-[ -d node_modules ] || npm ci --no-audit --no-fund
-npx playwright install chromium
+if [ ! -x node_modules/.bin/playwright ]; then
+  NODE_ENV=development npm ci --no-audit --no-fund --include=dev
+fi
+./node_modules/.bin/playwright install chromium
 
 echo ">> done"
