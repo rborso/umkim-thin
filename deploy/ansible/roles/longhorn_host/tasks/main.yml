@@ -28,3 +28,26 @@
     path: "{{ longhorn_data_path }}"
     state: directory
     mode: '0755'
+
+# A lab VM usually carries a second, empty disk. Put the volume store on it
+# instead of the small root disk; Longhorn reads whatever is mounted at its
+# data path. Only an unformatted device is touched, and a marker keeps the
+# task idempotent.
+- name: longhorn | mount the extra data disk at the Longhorn data path
+  ansible.builtin.shell: |
+    set -eu
+    dev="{{ longhorn_extra_disk }}"
+    path="{{ longhorn_data_path }}"
+    [ -b "$dev" ] || exit 0
+    if mountpoint -q "$path"; then touch "$path/.umkim-extra-disk"; exit 0; fi
+    fs="{{ longhorn_data_fs }}"
+    opts="{{ longhorn_data_mount_options }}"
+    if ! blkid -o value -s TYPE "$dev" >/dev/null 2>&1; then
+      mkfs."$fs" -f "$dev" >/dev/null
+    fi
+    mount -o "$opts" "$dev" "$path"
+    grep -q "^$dev " /etc/fstab || echo "$dev $path $fs $opts 0 0" >> /etc/fstab
+    touch "$path/.umkim-extra-disk"
+  args:
+    creates: "{{ longhorn_data_path }}/.umkim-extra-disk"
+  when: longhorn_extra_disk | default('') | length > 0

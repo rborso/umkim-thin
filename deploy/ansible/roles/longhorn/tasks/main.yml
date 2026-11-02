@@ -11,6 +11,11 @@
   ansible.builtin.command: /usr/local/bin/helm repo update
   changed_when: false
 
+# Safety over speed: never co-locate replicas, never salvage a volume with a
+# possibly-stale replica, verify snapshot checksums, rebuild one replica at a
+# time, keep the revision counters (they are how Longhorn picks the newest
+# replica after a crash), and delete a powered-off node's pods so they
+# reschedule on a survivor.
 - name: longhorn | install or upgrade the chart
   ansible.builtin.command:
     cmd: >-
@@ -23,8 +28,16 @@
       --set defaultSettings.storageReservedPercentageForDefaultDisk={{ longhorn_disk_storage_reserved_percent }}
       --set defaultSettings.storageOverProvisioningPercentage={{ longhorn_storage_over_provisioning_percentage }}
       --set defaultSettings.storageMinimalAvailablePercentage={{ longhorn_storage_minimal_available_percentage }}
-      # A node that is powered off must not keep its pods (and their volumes)
-      # pinned forever: delete them so they reschedule on a survivor.
+      --set defaultSettings.replicaSoftAntiAffinity=false
+      --set defaultSettings.replicaZoneSoftAntiAffinity=false
+      --set defaultSettings.replicaDiskSoftAntiAffinity=false
+      --set defaultSettings.autoSalvage=false
+      --set defaultSettings.allowVolumeCreationWithDegradedAvailability=false
+      --set defaultSettings.defaultDataLocality=disabled
+      --set defaultSettings.snapshotDataIntegrity=check
+      --set defaultSettings.concurrentReplicaRebuildPerNodeLimit=1
+      --set defaultSettings.disableRevisionCounter=false
+      --set defaultSettings.replicaReplenishmentWaitInterval=600
       --set defaultSettings.nodeDownPodDeletionPolicy=delete-both-statefulset-and-deployment-pod
       --set persistence.defaultClass=false
       --wait --timeout 20m

@@ -143,6 +143,14 @@ longhorn_snapshot_class: longhorn-snapshot
 longhorn_storage_class: longhorn-rwo
 longhorn_rwx_storage_class: longhorn-rwx
 longhorn_data_path: /var/lib/longhorn
+# Optional empty disk to format and mount at longhorn_data_path (e.g. /dev/vdb).
+longhorn_extra_disk: ""
+# The replica filesystem. ext4 with the "sync" mount option makes every
+# replica write durable before it is acknowledged, so a hard power-off cannot
+# lose the tail of a database's WAL. This is a deliberate safety-over-speed
+# default; set the options to "defaults" for throughput.
+longhorn_data_fs: ext4
+longhorn_data_mount_options: sync
 # Replicas per volume. The default is 3 (one per HA server); set this to 2
 # explicitly on a small lab or a two-node-capacity cluster. A 2-replica volume
 # still survives one node loss but has less rebuild headroom.

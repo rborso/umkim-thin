@@ -13,6 +13,9 @@ reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 parameters:
   numberOfReplicas: "{{ longhorn_replica_count }}"
+  # Keep the revision counter: after a crash it is what tells Longhorn which
+  # replica has the newest data, so a stale replica is never attached.
+  disableRevisionCounter: "false"
   staleReplicaTimeout: "30"
   fromBackup: ""
 ---
@@ -26,6 +29,9 @@ reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 parameters:
   numberOfReplicas: "{{ longhorn_replica_count }}"
+  # Keep the revision counter: after a crash it is what tells Longhorn which
+  # replica has the newest data, so a stale replica is never attached.
+  disableRevisionCounter: "false"
   staleReplicaTimeout: "30"
   fromBackup: ""
   # Shared ReadWriteMany volumes are served by Longhorn's share-manager (an
