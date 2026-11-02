@@ -180,14 +180,14 @@ credentials.
 ## Dev target sizing
 
 The `dev-single` VPS (8 GiB RAM) runs all ten `ci_apps` plus identity, the
-console and Collabora. At idle that is roughly 6.5 GiB resident, leaving about
-1 GiB of headroom; Collabora grows during a document edit and pushes the peak
-higher. The host carries 4 GiB of swap, which keeps the gate and the journeys
-from being OOM-killed but is not free capacity: heavy swapping slows the
-OCR/indexing workloads that already dominate a deep run.
+console and Collabora. Observed usage after a deep run is about 6.3 GiB, with
+roughly 1.3 GiB available; Collabora grows during a document edit and pushes the
+peak higher. Provisioning disables swap (k3s expects it off and the playbook
+comments the fstab entry), so there is no overflow buffer.
 
-This is intentional. Keep `ci_apps` complete on `dev-single` and do not run
-two deep targets against the same VPS; when a run needs more headroom, give the
-target more RAM rather than dropping an app from the coverage set. The HA
-target has three 8 GiB nodes in the same lab and does not share this limit.
+This is intentional. The gate and the journeys complete in this footprint, so
+keep `ci_apps` complete on `dev-single` and do not run two deep targets against
+the same VPS. When a run needs more headroom, give the target more RAM rather
+than dropping an app from the coverage set. The HA target has three 8 GiB nodes
+in the same lab and does not share this limit.
 
