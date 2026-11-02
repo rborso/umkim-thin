@@ -7,7 +7,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -o /out/umkim-thin ./cmd/umkim-thin
 
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 LABEL org.opencontainers.image.title="umkim-thin" \
       org.opencontainers.image.description="Single-cluster self-hosted app platform console" \
       org.opencontainers.image.licenses="Apache-2.0" \
