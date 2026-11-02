@@ -34,7 +34,7 @@
       --set defaultSettings.autoSalvage=false
       --set defaultSettings.allowVolumeCreationWithDegradedAvailability=false
       --set defaultSettings.defaultDataLocality=disabled
-      --set defaultSettings.snapshotDataIntegrity=check
+      --set defaultSettings.snapshotDataIntegrity=fast-check
       --set defaultSettings.concurrentReplicaRebuildPerNodeLimit=1
       --set defaultSettings.disableRevisionCounter=false
       --set defaultSettings.replicaReplenishmentWaitInterval=600
@@ -43,6 +43,31 @@
       --wait --timeout 20m
   register: longhorn_install
   changed_when: "'has been installed' in longhorn_install.stdout or 'has been upgraded' in longhorn_install.stdout"
+
+# The chart seeds defaultSettings only on the first install, so an upgrade (or
+# a value the manager ignores) can leave a safety setting at its old value.
+# Enforce them explicitly.
+- name: longhorn | enforce the safety settings
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n longhorn-system patch settings.longhorn.io {{ item.name }}
+      --type=merge -p '{"value":"{{ item.value }}"}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  loop:
+    - { name: replica-soft-anti-affinity, value: "false" }
+    - { name: replica-zone-soft-anti-affinity, value: "false" }
+    - { name: replica-disk-soft-anti-affinity, value: "false" }
+    - { name: auto-salvage, value: "false" }
+    - { name: allow-volume-creation-with-degraded-availability, value: "false" }
+    - { name: default-data-locality, value: "disabled" }
+    - { name: snapshot-data-integrity, value: "fast-check" }
+    - { name: concurrent-replica-rebuild-per-node-limit, value: "1" }
+    - { name: disable-revision-counter, value: "false" }
+    - { name: replica-replenishment-wait-interval, value: "600" }
+    - { name: node-down-pod-deletion-policy, value: "delete-both-statefulset-and-deployment-pod" }
+  changed_when: false
+  failed_when: false
 
 # We manage the storage classes ourselves so both use WaitForFirstConsumer:
 # with Immediate binding an RWO volume can attach to one node while a second pod
