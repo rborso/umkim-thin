@@ -125,6 +125,23 @@ wait_longhorn() { # wait_longhorn [timeout] - no volume is faulted/unknown
   return 1
 }
 
+# wait_longhorn_healthy [timeout] - every replica is back in sync.
+# A degraded volume is usable, but starting the next fault while replicas are
+# still rebuilding removes the redundancy the next reboot needs: with
+# auto-salvage off (deliberately), a volume that loses its last in-sync replica
+# stays faulted. Wait for the rebuild before injecting the next fault.
+wait_longhorn_healthy() { # wait_longhorn_healthy [timeout]
+  local t="${1:-3600}" i bad
+  for i in $(seq 1 $((t / 15))); do
+    bad=$(k "get volumes.longhorn.io -n longhorn-system -o json" 2>/dev/null | jq '
+      [.items[] | select(.status.robustness != "healthy")] | length' 2>/dev/null) || { sleep 15; continue; }
+    if [ "${bad:-1}" -eq 0 ]; then return 0; fi
+    [ $((i % 4)) -eq 0 ] && printf '   %s volume(s) still rebuilding\n' "$bad"
+    sleep 15
+  done
+  return 1
+}
+
 wait_apps() { # wait_apps [timeout]
   local t="${1:-600}" i a b c d
   for i in $(seq 1 $((t / 10))); do
@@ -203,6 +220,7 @@ fault_vip() {
   wait_ssh "$ip" 900 && ok "$vm is reachable again" || bad "$vm did not come back"
   wait_nodes 600 && ok "the node rejoined" || bad "the node did not rejoin"
   wait_apps 600 && ok "apps are healthy after the rejoin" || bad "apps are not healthy after the rejoin"
+  wait_longhorn_healthy 5400 && ok "replicas rebuilt after the rejoin" || bad "replicas did not rebuild after the rejoin"
   check_data
 }
 
@@ -220,6 +238,9 @@ fault_reboot() {
     wait_pods 600 && ok "pods after $vm" || bad "pods after $vm"
     wait_longhorn 600 && ok "volumes after $vm" || bad "volumes after $vm"
     wait_apps 900 && ok "apps after $vm" || bad "apps after $vm"
+    # Rebuild before the next node goes down, or the next reboot can take the
+    # last in-sync replica and leave the volume faulted (auto-salvage is off).
+    wait_longhorn_healthy 5400 && ok "replicas rebuilt after $vm" || bad "replicas did not rebuild after $vm"
   done
   vm=${vm_list[0]}; hv=${hv_list[0]}; ip=${ip_list[0]}
   say "hard reboot $vm ($ip)"
@@ -232,6 +253,7 @@ fault_reboot() {
   wait_pods 600 && ok "pods after the hard reboot" || bad "pods after the hard reboot"
   wait_longhorn 600 && ok "volumes after the hard reboot" || bad "volumes after the hard reboot"
   wait_apps 900 && ok "apps after the hard reboot" || bad "apps after the hard reboot"
+  wait_longhorn_healthy 5400 && ok "replicas rebuilt after the hard reboot" || bad "replicas did not rebuild after the hard reboot"
   check_data
 }
 
@@ -289,6 +311,7 @@ fault_full_stop() { # fault_full_stop <graceful|hard>
   wait_pods 1200 && ok "all pods are back" || bad "not all pods are back"
   wait_longhorn 1200 && ok "volumes are back" || bad "volumes are not back"
   wait_apps 1200 && ok "apps are back" || bad "apps are not back"
+  wait_longhorn_healthy 5400 && ok "replicas rebuilt after the full stop" || bad "replicas did not rebuild after the full stop"
   check_data
 }
 
