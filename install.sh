@@ -182,8 +182,8 @@ while [ $# -gt 0 ]; do
     --trusted-access)  TRUSTED_ACCESS_ENABLED=true; shift ;;
     --no-trusted-access) TRUSTED_ACCESS_ENABLED=false; shift ;;
     --trust-lan)       TRUST_LAN=true; TRUSTED_ACCESS_ENABLED=true; TRUSTED_MANAGEMENT_ENABLED=true; shift ;;
-    --trusted-management-cidrs) TRUSTED_MANAGEMENT_CIDRS="${2:?--trusted-management-cidrs needs a value}"; TRUSTED_MANAGEMENT_ENABLED=true; shift 2 ;;
-    --trusted-management-cidrs=*) TRUSTED_MANAGEMENT_CIDRS="${1#*=}"; TRUSTED_MANAGEMENT_ENABLED=true; shift ;;
+    --trusted-management-cidrs) TRUSTED_MANAGEMENT_CIDRS="${2:?--trusted-management-cidrs needs a value}"; TRUSTED_MANAGEMENT_ENABLED=true; TRUSTED_ACCESS_ENABLED=true; shift 2 ;;
+    --trusted-management-cidrs=*) TRUSTED_MANAGEMENT_CIDRS="${1#*=}"; TRUSTED_MANAGEMENT_ENABLED=true; TRUSTED_ACCESS_ENABLED=true; shift ;;
     --no-trusted-management) TRUSTED_MANAGEMENT_ENABLED=false; shift ;;
     --dry-run)         DRY_RUN=1; shift ;;
     --render-only)     RENDER_ONLY=1; shift ;;
