@@ -4,12 +4,14 @@ This is the implementation plan for **pinned, catalogued versions** and
 **deliberate upgrades**. The target is one active version per app, several
 tested versions available, and no floating image tags.
 
-> **Status: core implemented.** Phases 0–2 and the exposure/certificate
-> routing are in the tree: exact pins, catalog versions, `app versions`,
-> `app upgrade --to` with an atomic Helm upgrade, manual per-route/default
-> certificates, the `public`/`authelia`/`vpn` exposure ladder, the internal VPN
-> entrypoint and CoreDNS zone. Remaining: a certificate API/console section,
-> the automated N-1 upgrade matrix, and the platform-upgrade track.
+> **Status: core implemented; Phase 0 completed in v0.3.0.** Phases 0–2 and
+> the exposure/certificate routing are in the tree: exact pins, catalog
+> versions, `app versions`, `app upgrade --to` with an atomic Helm upgrade,
+> manual per-route/default certificates, the `public`/`authelia`/`vpn`
+> exposure ladder, the internal VPN entrypoint and CoreDNS zone. v0.3.0 moved
+> every catalogued app and shared sidecar to an exact tag/digest (the pins are
+> in `charts/apps` and `catalog/`). Remaining: a certificate API/console
+> section, the automated N-1 upgrade matrix, and the platform-upgrade track.
 >
 > **Delivery note:** this plan predates the local-artifact policy. Internal
 > console/bootstrap images are built locally, and charts are packaged from the
@@ -18,18 +20,25 @@ tested versions available, and no floating image tags.
 
 ## Why
 
-The current install is mostly reproducible, but not completely:
+The bullets below describe the gaps when this plan was written. Phases 0–2 are
+implemented in the tree, and v0.3.0 closed the pinning gaps; keep the list as
+the original rationale.
 
 - The catalog pins a **chart** version and `app install` runs
   `helm upgrade --install`, so an install is already an upgrade.
-- Five images float: `immich-server:release`, `prowlarr:latest`,
-  `seerr:latest`, `flaresolverr:latest`, `lldap:stable`.
+- At the time, five images floated: `immich-server:release`, `prowlarr:latest`,
+  `seerr:latest`, `flaresolverr:latest`, `lldap:stable`. They are now exact
+  pins (`immich:v3.3.5`, the servarr component tags, `lldap@sha256:…` v0.6.3).
 - Several sidecars use major-only tags: `postgres:18`, `valkey:9`,
-  `nginx:1.27-alpine`, `alpine:3.20`, `busybox:1.36`.
-- The catalog has **one** version per app. There is no list of available
-  versions, no `--version`, no N-1 retention, and no rollback contract.
-- Helm runs with `--wait`, not `--atomic`; a failed upgrade can leave a
-  `pending-upgrade` release.
+  `nginx:1.27-alpine`, `alpine:3.20`, `busybox:1.36`. The current tree uses
+  `postgres:18.6`, `valkey:9.1.3`, `nginx:1.27.5-alpine`, `alpine:3.24.3` and
+  `busybox:1.36.1`.
+- The catalog used to have **one** version per app. It now carries a
+  `versions` list (stable plus retained N-1), `app versions`, `app upgrade
+  --to`, and a rollback contract.
+- Helm used to run with `--wait`, not `--atomic`; a failed upgrade could leave
+  a `pending-upgrade` release. The console now passes `--atomic
+  --cleanup-on-fail`.
 - Chart `appVersion` and the image tag are not always in sync (Traefik is the
   clearest example: chart appVersion `v3.7.1`, image `3.7.13`).
 
@@ -66,8 +75,8 @@ Use four distinct things and never conflate them:
 |---|---|---|
 | Platform version | k3s `v1.36.5+k3s1`, Helm `3.16.3` | installer / `install.sh` |
 | Chart version | `nextcloud-0.1.16` | `Chart.yaml` `version` |
-| App version | Nextcloud `35.0.1` | `Chart.yaml` `appVersion` |
-| Image | `nextcloud:35.0.1-apache` | chart values, exact tag/digest |
+| App version | Nextcloud `35.0.2` | `Chart.yaml` `appVersion` |
+| Image | `nextcloud:35.0.2-apache` | chart values, exact tag/digest |
 
 Rules:
 
@@ -94,15 +103,15 @@ existing entries:
 ```yaml
 chart:
   ref: oci://ghcr.io/rborso/charts/nextcloud
-  version: 0.1.17          # stable default, must be in versions
+  version: 0.1.20          # stable default, must be in versions
   versions:
-    - version: 0.1.16
+    - version: 0.1.19
       appVersion: 35.0.1
       channel: stable
-    - version: 0.1.17
+    - version: 0.1.20
       appVersion: 35.0.2
       channel: stable
-    - version: 0.1.18
+    - version: 0.1.21
       appVersion: 35.1.0
       channel: candidate
       notes: "requires PHP 8.4; run the app upgrade"
@@ -157,9 +166,9 @@ umkim-thin app status <name>       # includes chart and appVersion
 
 ```text
 nextcloud
-  installed  0.1.16  (35.0.1)
-  stable     0.1.17  (35.0.2)
-  candidate  0.1.18  (35.1.0)
+  installed  0.1.19  (35.0.1)
+  stable     0.1.20  (35.0.2)
+  candidate  0.1.21  (35.1.0)
 ```
 
 `app upgrade` must require `--to`; there is no implicit stable/default. For a
@@ -240,22 +249,25 @@ required values.
 - **One active chart version per app.** The Helm release is the source of
   truth; the catalog is the available set.
 
-## Phase 0: pin what floats (no behavior change)
+## Phase 0: pin what floats (completed in v0.3.0)
 
-This is the first commit and can land before the version-list feature.
+This was the first commit and landed before the version-list feature. The
+table is the original target; the **actual** v0.3.0 pins are in `charts/apps`
+and `catalog/` (the servarr component tags moved forward as part of the same
+release).
 
-| Chart | Current | Pin |
+| Chart | Original | v0.3.0 pin |
 |---|---|---|
-| immich | `immich-server:release` | `v3.3.5` + digest |
-| servarr | `prowlarr:latest` | `2.6.5.5623` |
-| servarr | `seerr:latest` | `3.5.1` |
-| servarr | `flaresolverr:latest` | resolve the 3.5.2/3.5.5 discrepancy; pin the tested digest |
-| identity | `lldap:stable` | `0.6.3` + digest |
+| immich | `immich-server:release` | `v3.3.5` (server and ML) |
+| servarr | `prowlarr:latest` | `2.7.0.5723-ls166` |
+| servarr | `seerr:latest` | `v3.5.1` |
+| servarr | `flaresolverr:latest` | `v3.5.2` |
+| identity | `lldap:stable` | `@sha256:…` v0.6.3 |
 | nextcloud/gitea/paperless | `postgres:18` | `18.6` |
-| all | `valkey:9` / `9-alpine` | `9.1.2` / `9.1.2-alpine` |
+| all | `valkey:9` / `9-alpine` | `9.1.3` / `9.1.3-alpine` |
 | identity | `nginx:1.27-alpine` | `1.27.5-alpine` |
-| bootstrap/init | `alpine:3.20`, `busybox:1.36` | exact patch/digest |
-| wireguard | `alpine:3.20` | exact patch/digest |
+| bootstrap/init | `alpine:3.20`, `busybox:1.36` | `alpine:3.24.3`, `busybox:1.36.1` |
+| wireguard | `alpine:3.20` | `alpine:3.24.3` |
 
 Also:
 

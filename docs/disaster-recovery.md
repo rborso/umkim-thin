@@ -118,7 +118,7 @@ least:
 - **Immich's Postgres PGDATA.** The immich Postgres image (Postgres 14 based)
   declares `VOLUME /var/lib/postgresql/data`. Mounting the PVC at the parent let
   the runtime create an anonymous volume there, which shadowed the PVC, so the
-  database vanished with the pod. Chart 0.1.10 sets
+  database vanished with the pod. Chart 0.1.11 sets
   `PGDATA=/var/lib/postgresql/pgdata`; a database created by an older chart is
   empty and has to come from the data backup.
 

@@ -24,14 +24,14 @@ links:
 chart:
   # An OCI reference to the chart's own repository, pinned by version.
   ref: oci://ghcr.io/example/charts/nextcloud
-  version: 0.1.17
+  version: 0.1.20
   versions:
-    - version: 0.1.17
+    - version: 0.1.20
+      appVersion: 35.0.2
+      channel: stable
+    - version: 0.1.19
       appVersion: 35.0.1
       channel: stable
-    - version: 0.1.18
-      appVersion: 35.0.2
-      channel: candidate
 
 namespace: nextcloud
 

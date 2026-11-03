@@ -163,7 +163,7 @@ Latest stable upstream releases as of 2026-11-02.
   2 GiB claim must be expanded (Longhorn expands online) before the upgrade.
 - A full library scan is required after migration.
 
-### 2. Radarr 5.28 → 6.4 (medium)
+### 2. Radarr 5.28 → 6.4 (resolved in v0.3.0)
 
 - The 6.x line moves to .NET 8 and **removes Basic Auth**. API-key auth, which
   the bootstrap uses, still works.
@@ -172,7 +172,7 @@ Latest stable upstream releases as of 2026-11-02.
 - Database migration is involved. The chart and bootstrap need a smoke test,
   but no obvious bootstrap breakage was identified.
 
-### 3. Mealie 3.22 → 3.30 (breaking security change)
+### 3. Mealie 3.22 → 3.30 (resolved in v0.3.0; breaking security change)
 
 - 3.26 added SSRF hardening: server-initiated requests to **private networks**
   (webhooks, recipe imports, image downloads, recipe actions) are blocked
@@ -198,7 +198,7 @@ Latest stable upstream releases as of 2026-11-02.
 - The bootstrap's login, preferences, categories, Prowlarr download client
   and the full import chain were re-tested on single and HA.
 
-### 5. Paperless-ngx 3.3.0 → 3.4.1 (low/medium)
+### 5. Paperless-ngx 3.3.0 → 3.4.1 (resolved in v0.3.0)
 
 - No explicit breaking flag.
 - Bumps `django-allauth` to 65.20 and `oauthlib` to 4.0; re-test the OIDC
@@ -206,7 +206,7 @@ Latest stable upstream releases as of 2026-11-02.
 - Drops ImageMagick; PDF thumbnails now use poppler. Re-test thumbnail
   generation and OCR.
 
-### 6. SparkyFitness 1.9.0 → 1.11.0 (low)
+### 6. SparkyFitness 1.9.0 → 1.11.0 (resolved in v0.3.0)
 
 - Database migrations run on startup.
 - Adaptive calorie budgets no longer double-count activity/BMR credits;
@@ -225,7 +225,11 @@ Latest stable upstream releases as of 2026-11-02.
 - **Alpine 3.20:** EOL; rebuild the bootstrap/VPN/WireGuard images on a
   supported Alpine (3.24.x) as maintenance.
 
-## What needs more testing
+## What needed more testing (pre-upgrade plan)
+
+The v0.3.0 release gates exercised these items on a fresh HA install and a
+reused single installation (bootstrap, journeys, backup/restore). The
+checklists are kept as the original test plan.
 
 ### Priority 1 — Jellyfin 12
 
@@ -282,10 +286,10 @@ Latest stable upstream releases as of 2026-11-02.
 
 ### Immich pinning
 
-- [ ] Replace `immich-server:release` with an exact version tag (currently
-      3.3.5) and set `Chart.yaml` `appVersion` to the same version.
-- [ ] Add a static check that rejects floating tags in chart values.
-- [ ] Verify an Immich pod restart no longer changes the running version.
+- [x] Replace `immich-server:release` with `v3.3.5` and set `Chart.yaml`
+      `appVersion` to `3.3.5` (chart 0.1.11).
+- [x] The static check rejects floating tags in chart values.
+- [x] A pod restart now starts the same pinned image.
 
 ### Regression gate for any of the above
 
@@ -303,7 +307,7 @@ For each app upgrade, also run the app's Playwright journey and the
 Jellyfin/Radarr/qBittorrent/Mealie work should be tested on the **full** CI
 profile as well, since the servarr bootstrap is built and exercised there.
 
-## Recommended sequencing
+## Recommended sequencing (used for v0.3.0)
 
 1. **Jellyfin 12** — design + bootstrap rework + plugin bump, then lab test.
 2. **Radarr 6** — chart bump + N-1 upgrade test.
@@ -314,14 +318,15 @@ profile as well, since the servarr bootstrap is built and exercised there.
 6. **Sidecars** — Valkey/Collabora patches, Alpine 3.24 rebuild.
 7. **Immich** — pin the image before the next chart bump.
 
-## Open questions
+## Open questions (resolved in v0.3.0)
 
-- Does the servarr bootstrap need a compatibility shim for both Jellyfin 10.10
-  and 12, or is a clean break acceptable?
-- Is `HTTP_ALLOW_LIST` needed for the default Mealie install, or only for
-  optional private-network features?
-- Should Immich be pinned now, even though that requires a new chart version
-  and a catalog bump?
-- Are the Alpine 3.20 bootstrap images rebuilt as part of the next chart bump,
-  or kept until a separate maintenance change?
+- The servarr bootstrap is a clean break to Jellyfin 12.4: the `/Startup`
+  routes are still served, and the client sends both the standard and legacy
+  auth headers. One image still works against 10.x, but the chart ships 12.4.
+- `HTTP_ALLOW_LIST` is not set by default; the chart passes `extraEnv` so an
+  operator can enable private-network Mealie features explicitly.
+- Immich is pinned now: chart 0.1.11 uses `v3.3.5` for server and ML, and the
+  static check rejects floating tags.
+- The Alpine 3.20 bootstrap/VPN/init images were rebuilt on 3.24.3 as part of
+  this release.
 
