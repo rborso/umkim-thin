@@ -88,7 +88,7 @@ test.describe('console', () => {
     // The Platform panel must be reachable even when no update is available,
     // and it must explain the host-side check/update path.
     await page.locator('#platform-info').click();
-    await expect(page.getByRole('heading', { name: 'Platform' })).toBeVisible();
+    await expect(page.locator('#platform-dialog-title')).toBeVisible();
     await expect(page.locator('#platform-dialog')).toContainText(
       'How to check and update the platform',
     );
