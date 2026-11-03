@@ -12,6 +12,33 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 cd "$here/.."
 
+# The platform release version baked into the console image. It is exact: a
+# commit between releases must not claim the previous tag (the console's update
+# check would then offer a misleading upgrade). A git checkout is a release only
+# when HEAD is on a v* tag and the tracked tree is clean; a source tarball uses
+# the checked-in VERSION file; UMKIM_THIN_VERSION overrides both.
+build_version() {
+  if [ -n "${UMKIM_THIN_VERSION:-}" ]; then
+    printf '%s' "${UMKIM_THIN_VERSION#v}"
+    return
+  fi
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    local tag
+    if tag=$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null) &&
+       [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+      printf '%s' "${tag#v}"
+    else
+      printf 'dev+%s' "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    fi
+    return
+  fi
+  if [ -f VERSION ]; then
+    tr -d '[:space:]' < VERSION
+    return
+  fi
+  printf 'dev'
+}
+
 # These run on the machine invoking this script, not on the target or JUMP.
 for tool in go helm podman ssh; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -212,10 +239,8 @@ build_and_import_image() {
   fi
   echo ">> building the console image"
   sha="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
-  # The last tag, not `git describe` (which appends -N-gSHA): the console's
-  # update check compares a plain release version.
-  version="$(git describe --tags --abbrev=0 2>/dev/null || echo dev)"
-  version="${version#v}"
+  # A plain release version (exact tag) or dev+sha; see build_version above.
+  version="$(build_version)"
   podman build -q --build-arg "UMKIM_THIN_GIT_SHA=${sha}" \
     --build-arg "UMKIM_THIN_VERSION=${version}" -t localhost/umkim-thin:dev . >/dev/null
   for h in ${servers:-$VHOST}; do

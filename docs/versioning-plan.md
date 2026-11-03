@@ -83,6 +83,11 @@ Rules:
 - **A chart version is an immutable bundle.** Any image, sidecar, default,
   template or wiring change produces a new chart version, including a patch
   image bump. Never reuse the same version for different contents.
+- **A platform version is exact.** A git build is a release only when HEAD is on
+  a `v*` tag and the tracked tree is clean; otherwise it reports `dev+<sha>` and
+  the update check is off. Source tarballs use the checked-in `VERSION` file;
+  `UMKIM_THIN_VERSION` overrides both for a release build. `install.sh` and
+  `deploy/provision.sh` share this rule.
 - **`appVersion` matches the primary app.** For bundles (`servarr`) the chart
   version is the bundle; list the component versions in the chart README and
   in the catalog `appVersion` note.

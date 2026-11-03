@@ -12,7 +12,36 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR"
-VERSION="0.2.0"
+
+# Release version. It must be the *exact* release, not "the last tag in
+# history": a build from a commit between releases used to claim the previous
+# release and mislead the console's update check. A git checkout is a release
+# only when HEAD is on a v* tag and the tracked tree is clean; anything else is
+# a dev build (the update check stays off). Source tarballs without .git carry
+# the checked-in VERSION file. UMKIM_THIN_VERSION overrides both for a release
+# build.
+build_version() {
+  if [ -n "${UMKIM_THIN_VERSION:-}" ]; then
+    printf '%s' "${UMKIM_THIN_VERSION#v}"
+    return
+  fi
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    local tag
+    if tag=$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null) &&
+       [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+      printf '%s' "${tag#v}"
+    else
+      printf 'dev+%s' "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    fi
+    return
+  fi
+  if [ -f VERSION ]; then
+    tr -d '[:space:]' < VERSION
+    return
+  fi
+  printf 'dev'
+}
+VERSION="$(build_version)"
 ZONE=""
 EMAIL=""
 LAN_CIDR="${UMKIM_THIN_LAN_CIDR:-192.168.1.0/24}"
