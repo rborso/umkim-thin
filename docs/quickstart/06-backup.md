@@ -26,16 +26,20 @@ It writes:
 
 Everything is written with mode 0600 in a 0700 directory.
 
-## The console backs up every day
+## Backups are manual by default
 
-After the first install the console takes a backup every 24 hours and keeps the
-last seven: the console state, the installer seed, the installed app inventory
-and the Helm values each app was installed with, plus a storage snapshot per
-application PVC where the driver supports it — or a full file copy of the
-volume when it does not (the schedule's **Data** mode). **Backups** in the console lists
-them, takes one now (optionally narrowed to selected apps and volumes),
-downloads it, and restores it. The automatic schedule (on/off, interval,
-retention, snapshots) is edited in the same screen. See
+After the first install, **automatic backups are off**. Take one whenever you
+need it with **Backups → Back up now** (optionally narrowed to selected apps and
+volumes): the console state, the installer seed, the installed app inventory and
+the Helm values each app was installed with, plus a storage snapshot per
+application PVC where the driver supports it — or a full file copy of the volume
+when it does not (the schedule's **Data** mode). **Backups** lists, downloads
+and restores them.
+
+To run a schedule, enable **Automatic backups** in the same screen (or run
+`umkim-thin backup schedule --interval 24h`), then set the interval, retention
+and data mode. Existing installs keep the schedule saved on their console PVC;
+the off default applies to new installs. See
 [`../backup.md`](../backup.md) for what is in an archive and what is not.
 
 **Platform backup** (same screen) is the other half: every Kubernetes object

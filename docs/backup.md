@@ -18,13 +18,14 @@ saves it to `state/backup-schedule.json` on its PVC (a restart keeps it, and a
 restore brings it back) and applies a change immediately — no restart and no
 reinstall.
 
-The installer's environment variables are only the initial default, used until
-the console saves a schedule:
+Automatic backups are **off by default**: the schedule editor starts unchecked,
+and manual backups work without it. The installer's environment variables are
+only the initial default, used until the console saves a schedule:
 
 ```env
 UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=7              # archives kept; 0 keeps everything
-UMKIM_THIN_BACKUP_INTERVAL=24h        # "0" or "off" starts disabled
+UMKIM_THIN_BACKUP_INTERVAL=off        # off by default; "24h" enables
 UMKIM_THIN_BACKUP_SNAPSHOTS=true      # create VolumeSnapshots
 ```
 

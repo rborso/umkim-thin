@@ -180,11 +180,13 @@ func ConfigFromEnv() Config {
 		HomeHost:         firstNonEmpty(env("UMKIM_THIN_HOME_HOST", ""), defaultHomeHost(zone)),
 		DirectoryURL:     firstNonEmpty(env("UMKIM_THIN_LLDAP_URL", ""), defaultDirectoryURL(zone)),
 
-		BackupDir:       env("UMKIM_THIN_BACKUP_DIR", stateDir+"/backups"),
-		BackupSeedDir:   env("UMKIM_THIN_SEED_DIR", "/etc/umkim-thin"),
-		BackupNFS:       env("UMKIM_THIN_BACKUP_TARGET_NFS", ""),
-		BackupKeep:      atoi(env("UMKIM_THIN_BACKUP_KEEP", "7")),
-		BackupInterval:  duration(env("UMKIM_THIN_BACKUP_INTERVAL", "24h")),
+		BackupDir:     env("UMKIM_THIN_BACKUP_DIR", stateDir+"/backups"),
+		BackupSeedDir: env("UMKIM_THIN_SEED_DIR", "/etc/umkim-thin"),
+		BackupNFS:     env("UMKIM_THIN_BACKUP_TARGET_NFS", ""),
+		BackupKeep:    atoi(env("UMKIM_THIN_BACKUP_KEEP", "7")),
+		// Automatic backups are opt-in. Manual backups and the Backups screen
+		// work without this; set 24h (or another duration) to enable a schedule.
+		BackupInterval:  duration(env("UMKIM_THIN_BACKUP_INTERVAL", "off")),
 		BackupSnapshots: boolEnv("UMKIM_THIN_BACKUP_SNAPSHOTS", true),
 	}
 }

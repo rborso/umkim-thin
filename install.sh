@@ -814,7 +814,7 @@ UMKIM_THIN_VPN_DNS_IP=10.43.200.53
 # application PVC when the storage driver provides a snapshot class.
 UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=${BACKUP_KEEP:-7}
-UMKIM_THIN_BACKUP_INTERVAL=${BACKUP_INTERVAL:-24h}
+UMKIM_THIN_BACKUP_INTERVAL=${BACKUP_INTERVAL:-off}
 UMKIM_THIN_BACKUP_SNAPSHOTS=${BACKUP_SNAPSHOTS:-true}
 UMKIM_THIN_BACKUP_TARGET_NFS=$BACKUP_NFS
 # The console's read-only release check (it asks the public release metadata

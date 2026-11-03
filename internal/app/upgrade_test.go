@@ -90,8 +90,8 @@ func TestBackupSettingsDefaults(t *testing.T) {
 	if cfg.BackupKeep != 7 {
 		t.Errorf("BackupKeep = %d, want 7", cfg.BackupKeep)
 	}
-	if cfg.BackupInterval != 24*time.Hour {
-		t.Errorf("BackupInterval = %v, want 24h", cfg.BackupInterval)
+	if cfg.BackupInterval != 0 {
+		t.Errorf("BackupInterval = %v, want 0 (automatic backups off by default)", cfg.BackupInterval)
 	}
 	if !cfg.BackupSnapshots {
 		t.Error("BackupSnapshots should default to true")

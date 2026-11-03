@@ -538,7 +538,7 @@ UMKIM_THIN_BOOTSTRAP_NODE=<first server's hostname>
 # Backups screen owns them after the first save (state/backup-schedule.json).
 UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=7                 # 0 keeps everything
-UMKIM_THIN_BACKUP_INTERVAL=24h           # 0 or off starts disabled
+UMKIM_THIN_BACKUP_INTERVAL=off           # automatic backups are opt-in
 UMKIM_THIN_BACKUP_SNAPSHOTS=true
 
 # Console release check (read-only; false for an air-gapped install)
