@@ -147,7 +147,8 @@ readiness, not an HTTP probe.
 `UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED`,
 `UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS`,
 `UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS`); the console does not accept a CIDR from
-a browser request. Catalog routes opt in with `trusted.management` /
+a browser request. Trusted access defaults on; the management/LAN switch
+defaults off and needs CIDRs. Catalog routes opt in with `trusted.management` /
 `trusted.vpn` and must declare `appAuth`. The console applies the public route,
 the high-priority management `IngressRoute` (`ClientIP`, no Authelia), and the
 same-host `vpn` Ingress (no Authelia, `vpn-only` allowlist) together.

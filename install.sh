@@ -73,10 +73,15 @@ WG_ENDPOINT="${WG_ENDPOINT:-}"
 BACKUP_NFS="${BACKUP_NFS:-}"
 # Trusted access is sticky: an empty value means "reuse config.env" (see
 # reuse_previous_values), so a re-run never flips a security switch silently.
+# A fresh install turns the VPN bypass on; --no-trusted-access opts out.
 TRUSTED_ACCESS_ENABLED="${TRUSTED_ACCESS_ENABLED:-}"
 TRUSTED_MANAGEMENT_ENABLED="${TRUSTED_MANAGEMENT_ENABLED:-}"
 TRUSTED_MANAGEMENT_CIDRS="${TRUSTED_MANAGEMENT_CIDRS:-}"
 TRUSTED_MANAGEMENT_EXCLUDE_CIDRS="${TRUSTED_MANAGEMENT_EXCLUDE_CIDRS:-}"
+# --trust-lan adds the host's directly attached private IPv4 subnets to the
+# trusted-management CIDRs; it is an install-time convenience, not a stored
+# setting (the resulting CIDRs are saved in config.env).
+TRUST_LAN="${TRUST_LAN:-}"
 HELM=""
 BASE_DN="dc=umkim,dc=thin"
 CONSOLE_NAMESPACE="umkim-thin"
@@ -122,13 +127,18 @@ Options:
                         Mount an NFS export as a selectable backup target
                         (kept across re-runs; see Backups in the console).
   --trusted-access      Let VPN clients use the public app URL (the app's own
-                        login); off by default, kept across re-runs.
+                        login); on by default, kept across re-runs.
   --no-trusted-access   Turn the VPN bypass off explicitly.
+  --trust-lan           Trust the host's directly attached private IPv4
+                        subnets too (the LAN); excludes the default gateway.
+                        Implies --trusted-access.
   --trusted-management-cidrs <csv>
-                        Source ranges allowed to skip Authelia (management).
+                        Source ranges allowed to skip Authelia (management);
+                        enables the management bypass for those ranges.
   --no-trusted-management
-                        Disable the management bypass (required when no CIDR
-                        is configured, e.g. behind a NAT that rewrites sources).
+                        Disable the LAN/management bypass (required when no
+                        CIDR is configured, e.g. behind a NAT that rewrites
+                        sources).
   --dry-run             Check and print the plan; make no changes.
   --render-only         Write the generated values to --out (no root, no changes).
   --out <dir>           Output directory for --render-only or --backup.
@@ -171,8 +181,9 @@ while [ $# -gt 0 ]; do
     --backup-nfs=*)    BACKUP_NFS="${1#*=}"; shift ;;
     --trusted-access)  TRUSTED_ACCESS_ENABLED=true; shift ;;
     --no-trusted-access) TRUSTED_ACCESS_ENABLED=false; shift ;;
-    --trusted-management-cidrs) TRUSTED_MANAGEMENT_CIDRS="${2:?--trusted-management-cidrs needs a value}"; shift 2 ;;
-    --trusted-management-cidrs=*) TRUSTED_MANAGEMENT_CIDRS="${1#*=}"; shift ;;
+    --trust-lan)       TRUST_LAN=true; TRUSTED_ACCESS_ENABLED=true; TRUSTED_MANAGEMENT_ENABLED=true; shift ;;
+    --trusted-management-cidrs) TRUSTED_MANAGEMENT_CIDRS="${2:?--trusted-management-cidrs needs a value}"; TRUSTED_MANAGEMENT_ENABLED=true; shift 2 ;;
+    --trusted-management-cidrs=*) TRUSTED_MANAGEMENT_CIDRS="${1#*=}"; TRUSTED_MANAGEMENT_ENABLED=true; shift ;;
     --no-trusted-management) TRUSTED_MANAGEMENT_ENABLED=false; shift ;;
     --dry-run)         DRY_RUN=1; shift ;;
     --render-only)     RENDER_ONLY=1; shift ;;
@@ -275,11 +286,67 @@ reuse_previous_values() {
   return 0
 }
 
+# merge_words deduplicates a whitespace/comma-separated list, keeping order.
+merge_words() {
+  local out="" w
+  for w in $(printf '%s %s' "$1" "$2" | tr ',' ' '); do
+    [ -n "$w" ] || continue
+    case " $out " in
+      *" $w "*) continue ;;
+    esac
+    out="${out:+$out }$w"
+  done
+  printf '%s' "$out"
+}
+
+# detect_trusted_lan adds the host's directly attached private IPv4 subnets to
+# the trusted-management CIDRs and excludes the default gateway. Excluding the
+# gateway matters when the public ingress path SNATs public traffic to the
+# router's LAN address; otherwise that traffic would look trusted.
+detect_trusted_lan() {
+  if ! command -v ip >/dev/null 2>&1; then
+    warn "--trust-lan needs iproute2 (ip); no LAN ranges were added"
+    return 0
+  fi
+  local cidrs="" excludes="" cidr gw
+  while read -r cidr; do
+    case "$cidr" in
+      10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
+      *) continue ;;
+    esac
+    cidrs="$cidrs $cidr"
+  done < <(ip -o -4 route show scope link 2>/dev/null | \
+    awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ {print $1}')
+  while read -r gw; do
+    [ -n "$gw" ] || continue
+    excludes="$excludes $gw/32"
+  done < <(ip -o -4 route show default 2>/dev/null | \
+    awk '{for (i = 1; i <= NF; i++) if ($i == "via") print $(i + 1)}')
+  if [ -z "${cidrs# }" ]; then
+    warn "--trust-lan found no directly attached private IPv4 subnet; no LAN ranges were added"
+    return 0
+  fi
+  TRUSTED_MANAGEMENT_CIDRS=$(merge_words "$TRUSTED_MANAGEMENT_CIDRS" "$cidrs")
+  TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=$(merge_words "$TRUSTED_MANAGEMENT_EXCLUDE_CIDRS" "$excludes")
+  TRUSTED_MANAGEMENT_ENABLED=true
+  info "trusting the host LAN:${cidrs} (default gateway excluded)"
+}
+
 validate_inputs() {
   if [ "$RENDER_ONLY" -eq 1 ] || [ "$MODE" = "install" ]; then
     [ -f charts/apps/gitea/Chart.yaml ] || \
       die "charts/apps submodule is missing; run: git submodule update --init --recursive"
     reuse_previous_values
+    if [ "$TRUST_LAN" = true ] && [ "$TRUSTED_MANAGEMENT_ENABLED" != false ]; then
+      detect_trusted_lan
+    fi
+    # Management trusted access needs CIDRs; an old config can carry the switch
+    # on with an empty list, which would make every app install fail.
+    if [ "$TRUSTED_MANAGEMENT_ENABLED" = true ] && \
+       [ -z "$(printf '%s' "$TRUSTED_MANAGEMENT_CIDRS" | tr -d ' ,')" ]; then
+      warn "trusted management is enabled but has no CIDRs; disabling the management bypass"
+      TRUSTED_MANAGEMENT_ENABLED=false
+    fi
     [ -n "$ZONE" ] || die "--zone is required on a first install (an existing install reuses it from $STATE_DIR/config.env)"
     [ -n "$EMAIL" ] || die "--email is required on a first install (an existing install reuses it)"
     ZONE=$(printf '%s' "$ZONE" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
@@ -821,8 +888,8 @@ UMKIM_THIN_BACKUP_TARGET_NFS=$BACKUP_NFS
 # for a newer umkim-thin). Cached and silent on failure; set false when the
 # console has no egress, e.g. an air-gapped install.
 UMKIM_THIN_UPDATE_CHECK=${UPDATE_CHECK:-true}
-UMKIM_THIN_TRUSTED_ACCESS_ENABLED=${TRUSTED_ACCESS_ENABLED:-false}
-UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=${TRUSTED_MANAGEMENT_ENABLED:-true}
+UMKIM_THIN_TRUSTED_ACCESS_ENABLED=${TRUSTED_ACCESS_ENABLED:-true}
+UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=${TRUSTED_MANAGEMENT_ENABLED:-false}
 UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=${TRUSTED_MANAGEMENT_CIDRS:-}
 UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=${TRUSTED_MANAGEMENT_EXCLUDE_CIDRS:-}
 EOF

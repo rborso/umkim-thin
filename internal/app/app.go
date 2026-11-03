@@ -124,8 +124,10 @@ func ConfigFromEnv() Config {
 	if portalHost == "" && zone != "" {
 		portalHost = "auth." + zone
 	}
-	trustedEnabled, _ := strconv.ParseBool(env("UMKIM_THIN_TRUSTED_ACCESS_ENABLED", "false"))
-	trustedMgmtEnabled, _ := strconv.ParseBool(env("UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED", "true"))
+	trustedEnabled, _ := strconv.ParseBool(env("UMKIM_THIN_TRUSTED_ACCESS_ENABLED", "true"))
+	// The management/LAN path needs explicit CIDRs; leave it off unless they
+	// are configured, otherwise every app install fails the CIDR check.
+	trustedMgmtEnabled, _ := strconv.ParseBool(env("UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED", "false"))
 	return Config{
 		Kubeconfig:      env("UMKIM_THIN_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"),
 		ChartMirror:     env("UMKIM_THIN_CHART_MIRROR", remoteDir+"/chart-mirror"),

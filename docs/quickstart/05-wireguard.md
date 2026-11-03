@@ -45,11 +45,16 @@ set the chart's `vpnDNSUpstream` to a comma-separated list.
 
 ## Same app URL on the VPN
 
-Same-host access is opt-in. Without `UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true`
-the tunnel only carries the pod/service networks: an app hostname still
-resolves to its public address, so opening it goes around the tunnel and lands
-on the public (Authelia) route. Enable trusted access, then reinstall the app
-so its VPN route and the split-DNS entry are published.
+Same-host access is on by default. With it off
+(`UMKIM_THIN_TRUSTED_ACCESS_ENABLED=false`, or `install.sh
+--no-trusted-access`) the tunnel only carries the pod/service networks: an app
+hostname still resolves to its public address, so opening it goes around the
+tunnel and lands on the public (Authelia) route.
+
+New installs publish the VPN route and split-DNS entry as each app is
+installed. An existing install that had trusted access off keeps that choice;
+re-run `install.sh --trusted-access` and reconcile the apps
+(`umkim-thin app reconcile <name>`) so their routes and DNS entries appear.
 
 With trusted access enabled, an app keeps its public URL inside the tunnel:
 
@@ -68,17 +73,30 @@ uses the `vpn-only` source allowlist. The gateway DNATs the tunnel's :443
 there. The dedicated VPN DNS service (`10.43.200.53`) resolves the app hosts;
 the WireGuard client receives that address in its `DNS` line.
 
-Trusted access is explicit and off by default:
+Trusted access is on by default. Turn the VPN path off with
+`install.sh --no-trusted-access` or `UMKIM_THIN_TRUSTED_ACCESS_ENABLED=false`.
+The LAN path is opt-in:
+
+```bash
+# Add the host's directly attached private subnets; excludes the default gateway
+sudo ./install.sh --reuse-k3s --trust-lan
+```
+
+`--trust-lan` fills in the management CIDRs; you can also set them directly:
 
 ```text
 UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true
-UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=172.16.10.0/24
+UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=true
+UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=192.168.1.0/24
+UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=192.168.1.1/32
 ```
 
-The management path uses Traefik `ClientIP` on `websecure` and no Authelia;
-the public path remains `websecure` + Authelia. The catalog marks apps with
-`trusted.management`/`trusted.vpn` and `appAuth`; the app's own login is the
-only login on those paths.
+The management/LAN path uses Traefik `ClientIP` on `websecure` and no
+Authelia; the public path remains `websecure` + Authelia. The catalog marks
+apps with `trusted.management`/`trusted.vpn` and `appAuth`; the app's own
+login is the only login on those paths. Excluding the default gateway matters
+when a router masquerades public traffic to its LAN address; without it that
+traffic would look like a LAN client.
 
 The old `.vpn.<zone>` hostname remains available as a compatibility fallback
 when a catalog route sets `trusted.sameHost: false` (or when an app is installed

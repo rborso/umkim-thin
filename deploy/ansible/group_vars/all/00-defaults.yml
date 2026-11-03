@@ -56,9 +56,10 @@ backup_snapshots: true
 # The console's read-only release check (the update banner). Set false for an
 # air-gapped install with no egress.
 update_check: true
-# Trusted-network bypass for the management network. Disabled by default; set
-# trusted_access_enabled and an explicit management CIDR list to opt in.
-trusted_access_enabled: false
+# Trusted-network bypass. The VPN path is on by default; set false (or
+# --no-trusted-access) to opt out. The LAN/management path still needs an
+# explicit CIDR list.
+trusted_access_enabled: true
 trusted_management_enabled: false
 trusted_management_cidrs: ""
 # A public NAT/proxy that masquerades to an address inside the management CIDR

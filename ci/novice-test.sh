@@ -125,6 +125,8 @@ PY
 grep -q '^UMKIM_THIN_ZONE=example.com$' "$tmp/render/config.env" || fail "zone missing from config.env"
 grep -q '^UMKIM_THIN_IDENTITY_CHART=/data/chart-mirror/identity-' "$tmp/render/config.env" || fail "identity chart path missing"
 grep -q '^UMKIM_THIN_WG_ENDPOINT=wg.example.com:51820$' "$tmp/render/config.env" || fail "WireGuard endpoint is not wg.<zone>:<port>"
+grep -q '^UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true$' "$tmp/render/config.env" || fail "trusted access should default on"
+grep -q '^UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=false$' "$tmp/render/config.env" || fail "trusted management should default off without CIDRs"
 grep -q '^consoleHost: "console.example.com"$' "$tmp/render/console-values.yml" || fail "console host missing"
 grep -q '^  portalHost: "auth.example.com"$' "$tmp/render/identity-values.yml" || fail "portal host missing"
 ok "generated config has the expected values"
@@ -140,6 +142,32 @@ ok "identity values are 0600"
 grep -q '^UMKIM_THIN_WG_ENDPOINT=wg.example.com:51999$' "$tmp/render-wg/config.env" \
   || fail "an explicit WireGuard endpoint port was doubled"
 ok "an explicit WireGuard endpoint port is kept"
+
+echo "== trust-lan detection =="
+fakebin="$tmp/fakebin"
+mkdir -p "$fakebin"
+cat >"$fakebin/ip" <<'EOS'
+#!/bin/sh
+case "$*" in
+  *"route show scope link"*) echo "192.168.50.0/24 dev eth9 proto kernel src 192.168.50.10" ;;
+  *"route show default"*) echo "default via 192.168.50.1 dev eth9 proto static" ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$fakebin/ip"
+out=$(PATH="$fakebin:$PATH" ./install.sh --render-only --zone example.com \
+  --email admin@example.com --trust-lan --out "$tmp/render-lan" 2>&1) || \
+  fail "install.sh --trust-lan failed: $out"
+printf '%s' "$out" | grep -q "trusting the host LAN: 192.168.50.0/24" || \
+  fail "trust-lan did not report the detected subnet: $out"
+for want in \
+  '^UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true$' \
+  '^UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED=true$' \
+  '^UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=192.168.50.0/24$' \
+  '^UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=192.168.50.1/32$'; do
+  grep -q "$want" "$tmp/render-lan/config.env" || fail "trust-lan config missing $want"
+done
+ok "--trust-lan trusts the attached subnet and excludes the gateway"
 
 echo "== chart mirror names =="
 mirror="$tmp/mirror"

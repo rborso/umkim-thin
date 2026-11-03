@@ -518,10 +518,12 @@ when the VIP moves.
 ### Same-host trusted access
 
 To give native clients the public app URL over the VPN and/or management
-network, enable the trusted-access bypass. `install.sh` has flags for it
-(`--trusted-access`, `--no-trusted-management`, `--trusted-management-cidrs`)
-and keeps the existing choice on a re-run; the Ansible path uses the same keys
-in the generated `config.env`:
+network, use the trusted-access bypass. The VPN path is on by default; opt out
+with `--no-trusted-access`. `install.sh` also has `--trust-lan` (detect the
+host's directly attached private IPv4 subnets and exclude the default
+gateway), `--trusted-management-cidrs`, and `--no-trusted-management`. It
+keeps the existing choice on a re-run; the Ansible path uses the same keys in
+the generated `config.env`:
 
 ```text
 UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true

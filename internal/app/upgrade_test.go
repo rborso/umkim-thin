@@ -108,6 +108,19 @@ func TestBackupSettingsDefaults(t *testing.T) {
 	}
 }
 
+func TestTrustedAccessDefaults(t *testing.T) {
+	t.Setenv("UMKIM_THIN_TRUSTED_ACCESS_ENABLED", "")
+	t.Setenv("UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED", "")
+	t.Setenv("UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS", "")
+	cfg := ConfigFromEnv()
+	if !cfg.TrustedAccessEnabled {
+		t.Error("TrustedAccessEnabled should default to true")
+	}
+	if cfg.TrustedManagementEnabled {
+		t.Error("TrustedManagementEnabled should default to false without CIDRs")
+	}
+}
+
 func TestDirectoryURL(t *testing.T) {
 	if got := defaultDirectoryURL("example.com"); got != "https://lldap.example.com" {
 		t.Fatalf("defaultDirectoryURL = %q", got)

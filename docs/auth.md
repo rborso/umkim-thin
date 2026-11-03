@@ -55,7 +55,9 @@ the `vpn-only` allowlist still applies. The public certificate is reused
 because the hostname is unchanged. The legacy `.vpn.<zone>` route remains
 available as a compatibility fallback (`trusted.sameHost: false`).
 
-Trusted access is off by default:
+Trusted access is on by default; turn the VPN path off with
+`UMKIM_THIN_TRUSTED_ACCESS_ENABLED=false` (or `install.sh
+--no-trusted-access`). The LAN/management path needs explicit CIDRs:
 
 ```text
 UMKIM_THIN_TRUSTED_ACCESS_ENABLED=true
@@ -64,6 +66,11 @@ UMKIM_THIN_TRUSTED_MANAGEMENT_CIDRS=172.16.10.0/24
 UMKIM_THIN_TRUSTED_MANAGEMENT_EXCLUDE_CIDRS=172.16.10.1/32
 UMKIM_THIN_WG_SUBNET=192.168.168.0/24
 ```
+
+`install.sh --trust-lan` fills the management CIDRs with the host's directly
+attached private IPv4 subnets and adds the default gateway to the exclude
+list. The management switch itself defaults off; enabling it without CIDRs is
+a configuration error the installer avoids.
 
 The exclude list is important when the public ingress/router masquerades
 traffic to an address inside the management CIDR: without it, public requests
