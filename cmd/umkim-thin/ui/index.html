@@ -690,6 +690,30 @@
   </div>
 </dialog>
 
+<dialog id="platform-dialog" class="modal" aria-labelledby="platform-dialog-title">
+  <form method="dialog" class="modal-head">
+    <h3 id="platform-dialog-title">Platform</h3>
+    <button value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="modal-body">
+    <p id="platform-summary" class="muted"></p>
+    <p id="platform-versions" class="hint"></p>
+    <p class="row" style="margin:.6rem 0 0">
+      <button type="button" id="platform-check-now">Check now</button>
+      <a id="platform-release-link" href="#" target="_blank" rel="noopener" hidden>release notes</a>
+    </p>
+    <p id="platform-check-status" class="hint" role="status" aria-live="polite"></p>
+    <div style="border:1px solid var(--line);border-radius:.6rem;padding:.8rem;margin-top:.8rem">
+      <h4 style="margin:.1rem 0 .5rem">How to check and update the platform</h4>
+      <p class="hint">The console reports the release and links to its notes; it does not update itself. Application upgrades are separate, under <strong>Applications</strong>.</p>
+      <p><strong>Check:</strong> this panel and <code>GET /api/version</code>; the check runs in the background and is cached for six hours. <strong>Check now</strong> runs it immediately.</p>
+      <p><strong>Single node:</strong><br><code>git pull &amp;&amp; sudo ./install.sh --reuse-k3s</code></p>
+      <p><strong>HA / provisioned cluster:</strong><br><code>git pull &amp;&amp; PROVISION_ENV=deploy/provision-ha.env ./deploy/provision.sh</code><br><span class="hint">On the jumphost, prefix the provisioner command with <code>CI_ON_JUMP=1</code>.</span></p>
+      <p class="hint">Take a backup first (<code>sudo ./install.sh --backup</code> or a platform backup on the Backups tab). Turn the check off for an air-gapped install with <code>UMKIM_THIN_UPDATE_CHECK=false</code>.</p>
+    </div>
+  </div>
+</dialog>
+
 <script>
 const CFG = { zone: '', portalHost: '', configClass: 'local-path', mediaClass: 'umkim-thin-nfs', mediaAccessMode: 'ReadWriteMany', storageClasses: [], storageClassInfo: [] };
 const ENTRIES = {};
@@ -980,11 +1004,14 @@ async function loadConfig() {
     Object.assign(CFG, await (await fetch('/api/config')).json());
   } catch (_) {}
   const links = [];
+  links.push('<a href="#" id="platform-info">check/update</a>');
   if (CFG.homeUrl) links.push(`<a href="${esc(CFG.homeUrl)}" target="_blank" rel="noopener">home</a>`);
   if (CFG.portalHost) links.push(`<a href="https://${esc(CFG.portalHost)}" target="_blank" rel="noopener">portal</a>`);
   links.push(`<a href="${esc(location.origin)}" target="_blank" rel="noopener">console</a>`);
   const el = document.getElementById('platform-links');
   if (el) el.innerHTML = 'Platform: ' + links.join(' · ');
+  const platformInfo = document.getElementById('platform-info');
+  if (platformInfo) platformInfo.onclick = (e) => { e.preventDefault(); openPlatformDialog(); };
 
   // The household home page is a separate host; without it (an install that
   // predates it, or an unknown host) the card and the top-bar link stay hidden.
@@ -997,28 +1024,100 @@ async function loadConfig() {
   }
   if (CFG.version) {
     const sub = document.getElementById('brand-sub');
-    if (sub) sub.textContent = `Self-hosted app platform · v${CFG.version}`;
+    if (sub) sub.textContent = `Self-hosted app platform · ${versionLabel(CFG.version)}`;
+  }
+}
+
+// Platform release label. A local build is dev+<sha>; a release is vX.Y.Z.
+function versionLabel(v) {
+  if (!v) return 'unknown';
+  const s = String(v);
+  if (s === 'dev' || s.startsWith('dev+') || s.startsWith('v')) return s;
+  return 'v' + s;
+}
+
+let platformStatus = null;
+
+function renderVersionChip(v) {
+  const el = document.getElementById('update-chip');
+  if (!el) return;
+  if (!v || !v.available || !v.latest) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = `<a class="chip warn" href="#" id="update-chip-link"` +
+    ` title="Platform update available">update ${esc(versionLabel(v.latest))}</a>`;
+  const link = document.getElementById('update-chip-link');
+  if (link) link.onclick = (e) => { e.preventDefault(); openPlatformDialog(); };
+}
+
+function renderPlatform(v) {
+  platformStatus = v;
+  renderVersionChip(v);
+  const running = versionLabel((v && v.current) || CFG.version);
+  const latest = v && v.latest ? versionLabel(v.latest) : '';
+  const summary = document.getElementById('platform-summary');
+  if (summary) {
+    summary.textContent = v && v.available && latest
+      ? `A newer platform release is available: ${running} → ${latest}.`
+      : `Running platform ${running}.`;
+  }
+  const details = document.getElementById('platform-versions');
+  if (details) {
+    const bits = [];
+    if (v && v.checkedAt) bits.push(`checked ${new Date(v.checkedAt).toLocaleString()}`);
+    if (v && v.enabled === false && v.error) bits.push(v.error);
+    if (!bits.length) bits.push('the background check has not returned yet');
+    details.textContent = bits.join(' · ');
+  }
+  const link = document.getElementById('platform-release-link');
+  if (link) {
+    if (v && v.url) { link.href = v.url; link.hidden = false; } else { link.hidden = true; }
+  }
+  const status = document.getElementById('platform-check-status');
+  if (status && v && v.available && latest) {
+    status.textContent = `Latest published release: ${latest}.`;
   }
 }
 
 // The update check is read-only and runs in the background on the server, so
 // this never blocks: it renders the last answer, or nothing while unknown.
 async function loadVersion() {
-  const el = document.getElementById('update-chip');
-  if (!el) return;
   try {
-    const v = await (await fetch('/api/version')).json();
-    if (v.available && v.latest) {
-      const url = v.url || 'https://github.com/rborso/umkim-thin/releases';
-      const checked = v.checkedAt ? new Date(v.checkedAt).toLocaleString() : 'unknown';
-      el.innerHTML = `<a class="chip warn" href="${esc(url)}" target="_blank" rel="noopener"` +
-        ` title="Checked ${esc(checked)}. Upgrade from the host: sudo ./install.sh --reuse-k3s">` +
-        `update ${esc(v.latest)}</a>`;
-    } else {
-      el.innerHTML = '';
-    }
+    renderPlatform(await (await fetch('/api/version')).json());
   } catch (_) {
-    el.innerHTML = '';
+    renderPlatform(null);
+  }
+}
+
+async function openPlatformDialog() {
+  const dialog = document.getElementById('platform-dialog');
+  renderPlatform(platformStatus);
+  if (!dialog) return;
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+  loadVersion();
+}
+
+async function checkPlatformNow() {
+  const button = document.getElementById('platform-check-now');
+  const status = document.getElementById('platform-check-status');
+  if (button) button.disabled = true;
+  if (status) status.textContent = 'Checking the release metadata…';
+  try {
+    const v = await (await fetch('/api/version/check', {
+      method: 'POST', credentials: 'same-origin',
+    })).json();
+    renderPlatform(v);
+    if (status) {
+      status.textContent = v && v.available
+        ? `Update ${versionLabel(v.latest)} is available.`
+        : `No newer release. Running ${versionLabel((v && v.current) || CFG.version)}.`;
+    }
+  } catch (err) {
+    if (status) status.textContent = 'Check failed: ' + String(err.message || err);
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -3152,6 +3251,7 @@ document.getElementById('indexer-back').onclick = () => {
 document.getElementById('indexer-submit').onclick = submitIndexer;
 document.getElementById('profile-add').onclick = addProfile;
 document.getElementById('upgrade-cancel').onclick = () => document.getElementById('upgrade-dialog').close();
+document.getElementById('platform-check-now').onclick = checkPlatformNow;
 document.getElementById('upgrade-start').onclick = startUpgrade;
 document.getElementById('upgrade-backup-now').onclick = backupBeforeUpgrade;
 document.getElementById('backup-now').onclick = createBackup;

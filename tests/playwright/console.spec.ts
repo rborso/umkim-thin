@@ -85,6 +85,26 @@ test.describe('console', () => {
       timeout: 15_000,
     });
 
+    // The Platform panel must be reachable even when no update is available,
+    // and it must explain the host-side check/update path.
+    await page.locator('#platform-info').click();
+    await expect(page.getByRole('heading', { name: 'Platform' })).toBeVisible();
+    await expect(page.locator('#platform-dialog')).toContainText(
+      'How to check and update the platform',
+    );
+    await expect(page.locator('#platform-dialog')).toContainText('install.sh --reuse-k3s');
+    await expect(page.locator('#platform-dialog')).toContainText('provision-ha.env');
+    const versionCheck = await page.evaluate(async () => {
+      const r = await fetch('/api/version/check', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(versionCheck.status, 'console /api/version/check').toBe(200);
+    expect(versionCheck.body, 'version check body').toHaveProperty('enabled');
+    await page.locator('#platform-dialog button[value="close"]').click();
+
     // The Catalog table must show both the application licence and the chart
     // licence. SparkyFitness is the deliberate non-commercial entry, so it is
     // the useful canary for the warning text as well.

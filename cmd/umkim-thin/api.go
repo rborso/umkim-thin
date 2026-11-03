@@ -451,6 +451,13 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		})
 	})
 	mux.HandleFunc("GET /api/version", versionHandler(updates))
+	// Manual check for the console's Platform panel. It is read-only (one
+	// release-metadata request), serialized by the checker, and cached; the
+	// same-origin guard keeps a cross-site page from triggering it.
+	mutating(mux, "POST /api/version/check", func(w http.ResponseWriter, r *http.Request) {
+		_ = updates.Refresh(r.Context())
+		writeJSON(w, updates.Status())
+	})
 	mutating(mux, "POST /api/apps", func(w http.ResponseWriter, r *http.Request) {
 		var req installRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

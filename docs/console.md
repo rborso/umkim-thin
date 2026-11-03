@@ -81,7 +81,16 @@ The catalog and the version are baked into the console image, so a running
 console cannot know on its own that a newer release exists. `GET /api/version`
 answers that: the running version, the newest published release, whether it is
 newer, and the release page. When it is, the header shows an **update X.Y.Z**
-chip linking to the release notes.
+chip.
+
+The header also has a permanent **Platform: check/update** link (and the update
+chip opens the same panel). The panel shows the running version, the last check
+time, the release link and a **Check now** button (`POST /api/version/check`,
+same-origin, one release-metadata request). It spells out the host-side update:
+`git pull && sudo ./install.sh --reuse-k3s` on a single node, or
+`git pull && PROVISION_ENV=deploy/provision-ha.env ./deploy/provision.sh` for a
+provisioned/HA cluster (prefix `CI_ON_JUMP=1` on the jumphost). The console does
+not update itself; app upgrades stay under **Applications**.
 
 - The check reads the project's public release metadata
   (`https://api.github.com/repos/rborso/umkim-thin/releases/latest` by default)
@@ -96,10 +105,15 @@ chip linking to the release notes.
   network and a restart loop cannot hammer the endpoint.
 - A failure (no egress, rate limit, an unparsable tag) is not an error the
   operator has to clear: the last answer stays and the chip is simply absent.
-- A locally built image reports `dev`; the check stays off and
+- A locally built image reports `dev+<sha>`; the check stays off and
   `GET /api/version` carries the reason. `UMKIM_THIN_UPDATE_CHECK=false` turns
   it off on purpose (air-gapped installs); the Ansible default is
   `update_check: true`.
+- The platform version is exact. A git build is a release only when HEAD is on
+  a `v*` tag and the tracked tree is clean; otherwise it reports
+  `dev+<sha>` (never the previous tag). Source tarballs without `.git` read the
+  checked-in `VERSION` file; `UMKIM_THIN_VERSION` overrides both for a release
+  build. The same rule is used by `install.sh` and `deploy/provision.sh`.
 
 Application updates are separate: **Applications** compares each installed
 chart with the catalog in this image and shows **Upgrade to X** when the
@@ -443,6 +457,7 @@ to poll; a long install or upgrade blocks the terminal instead.
 | GET | `/api/catalog` | catalog entries, including chart/application licences and upstream links |
 | GET | `/api/config` | zone, portal, `homeUrl`, running `version`, default classes and `mediaAccessMode` |
 | GET | `/api/version` | running version, newest published release, `available`, release URL and the last check time |
+| POST | `/api/version/check` | run the release check now (same-origin, read-only) and return the same status |
 | GET | `/api/backups` | schedule, targets (with free space), retention and the archives with their manifests |
 | GET | `/api/backups/scope` | the apps and volumes a selective backup can include |
 | PUT | `/api/backups/schedule` | `{enabled,interval,keep,dataMode,target}` (`dataMode`: off, snapshot, auto, copy; `target`: a path from GET); saves the schedule and applies it without a restart |

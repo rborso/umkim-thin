@@ -13,9 +13,12 @@
 2. Take a VM snapshot if you can. Application data lives in PVCs (see
    [Backup](06-backup.md)).
 3. The console's header shows an **update X.Y.Z** chip when a newer release is
-   published; it links to that release's notes. It only reports — the upgrade is
-   still the run below. (It is read-only and cached; see
-   [`../console.md`](../console.md#update-check) to turn it off.)
+   published, and the **Platform: check/update** link opens the Platform panel.
+   The panel shows the running version, the last check time, a **Check now**
+   button, the release notes and the exact host-side update commands. It only
+   reports — the upgrade is still the run below. (It is read-only and cached;
+   see [`../console.md`](../console.md#update-check) to turn it off. A local
+   `dev+<sha>` build has the check off.)
 4. Read the release notes for breaking changes
    ([`../releases/`](../releases/)). App charts and the platform charts version
    independently.
