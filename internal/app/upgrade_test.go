@@ -68,7 +68,9 @@ func TestBackupIntervalParsing(t *testing.T) {
 		{"off", 0},
 		{"", 0},
 		{"disabled", 0},
-		{"nonsense", 24 * time.Hour}, // a typo must not silently stop backups
+		{"false", 0},
+		{"no", 0},
+		{"nonsense", 0}, // a typo must not silently turn backups on
 	}
 	for _, c := range cases {
 		if got := duration(c.in); got != c.want {

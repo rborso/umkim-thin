@@ -1737,17 +1737,17 @@ func env(key, def string) string {
 	return def
 }
 
-// duration parses a Go duration; "0", "off" and "" disable the schedule. An
-// unparsable value falls back to the default so a typo cannot silently stop
-// backups.
+// duration parses a Go duration; "0", "off", "false" and "" disable the
+// schedule. An unparsable value also disables it: a typo (or an unquoted YAML
+// `off`, which arrives as "False") must not silently turn backups on.
 func duration(s string) time.Duration {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", "off", "none", "disabled":
+	case "", "off", "none", "disabled", "false", "no", "0":
 		return 0
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return 24 * time.Hour
+		return 0
 	}
 	return d
 }

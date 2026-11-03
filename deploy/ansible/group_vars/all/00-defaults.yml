@@ -49,8 +49,9 @@ vpn_dns_ip: 10.43.200.53
 # Console backups: one archive per run (state, seed, app inventory) plus a
 # storage snapshot per application PVC. "0" or "off" disables the schedule.
 backup_keep: 7
-# Automatic backups are opt-in; manual backups work regardless.
-backup_interval: off
+# Automatic backups are opt-in; manual backups work regardless. Quote "off":
+# unquoted YAML off is boolean false, which the console would reject.
+backup_interval: "off"
 backup_snapshots: true
 # The console's read-only release check (the update banner). Set false for an
 # air-gapped install with no egress.
