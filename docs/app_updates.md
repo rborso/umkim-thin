@@ -41,6 +41,21 @@ image works against 10.x and 12.x. The upgrade is still a one-way database
 migration for an existing 10.x configuration, so a data backup is mandatory
 before the first start.
 
+## Release verification (v0.3.0)
+
+Run from the agent host with `CI_ON_JUMP=1`:
+
+| Target | Command | Result |
+|---|---|---|
+| dev-single VPS | `SKIP_RESET=1 PROVISION_ENV=deploy/provision-dev-single.env ./ci/extended.sh single --skip-faults` | `EXTENDED RUN PASSED`; gate 67/67, gating journeys 27 passed / 1 skipped, console Servarr bootstrap, download check, VPN, backup/restore |
+| ha-dev lab | `./ci/extended.sh ha --skip-faults` | `EXTENDED RUN PASSED`; gate 67/67, gating journeys 26 passed / 1 flaky / 1 skipped, console Servarr bootstrap, download check, VPN, backup/restore |
+
+The VM-fault suite is a separate stress run. It passed the VIP power-off and
+the graceful/hard node reboots; a simultaneous graceful full-cluster stop can
+still leave a Longhorn volume faulted because `auto-salvage` is deliberately
+off. That is the documented safety trade-off: inspect and salvage (or restore
+from backup) rather than letting Longhorn pick a replica automatically.
+
 ## Summary (pre-upgrade audit)
 
 - Every catalogued app is installed, every Helm release is `deployed`, and every
