@@ -27,7 +27,7 @@ each catalog `versions` block for rollback.
 | Servarr | 0.3.2 | Jellyfin 12.4, Radarr 6.4.4, Sonarr 4.0.20.3014, Prowlarr 2.7.0.5723, qBittorrent 5.3.0 |
 | SparkyFitness | 0.1.1 | 1.11.0 |
 | WireGuard gateway | 0.1.8 | Alpine 3.24.3 |
-| Identity | 0.1.10 | Valkey 9.1.3; LLDAP stays pinned at v0.6.3 |
+| Identity | 0.1.11 | Valkey 9.1.3; LLDAP stays pinned at v0.6.3; Authelia theme defaults dark |
 
 Jellyfin 12 was verified against the v12.4 source: `Startup/Configuration`,
 `Startup/User`, `Startup/RemoteAccess`, `Startup/Complete`,

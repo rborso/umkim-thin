@@ -122,15 +122,16 @@ func compact(in []string) []string {
 
 // Config is the store's kubectl/helm context.
 type Config struct {
-	Kubectl        string
-	Kubeconfig     string
-	TraefikNS      string
-	Helm           string
-	IdentityNS     string
-	IdentityChart  string
-	IdentityValues string
-	IdentityApps   string
-	IdentityCerts  string
+	Kubectl          string
+	Kubeconfig       string
+	TraefikNS        string
+	Helm             string
+	IdentityNS       string
+	IdentityChart    string
+	IdentityValues   string
+	IdentityApps     string
+	IdentityCerts    string
+	IdentitySettings string
 }
 
 // Store manages TLS Secrets and the default-certificate values.
@@ -269,8 +270,12 @@ func (s *Store) writeDefaultValues(name string) error {
 	args := []string{"upgrade", "--install", "identity", s.cfg.IdentityChart,
 		"--namespace", s.cfg.IdentityNS, "--kubeconfig", s.cfg.Kubeconfig,
 		"--values", s.cfg.IdentityValues}
-	if _, err := os.Stat(s.cfg.IdentityApps); err == nil {
-		args = append(args, "--values", s.cfg.IdentityApps)
+	for _, p := range []string{s.cfg.IdentityApps, s.cfg.IdentitySettings} {
+		if p != "" {
+			if _, err := os.Stat(p); err == nil {
+				args = append(args, "--values", p)
+			}
+		}
 	}
 	args = append(args, "--values", s.cfg.IdentityCerts, "--wait", "--timeout", "10m")
 	_, err = s.run(s.cfg.Helm, args...)

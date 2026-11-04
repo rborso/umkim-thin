@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +20,46 @@ const (
 	DataCopy     = "copy"     // always file-copy the volume contents
 )
 
+// Compression presets. "none" still uses the gzip container (so the .tar.gz
+// name and restore path stay the same) but stores the tar uncompressed.
+const (
+	CompressionNone    = "none"
+	CompressionFastest = "fastest"
+	CompressionDefault = "default"
+	CompressionBest    = "best"
+)
+
+// NormalizeCompression maps a stored/UI value to a preset. Unknown or empty
+// values use the default, which is also the behavior of schedules written
+// before compression existed.
+func NormalizeCompression(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case CompressionNone:
+		return CompressionNone
+	case CompressionFastest:
+		return CompressionFastest
+	case CompressionBest:
+		return CompressionBest
+	default:
+		return CompressionDefault
+	}
+}
+
+// CompressionLevel returns the gzip level for a preset. Fastest is the least
+// CPU and largest file; best is the most CPU and smallest.
+func CompressionLevel(preset string) int {
+	switch NormalizeCompression(preset) {
+	case CompressionNone:
+		return gzip.NoCompression
+	case CompressionFastest:
+		return gzip.BestSpeed
+	case CompressionBest:
+		return gzip.BestCompression
+	default:
+		return gzip.DefaultCompression
+	}
+}
+
 // Schedule is the automatic-backup configuration the console edits. It lives
 // on the console PVC (state/backup-schedule.json) so a restart keeps it; the
 // installer's environment variables are only the initial default.
@@ -33,6 +74,9 @@ type Schedule struct {
 	// Target is the archive directory (a Target.Path). Empty means the
 	// console's own PVC directory.
 	Target string `json:"target,omitempty"`
+	// Compression is "none", "fastest", "default" or "best". Empty means the
+	// default, so schedules written before this option keep working.
+	Compression string `json:"compression,omitempty"`
 }
 
 // Mode returns the effective data-backup mode, migrating a schedule written
@@ -52,7 +96,13 @@ func (s Schedule) Mode() string {
 func (s Schedule) normalized() Schedule {
 	s.DataMode = s.Mode()
 	s.Snapshots = s.DataMode != DataOff
+	s.Compression = NormalizeCompression(s.Compression)
 	return s
+}
+
+// CompressionPreset returns the effective compression preset.
+func (s Schedule) CompressionPreset() string {
+	return NormalizeCompression(s.Compression)
 }
 
 // Validate rejects a schedule the loop could not run. The interval only
@@ -66,6 +116,11 @@ func (s Schedule) Validate() error {
 	case "", DataOff, DataSnapshot, DataAuto, DataCopy:
 	default:
 		return fmt.Errorf("unknown data mode %q (use off, snapshot, auto or copy)", s.DataMode)
+	}
+	switch strings.ToLower(strings.TrimSpace(s.Compression)) {
+	case "", CompressionNone, CompressionFastest, CompressionDefault, CompressionBest:
+	default:
+		return fmt.Errorf("unknown compression %q (use none, fastest, default or best)", s.Compression)
 	}
 	if s.Target != "" {
 		if !filepath.IsAbs(s.Target) || filepath.Clean(s.Target) != s.Target {
@@ -149,7 +204,7 @@ type ScheduleStore struct {
 // NewScheduleStore loads the schedule from path, falling back to def when the
 // file is missing or invalid. An empty path keeps the store in memory.
 func NewScheduleStore(path string, def Schedule) *ScheduleStore {
-	st := &ScheduleStore{path: path, s: def, ch: make(chan struct{})}
+	st := &ScheduleStore{path: path, s: def.normalized(), ch: make(chan struct{})}
 	if path == "" {
 		return st
 	}
@@ -246,9 +301,9 @@ func (st *ScheduleStore) Reload() bool {
 
 // Policy returns the retention and snapshot switches every backup uses, manual
 // or scheduled. The console screen owns them, so a change applies immediately.
-func (st *ScheduleStore) Policy() (keep int, mode string) {
+func (st *ScheduleStore) Policy() (keep int, mode, compression string) {
 	s := st.Get()
-	return s.Keep, s.Mode()
+	return s.Keep, s.Mode(), s.CompressionPreset()
 }
 
 // RunSchedule takes automatic backups until ctx is cancelled. It waits from the

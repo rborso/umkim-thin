@@ -88,8 +88,11 @@ type Config struct {
 	Keep int
 	// Snapshots enables the CSI VolumeSnapshot half.
 	Snapshots bool
-	// Schedule, when set, supplies the live retention and snapshot switches the
-	// console edits; it overrides Keep and Snapshots.
+	// Compression is the installer default ("none", "fastest", "default",
+	// "best") when no schedule is present.
+	Compression string
+	// Schedule, when set, supplies the live retention, data and compression
+	// switches the console edits; it overrides Keep, Snapshots and Compression.
 	Schedule *ScheduleStore
 	// TargetRoot holds the extra targets the chart mounts (/backups/<name>).
 	TargetRoot string
@@ -178,6 +181,8 @@ type SnapshotRecord struct {
 	PVC       string `json:"pvc"`
 	Snapshot  string `json:"snapshot,omitempty"`
 	Class     string `json:"class,omitempty"`
+	// SizeBytes is the CSI driver's reported restore size when it publishes one.
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
 	// Ready is set when the snapshot reached readyToUse before the backup
 	// finished; only those are counted in the archive summary.
 	Ready bool   `json:"ready,omitempty"`
@@ -206,11 +211,14 @@ type Manifest struct {
 	Note    string    `json:"note,omitempty"`
 	// Kind is "data" or "platform"; empty means data (archives written before
 	// the two kinds were separated).
-	Kind      string           `json:"kind,omitempty"`
-	Apps      []AppRecord      `json:"apps,omitempty"`
-	Snapshots []SnapshotRecord `json:"snapshots,omitempty"`
-	Data      []DataRecord     `json:"data,omitempty"`
-	Files     []FileRecord     `json:"files"`
+	Kind string `json:"kind,omitempty"`
+	// Compression records the preset used for the metadata archive and file
+	// copies; empty means default (older archives).
+	Compression string           `json:"compression,omitempty"`
+	Apps        []AppRecord      `json:"apps,omitempty"`
+	Snapshots   []SnapshotRecord `json:"snapshots,omitempty"`
+	Data        []DataRecord     `json:"data,omitempty"`
+	Files       []FileRecord     `json:"files"`
 	// Selection is set for a selective backup; nil means the archive covers
 	// every app and every application volume.
 	Selection *Selection `json:"selection,omitempty"`
@@ -220,20 +228,25 @@ type Manifest struct {
 
 // Archive is the list/verify view of one backup.
 type Archive struct {
-	Name      string    `json:"name"`
-	Size      int64     `json:"size"`
-	Created   time.Time `json:"created"`
-	Version   string    `json:"version,omitempty"`
-	Zone      string    `json:"zone,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	Kind      string    `json:"kind,omitempty"`
-	Apps      int       `json:"apps"`
-	Files     int       `json:"files"`
-	Snapshots int       `json:"snapshots"`
+	Name string `json:"name"`
+	// Size is the metadata archive file; TotalBytes is the whole backup:
+	// metadata + file copies + reported snapshot restore sizes.
+	Size        int64     `json:"size"`
+	TotalBytes  int64     `json:"totalBytes,omitempty"`
+	Created     time.Time `json:"created"`
+	Version     string    `json:"version,omitempty"`
+	Zone        string    `json:"zone,omitempty"`
+	Note        string    `json:"note,omitempty"`
+	Kind        string    `json:"kind,omitempty"`
+	Compression string    `json:"compression,omitempty"`
+	Apps        int       `json:"apps"`
+	Files       int       `json:"files"`
+	Snapshots   int       `json:"snapshots"`
 	// Data counts the volume file copies (when the storage cannot snapshot).
-	Data        int          `json:"data,omitempty"`
-	DataBytes   int64        `json:"dataBytes,omitempty"`
-	DataVolumes []DataRecord `json:"dataVolumes,omitempty"`
+	Data          int          `json:"data,omitempty"`
+	DataBytes     int64        `json:"dataBytes,omitempty"`
+	SnapshotBytes int64        `json:"snapshotBytes,omitempty"`
+	DataVolumes   []DataRecord `json:"dataVolumes,omitempty"`
 	// Partial marks a selective backup, with the selection that produced it.
 	Partial   bool       `json:"partial,omitempty"`
 	Selection *Selection `json:"selection,omitempty"`
@@ -300,6 +313,10 @@ func New(cfg Config) *Manager {
 	if cfg.TargetRoot == "" {
 		cfg.TargetRoot = "/backups"
 	}
+	if cfg.Compression == "" {
+		cfg.Compression = CompressionDefault
+	}
+	cfg.Compression = NormalizeCompression(cfg.Compression)
 	if cfg.SelfNamespace == "" {
 		if raw, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
 			cfg.SelfNamespace = strings.TrimSpace(string(raw))
@@ -331,18 +348,19 @@ func (m *Manager) Create(ctx context.Context, note string) (Archive, error) {
 	return m.CreateSelected(ctx, note, nil)
 }
 
-// policy returns the retention and data mode in force: the console schedule
-// when present, otherwise the installer's defaults.
-func (m *Manager) policy() (keep int, mode string) {
+// policy returns the retention, data mode and compression in force: the console
+// schedule when present, otherwise the installer's defaults.
+func (m *Manager) policy() (keep int, mode, compression string) {
 	keep = m.cfg.Keep
 	mode = DataOff
+	compression = NormalizeCompression(m.cfg.Compression)
 	if m.cfg.Snapshots {
 		mode = DataSnapshot
 	}
 	if m.cfg.Schedule != nil {
-		keep, mode = m.cfg.Schedule.Policy()
+		keep, mode, compression = m.cfg.Schedule.Policy()
 	}
-	return keep, mode
+	return keep, mode, compression
 }
 
 // CreateSelected builds one archive with the current policy. A nil selection
@@ -351,13 +369,13 @@ func (m *Manager) policy() (keep int, mode string) {
 // unknown names are an error, so a typo cannot silently produce an archive
 // that covers nothing.
 func (m *Manager) CreateSelected(ctx context.Context, note string, sel *Selection) (Archive, error) {
-	keep, mode := m.policy()
-	return m.createSelected(ctx, note, sel, keep, mode)
+	keep, mode, compression := m.policy()
+	return m.createSelected(ctx, note, sel, keep, mode, compression)
 }
 
 // createSelected is CreateSelected with an explicit policy, so a safety archive
 // can be metadata-only and must not prune anything.
-func (m *Manager) createSelected(ctx context.Context, note string, sel *Selection, keep int, mode string) (Archive, error) {
+func (m *Manager) createSelected(ctx context.Context, note string, sel *Selection, keep int, mode, compression string) (Archive, error) {
 	if sel != nil {
 		sel = cleanSelection(sel)
 		if sel.Empty() {
@@ -380,13 +398,14 @@ func (m *Manager) createSelected(ctx context.Context, note string, sel *Selectio
 	defer os.RemoveAll(staging)
 
 	mf := Manifest{
-		Schema:    Schema,
-		Created:   now,
-		Version:   m.cfg.Version,
-		Zone:      m.cfg.Zone,
-		Note:      note,
-		Kind:      KindData,
-		Selection: sel,
+		Schema:      Schema,
+		Created:     now,
+		Version:     m.cfg.Version,
+		Zone:        m.cfg.Zone,
+		Note:        note,
+		Kind:        KindData,
+		Compression: NormalizeCompression(compression),
+		Selection:   sel,
 	}
 
 	if err := m.stageTree(staging, "state", m.cfg.StateDir, stateSkipDirs, &mf); err != nil {
@@ -417,7 +436,7 @@ func (m *Manager) createSelected(ctx context.Context, note string, sel *Selectio
 		}
 	}
 
-	snaps, data, warns, err := m.backupVolumes(ctx, now, sel, mode, strings.TrimSuffix(name, ".tar.gz"))
+	snaps, data, warns, err := m.backupVolumes(ctx, now, sel, mode, compression, strings.TrimSuffix(name, ".tar.gz"))
 	if err != nil {
 		return Archive{}, err
 	}
@@ -443,7 +462,7 @@ func (m *Manager) createSelected(ctx context.Context, note string, sel *Selectio
 		return Archive{}, err
 	}
 	target := filepath.Join(dir, name)
-	if err := writeArchive(target, staging); err != nil {
+	if err := writeArchive(target, staging, CompressionLevel(compression)); err != nil {
 		os.Remove(target)
 		return Archive{}, err
 	}
@@ -674,13 +693,18 @@ func splitChart(s string) (string, string) {
 	return s[:i], s[i+1:]
 }
 
-func writeArchive(target, staging string) error {
+func writeArchive(target, staging string, level int) error {
 	tmp := target + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	gz := gzip.NewWriter(f)
+	gz, err := gzip.NewWriterLevel(f, level)
+	if err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
 	tw := tar.NewWriter(gz)
 	err = filepath.Walk(staging, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -990,7 +1014,7 @@ func (m *Manager) Restore(name string) (RestoreReport, error) {
 	defer f.Close()
 	// The safety archive is metadata only and does not prune: a restore must
 	// not spend hours copying every volume, nor delete the archive it protects.
-	safety, err := m.createSelected(context.Background(), "pre-restore of "+name, nil, 0, DataOff)
+	safety, err := m.createSelected(context.Background(), "pre-restore of "+name, nil, 0, DataOff, CompressionDefault)
 	if err != nil {
 		return RestoreReport{}, fmt.Errorf("safety backup before restore: %w", err)
 	}
@@ -1161,9 +1185,11 @@ func archiveFrom(name string, size int64, mf Manifest) Archive {
 	// Count the snapshots that were actually created: a failed apply is kept in
 	// the manifest for the operator, but it is not a snapshot.
 	ok := 0
+	var snapshotBytes int64
 	for _, s := range mf.Snapshots {
 		if s.Snapshot != "" && s.Ready && s.Error == "" {
 			ok++
+			snapshotBytes += s.SizeBytes
 		}
 	}
 	// File copies are counted the same way: a record with an error is a gap.
@@ -1182,11 +1208,16 @@ func archiveFrom(name string, size int64, mf Manifest) Archive {
 	if kind == "" {
 		kind = KindData
 	}
+	compression := NormalizeCompression(mf.Compression)
+	if mf.Compression == "" {
+		compression = ""
+	}
 	return Archive{
-		Name: name, Size: size, Created: mf.Created, Version: mf.Version,
-		Zone: mf.Zone, Note: mf.Note, Kind: kind, Apps: len(mf.Apps), Files: len(mf.Files),
-		Snapshots: ok, Data: data, DataBytes: dataBytes, DataVolumes: dataVolumes,
-		Partial: mf.Selection != nil, Selection: mf.Selection,
+		Name: name, Size: size, TotalBytes: size + dataBytes + snapshotBytes,
+		Created: mf.Created, Version: mf.Version, Zone: mf.Zone, Note: mf.Note,
+		Kind: kind, Compression: compression, Apps: len(mf.Apps), Files: len(mf.Files),
+		Snapshots: ok, Data: data, DataBytes: dataBytes, SnapshotBytes: snapshotBytes,
+		DataVolumes: dataVolumes, Partial: mf.Selection != nil, Selection: mf.Selection,
 		Warnings: mf.Warnings,
 	}
 }

@@ -37,9 +37,12 @@ when it does not (the schedule's **Data** mode). **Backups** lists, downloads
 and restores them.
 
 To run a schedule, enable **Automatic backups** in the same screen (or run
-`umkim-thin backup schedule --interval 24h`), then set the interval, retention
-and data mode. Existing installs keep the schedule saved on their console PVC;
-the off default applies to new installs. See
+`umkim-thin backup schedule --interval 24h`), then set the interval, retention,
+data mode and compression. Existing installs keep the schedule saved on their
+console PVC; the off default applies to new installs. **New target** tests a
+directory below the node's backup root (or the shared NFS root on HA) with a
+create/write probe before it can be selected. The **Size** column is the whole
+backup: archive plus file copies plus reported snapshot sizes. See
 [`../backup.md`](../backup.md) for what is in an archive and what is not.
 
 **Platform backup** (same screen) is the other half: every Kubernetes object

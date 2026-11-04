@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -132,7 +133,7 @@ func (m *Manager) volumeNode(ns, pvc string) string {
 // copyVolume streams one PVC into <archiveBase>-data-<ns>-<pvc>.tar.gz. The
 // copy is crash-consistent: a running application may write during it, so a
 // consistent copy needs the app stopped or a storage snapshot.
-func (m *Manager) copyVolume(ctx context.Context, ns, pvc, archiveBase string) DataRecord {
+func (m *Manager) copyVolume(ctx context.Context, ns, pvc, compression, archiveBase string) DataRecord {
 	rec := DataRecord{Namespace: ns, PVC: pvc, Method: "copy"}
 	if m.cfg.HelperImage == "" {
 		rec.Error = "no helper image configured (set UMKIM_THIN_CONSOLE_IMAGE)"
@@ -188,11 +189,24 @@ func (m *Manager) copyVolume(ctx context.Context, ns, pvc, archiveBase string) D
 		return rec
 	}
 	h := sha256.New()
-	err = m.cfg.RunStream(ctx, m.cfg.Kubectl, io.MultiWriter(f, h),
+	level := CompressionLevel(compression)
+	gz, err := gzip.NewWriterLevel(io.MultiWriter(f, h), level)
+	if err != nil {
+		f.Close()
+		os.Remove(tmp)
+		rec.Error = "compressing the volume copy: " + shortErr(err)
+		return rec
+	}
+	err = m.cfg.RunStream(ctx, m.cfg.Kubectl, gz,
 		"--kubeconfig", m.cfg.Kubeconfig, "--request-timeout=3600s", "-n", ns, "exec", name, "-c", "copy",
-		"--", "tar", "czf", "-", "-C", "/data", ".")
-	if cerr := f.Close(); err == nil {
-		err = cerr
+		"--", "tar", "cf", "-", "-C", "/data", ".")
+	gzErr := gz.Close()
+	fErr := f.Close()
+	if err == nil {
+		err = gzErr
+	}
+	if err == nil {
+		err = fErr
 	}
 	if err != nil {
 		os.Remove(tmp)

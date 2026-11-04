@@ -142,16 +142,14 @@ Validation:
   tarball in the mirror (and in the catalog `versions`) so an upgrade and a
   rollback work offline.
 - The console prefers `chart-mirror/<name>-<version>.tgz`; if it is absent,
-  use the OCI ref/version. This is already the shape of `chartRef` in
-  `internal/app/app.go`; it only needs the selected version.
-- **Fix the OCI fallback before relying on it:** the current `chartRef` returns
-  the OCI ref but `Installer.Install` does not pass `--version`, so an absent
-  mirror tarball would pull the newest chart. Every `helm` invocation must
-  carry the selected `--version` (or the tarball must be present).
-- The catalog itself is baked into the console image
-  (`/opt/umkim-thin/catalog`). A version-index change is a **console image
-  rebuild**, not only a chart bump; build the console image locally and keep
-  the installer's pinned tag in step.
+  use the OCI ref/version. `Installer.Install` passes the selected
+  `--version` for an OCI chart, so a mirror miss cannot pull an unpinned chart.
+- The catalog itself can now be replaced at runtime (`/data/catalog` plus the
+  validated upload in the Catalog tab). A version-index change is **not** a
+  console image rebuild. The bundled `/opt/umkim-thin/catalog` is only the
+  fallback. See [`release-trains.md`](release-trains.md).
+- Chart versions can carry `minimumUmkimThinVersion`; a release console below
+  that version refuses the install before Helm runs.
 - Do not delete the N-1 tarball on the 30-day `find -mtime` rule. Retain
   catalogued versions explicitly; prune only versions no longer in any
   catalog.

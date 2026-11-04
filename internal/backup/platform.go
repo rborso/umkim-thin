@@ -77,10 +77,7 @@ func (m *Manager) CreatePlatform(ctx context.Context, note string) (Archive, err
 		return Archive{}, fmt.Errorf("backup directory: %w", err)
 	}
 	now := m.cfg.Now().UTC().Truncate(time.Second)
-	keep := m.cfg.Keep
-	if m.cfg.Schedule != nil {
-		keep, _ = m.cfg.Schedule.Policy()
-	}
+	keep, _, compression := m.policy()
 	name := uniqueArchiveName(dir, now, KindPlatform)
 	staging, err := os.MkdirTemp(dir, ".staging-")
 	if err != nil {
@@ -89,12 +86,13 @@ func (m *Manager) CreatePlatform(ctx context.Context, note string) (Archive, err
 	defer os.RemoveAll(staging)
 
 	mf := Manifest{
-		Schema:  Schema,
-		Created: now,
-		Version: m.cfg.Version,
-		Zone:    m.cfg.Zone,
-		Note:    note,
-		Kind:    KindPlatform,
+		Schema:      Schema,
+		Created:     now,
+		Version:     m.cfg.Version,
+		Zone:        m.cfg.Zone,
+		Note:        note,
+		Kind:        KindPlatform,
+		Compression: NormalizeCompression(compression),
 	}
 	if err := m.stageTree(staging, "state", m.cfg.StateDir, stateSkipDirs, &mf); err != nil {
 		return Archive{}, err
@@ -125,7 +123,7 @@ func (m *Manager) CreatePlatform(ctx context.Context, note string) (Archive, err
 			if !platformDataNamespaces[p.Namespace] {
 				continue
 			}
-			rec := m.copyVolume(ctx, p.Namespace, p.Name, base)
+			rec := m.copyVolume(ctx, p.Namespace, p.Name, compression, base)
 			mf.Data = append(mf.Data, rec)
 			if rec.Error != "" {
 				mf.Warnings = append(mf.Warnings, "copying "+p.Namespace+"/"+p.Name+": "+rec.Error)
@@ -150,7 +148,7 @@ func (m *Manager) CreatePlatform(ctx context.Context, note string) (Archive, err
 		return Archive{}, err
 	}
 	target := filepath.Join(dir, name)
-	if err := writeArchive(target, staging); err != nil {
+	if err := writeArchive(target, staging, CompressionLevel(compression)); err != nil {
 		os.Remove(target)
 		cleanupData()
 		return Archive{}, err

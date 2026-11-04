@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rborso/umkim-thin/internal/app"
@@ -35,7 +34,7 @@ func certCmd(args []string) error {
 		Kubectl: ac.Kubectl, Kubeconfig: ac.Kubeconfig, TraefikNS: ac.TraefikNS,
 		Helm: ac.Helm, IdentityNS: ac.IdentityNS, IdentityChart: ac.IdentityChart,
 		IdentityValues: ac.IdentityValues, IdentityApps: ac.IdentityApps,
-		IdentityCerts: filepath.Join(ac.StateDir, "identity-certs.yml"),
+		IdentityCerts: ac.IdentityCerts, IdentitySettings: ac.IdentitySettings,
 	}
 	store := cert.New(cfg)
 	switch args[0] {

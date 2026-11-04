@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -531,6 +532,45 @@ func TestCreateFollowsConfigMapSymlinks(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("seed/config.env is missing: %v", paths)
+	}
+}
+
+func TestSnapshotQuantityBytes(t *testing.T) {
+	cases := map[string]int64{
+		"":           0,
+		"0":          0,
+		"1073741824": 1073741824,
+		"1Ki":        1 << 10,
+		"1Mi":        1 << 20,
+		"2Gi":        2 << 30,
+		"1G":         1e9,
+		"1.5Gi":      int64(1.5 * (1 << 30)),
+		"bogus":      0,
+	}
+	for in, want := range cases {
+		if got := quantityBytes(in); got != want {
+			t.Errorf("quantityBytes(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestArchiveTotalIncludesCopiesAndSnapshots(t *testing.T) {
+	a := archiveFrom("x.tar.gz", 100, Manifest{
+		Compression: CompressionFastest,
+		Data:        []DataRecord{{File: "copy.tgz", Size: 50}},
+		Snapshots: []SnapshotRecord{
+			{Snapshot: "snap-1", Ready: true, SizeBytes: 25},
+			{Snapshot: "snap-2", SizeBytes: 999}, // not ready: not part of the backup
+		},
+	})
+	if a.TotalBytes != 175 {
+		t.Fatalf("TotalBytes = %d, want 175", a.TotalBytes)
+	}
+	if a.SnapshotBytes != 25 {
+		t.Fatalf("SnapshotBytes = %d, want 25", a.SnapshotBytes)
+	}
+	if a.Compression != CompressionFastest {
+		t.Fatalf("Compression = %q, want fastest", a.Compression)
 	}
 }
 
@@ -1122,8 +1162,13 @@ func TestRestoreVolumesExtractsTheCopy(t *testing.T) {
 	if len(vols) != 1 || !vols[0].Restored || vols[0].PVC != "gitea-data" {
 		t.Fatalf("volumes = %+v", vols)
 	}
-	if string(f.restored) != "volume-data" {
-		t.Fatalf("restore streamed %q, want the sidecar contents", f.restored)
+	zr, err := gzip.NewReader(bytes.NewReader(f.restored))
+	if err != nil {
+		t.Fatalf("restore stream is not gzip: %v", err)
+	}
+	raw, err := io.ReadAll(zr)
+	if err != nil || string(raw) != "volume-data" {
+		t.Fatalf("restore streamed %q, %v; want the sidecar contents", raw, err)
 	}
 }
 

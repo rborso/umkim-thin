@@ -1,3 +1,6 @@
+{{- if and .Values.ha .Values.backupRoot.hostPath }}
+{{- fail "backupRoot.hostPath is node-local; set backupRoot.nfs (or a shared RWX PVC) for an HA install" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -84,6 +87,8 @@ spec:
             # The console's home-page shortcut. Derived here (not in the
             # config.env) so a custom homeHost reaches the UI too.
             - { name: UMKIM_THIN_HOME_HOST, value: {{ include "umkim-thin.homeHost" . | quote }} }
+            - { name: UMKIM_THIN_HA, value: {{ .Values.ha | default false | quote }} }
+            - { name: UMKIM_THIN_BACKUP_ROOT_SHARED, value: {{ if or .Values.backupRoot.nfs .Values.backupRoot.pvc }}"true"{{ else }}"false"{{ end }} }
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -132,6 +137,9 @@ spec:
             {{- if .Values.storageSocket }}
             - { name: storage-socket, mountPath: /run/umkim-thin }
             {{- end }}
+            {{- if .Values.backupRoot }}
+            - { name: backup-root, mountPath: /backups }
+            {{- end }}
             {{- range .Values.backupTargets }}
             - { name: backup-{{ .name }}, mountPath: /backups/{{ .name }} }
             {{- end }}
@@ -143,6 +151,23 @@ spec:
           hostPath:
             path: {{ .Values.storageSocket | quote }}
             type: DirectoryOrCreate
+        {{- end }}
+        {{- with .Values.backupRoot }}
+        - name: backup-root
+          {{- if .nfs }}
+          nfs:
+            server: {{ .nfs.server | quote }}
+            path: {{ .nfs.path | quote }}
+          {{- else if .pvc }}
+          persistentVolumeClaim:
+            claimName: {{ .pvc.claimName | quote }}
+          {{- else if .hostPath }}
+          hostPath:
+            path: {{ .hostPath.path | quote }}
+            type: Directory
+          {{- else }}
+          {{- fail "backupRoot needs nfs, pvc or hostPath" }}
+          {{- end }}
         {{- end }}
         {{- range .Values.backupTargets }}
         - name: backup-{{ .name }}

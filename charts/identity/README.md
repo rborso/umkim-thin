@@ -33,3 +33,8 @@ The chart refuses to render without `lldap.baseDN`, `lldap.adminPassword`,
 `lldap.jwtSecret`, an Authelia portal host and the console endpoint used for
 invite redemption. The installer renders those values from the cluster's site
 variables; do not hand-write secrets into a values file in Git.
+
+`authelia.theme` is `dark` by default; the supported values are `dark`,
+`light`, `grey` and `auto`. The console stores its choice in the separate
+`identity-settings.yml` and passes it as the last values layer, so it does not
+touch the installer-owned `identity-values.yml`.

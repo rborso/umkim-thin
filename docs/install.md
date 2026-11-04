@@ -748,8 +748,10 @@ debugging or embedding the steps in your own automation.
 | Path | What it is |
 |---|---|
 | `state_dir/secrets.yml` | LLDAP/Authelia/console secrets, generated once, mode 0600 |
-| `state_dir/identity-values.yml` | the rendered identity chart values |
+| `state_dir/identity-values.yml` | the rendered identity chart values (installer-owned) |
 | `state_dir/identity-apps.yml` | OIDC clients and public-path rules contributed by apps |
+| `state_dir/identity-certs.yml` | the console-owned default-certificate override |
+| `state_dir/identity-settings.yml` | the console-owned Authelia login theme (`dark` default) |
 | `state_dir/apps-state.json` | OIDC client secrets/state for re-installs |
 | `state_dir/apps/<app>-values.yaml` | the last rendered values for each app |
 | `state_dir/invites.json` | invitation tokens (the console writes it) |

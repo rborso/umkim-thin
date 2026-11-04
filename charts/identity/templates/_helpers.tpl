@@ -138,7 +138,7 @@ if (!token) { msg.className='msg err'; msg.textContent='This link is missing its
 {{- define "identity.autheliaConfig" -}}
 {{- $ldapPass := .Values.authelia.ldapPassword | default .Values.lldap.adminPassword -}}
 {{- $publicURL := .Values.authelia.publicURL | default (printf "https://%s" .Values.authelia.portalHost) -}}
-theme: light
+theme: {{ .Values.authelia.theme | default "dark" | quote }}
 # Some virtualized and freshly booted nodes have no reliable clock yet;
 # Authelia's startup clock check would crash the pod in that window.
 ntp:

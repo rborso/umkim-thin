@@ -23,6 +23,7 @@ import (
 
 	"github.com/rborso/umkim-thin/internal/catalog"
 	"github.com/rborso/umkim-thin/internal/route"
+	"github.com/rborso/umkim-thin/internal/update"
 	"github.com/rborso/umkim-thin/internal/wg"
 	"gopkg.in/yaml.v3"
 )
@@ -30,36 +31,38 @@ import (
 // Config is everything the installer needs, normally from the environment so
 // the same binary works for the API (systemd) and the CLI.
 type Config struct {
-	Kubeconfig      string
-	ChartMirror     string
-	RemoteDir       string
-	Zone            string
-	Tenant          string
-	PortalHost      string
-	OIDCIssuer      string
-	ConfigClass     string
-	MediaClass      string
-	MediaAccessMode string
-	ServiceCIDR     string
-	PodCIDR         string
-	DNSServiceIP    string
-	Middleware      string
-	IdentityNS      string
-	IdentityChart   string
-	IdentityValues  string
-	IdentityApps    string
-	AppsState       string
-	OIDCHmacFile    string
-	OIDCKeyFile     string
-	TraefikNS       string
-	TraefikSvc      string
-	BindSecret      string
-	BaseDN          string
-	LLDAPHost       string
-	LLDAPPort       int
-	Helm            string
-	Kubectl         string
-	StateDir        string
+	Kubeconfig       string
+	ChartMirror      string
+	RemoteDir        string
+	Zone             string
+	Tenant           string
+	PortalHost       string
+	OIDCIssuer       string
+	ConfigClass      string
+	MediaClass       string
+	MediaAccessMode  string
+	ServiceCIDR      string
+	PodCIDR          string
+	DNSServiceIP     string
+	Middleware       string
+	IdentityNS       string
+	IdentityChart    string
+	IdentityValues   string
+	IdentityApps     string
+	IdentityCerts    string
+	IdentitySettings string
+	AppsState        string
+	OIDCHmacFile     string
+	OIDCKeyFile      string
+	TraefikNS        string
+	TraefikSvc       string
+	BindSecret       string
+	BaseDN           string
+	LLDAPHost        string
+	LLDAPPort        int
+	Helm             string
+	Kubectl          string
+	StateDir         string
 
 	// Trusted access. The feature is off by default; routes only get the
 	// management/VPN bypass paths when it is enabled and the catalog route opts
@@ -102,12 +105,17 @@ type Config struct {
 	// Backups. The console writes one archive per run (state, seed, app
 	// inventory) and asks the storage for a VolumeSnapshot per app PVC.
 	// Interval 0 disables the schedule; Keep 0 keeps every archive.
-	BackupDir       string
-	BackupSeedDir   string
-	BackupNFS       string
-	BackupKeep      int
-	BackupInterval  time.Duration
-	BackupSnapshots bool
+	BackupDir         string
+	BackupSeedDir     string
+	BackupNFS         string
+	BackupKeep        int
+	BackupInterval    time.Duration
+	BackupSnapshots   bool
+	BackupCompression string
+	// HA is true on a multi-node install. Together with BackupRootShared it
+	// makes the console refuse a node-local backup root for a new target.
+	HA               bool
+	BackupRootShared bool
 }
 
 // ConfigFile is read before the environment, so CLI use on the node does not
@@ -129,36 +137,38 @@ func ConfigFromEnv() Config {
 	// are configured, otherwise every app install fails the CIDR check.
 	trustedMgmtEnabled, _ := strconv.ParseBool(env("UMKIM_THIN_TRUSTED_MANAGEMENT_ENABLED", "false"))
 	return Config{
-		Kubeconfig:      env("UMKIM_THIN_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"),
-		ChartMirror:     env("UMKIM_THIN_CHART_MIRROR", remoteDir+"/chart-mirror"),
-		RemoteDir:       remoteDir,
-		Zone:            zone,
-		Tenant:          env("UMKIM_THIN_TENANT", "default-tenant"),
-		PortalHost:      portalHost,
-		OIDCIssuer:      env("UMKIM_THIN_OIDC_ISSUER", "https://"+portalHost),
-		ConfigClass:     env("UMKIM_THIN_STORAGE_CONFIG_CLASS", "local-path"),
-		MediaClass:      env("UMKIM_THIN_STORAGE_MEDIA_CLASS", "umkim-thin-nfs"),
-		MediaAccessMode: env("UMKIM_THIN_STORAGE_MEDIA_ACCESS_MODE", "ReadWriteMany"),
-		ServiceCIDR:     env("UMKIM_THIN_SERVICE_CIDR", "10.43.0.0/16"),
-		PodCIDR:         env("UMKIM_THIN_POD_CIDR", "10.42.0.0/16"),
-		DNSServiceIP:    env("UMKIM_THIN_DNS_IP", "10.43.0.10"),
-		Middleware:      env("UMKIM_THIN_MIDDLEWARE", "identity-authelia@file"),
-		IdentityNS:      env("UMKIM_THIN_IDENTITY_NAMESPACE", "identity"),
-		IdentityChart:   env("UMKIM_THIN_IDENTITY_CHART", remoteDir+"/charts/identity"),
-		IdentityValues:  env("UMKIM_THIN_IDENTITY_VALUES", stateDir+"/identity-values.yml"),
-		IdentityApps:    env("UMKIM_THIN_IDENTITY_APPS", stateDir+"/identity-apps.yml"),
-		AppsState:       env("UMKIM_THIN_APPS_STATE", stateDir+"/apps-state.json"),
-		OIDCHmacFile:    env("UMKIM_THIN_OIDC_HMAC", stateDir+"/authelia-oidc-hmac"),
-		OIDCKeyFile:     env("UMKIM_THIN_OIDC_KEY", stateDir+"/authelia-oidc-key.pem"),
-		TraefikNS:       env("UMKIM_THIN_TRAEFIK_NAMESPACE", "kube-system"),
-		TraefikSvc:      env("UMKIM_THIN_TRAEFIK_SERVICE", "traefik"),
-		BindSecret:      env("UMKIM_THIN_BIND_SECRET", "lldap-service-accounts"),
-		BaseDN:          env("UMKIM_THIN_BASE_DN", ""),
-		LLDAPHost:       env("UMKIM_THIN_LLDAP_HOST", "lldap.identity.svc.cluster.local"),
-		LLDAPPort:       atoi(env("UMKIM_THIN_LLDAP_PORT", "3890")),
-		Helm:            env("UMKIM_THIN_HELM", "/usr/local/bin/helm"),
-		Kubectl:         env("UMKIM_THIN_KUBECTL", "/usr/local/bin/kubectl"),
-		StateDir:        stateDir,
+		Kubeconfig:       env("UMKIM_THIN_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"),
+		ChartMirror:      env("UMKIM_THIN_CHART_MIRROR", remoteDir+"/chart-mirror"),
+		RemoteDir:        remoteDir,
+		Zone:             zone,
+		Tenant:           env("UMKIM_THIN_TENANT", "default-tenant"),
+		PortalHost:       portalHost,
+		OIDCIssuer:       env("UMKIM_THIN_OIDC_ISSUER", "https://"+portalHost),
+		ConfigClass:      env("UMKIM_THIN_STORAGE_CONFIG_CLASS", "local-path"),
+		MediaClass:       env("UMKIM_THIN_STORAGE_MEDIA_CLASS", "umkim-thin-nfs"),
+		MediaAccessMode:  env("UMKIM_THIN_STORAGE_MEDIA_ACCESS_MODE", "ReadWriteMany"),
+		ServiceCIDR:      env("UMKIM_THIN_SERVICE_CIDR", "10.43.0.0/16"),
+		PodCIDR:          env("UMKIM_THIN_POD_CIDR", "10.42.0.0/16"),
+		DNSServiceIP:     env("UMKIM_THIN_DNS_IP", "10.43.0.10"),
+		Middleware:       env("UMKIM_THIN_MIDDLEWARE", "identity-authelia@file"),
+		IdentityNS:       env("UMKIM_THIN_IDENTITY_NAMESPACE", "identity"),
+		IdentityChart:    env("UMKIM_THIN_IDENTITY_CHART", remoteDir+"/charts/identity"),
+		IdentityValues:   env("UMKIM_THIN_IDENTITY_VALUES", stateDir+"/identity-values.yml"),
+		IdentityApps:     env("UMKIM_THIN_IDENTITY_APPS", stateDir+"/identity-apps.yml"),
+		IdentityCerts:    env("UMKIM_THIN_IDENTITY_CERTS", stateDir+"/identity-certs.yml"),
+		IdentitySettings: env("UMKIM_THIN_IDENTITY_SETTINGS", stateDir+"/identity-settings.yml"),
+		AppsState:        env("UMKIM_THIN_APPS_STATE", stateDir+"/apps-state.json"),
+		OIDCHmacFile:     env("UMKIM_THIN_OIDC_HMAC", stateDir+"/authelia-oidc-hmac"),
+		OIDCKeyFile:      env("UMKIM_THIN_OIDC_KEY", stateDir+"/authelia-oidc-key.pem"),
+		TraefikNS:        env("UMKIM_THIN_TRAEFIK_NAMESPACE", "kube-system"),
+		TraefikSvc:       env("UMKIM_THIN_TRAEFIK_SERVICE", "traefik"),
+		BindSecret:       env("UMKIM_THIN_BIND_SECRET", "lldap-service-accounts"),
+		BaseDN:           env("UMKIM_THIN_BASE_DN", ""),
+		LLDAPHost:        env("UMKIM_THIN_LLDAP_HOST", "lldap.identity.svc.cluster.local"),
+		LLDAPPort:        atoi(env("UMKIM_THIN_LLDAP_PORT", "3890")),
+		Helm:             env("UMKIM_THIN_HELM", "/usr/local/bin/helm"),
+		Kubectl:          env("UMKIM_THIN_KUBECTL", "/usr/local/bin/kubectl"),
+		StateDir:         stateDir,
 
 		TrustedAccessEnabled:          trustedEnabled,
 		TrustedManagementEnabled:      trustedMgmtEnabled,
@@ -188,8 +198,11 @@ func ConfigFromEnv() Config {
 		BackupKeep:    atoi(env("UMKIM_THIN_BACKUP_KEEP", "7")),
 		// Automatic backups are opt-in. Manual backups and the Backups screen
 		// work without this; set 24h (or another duration) to enable a schedule.
-		BackupInterval:  duration(env("UMKIM_THIN_BACKUP_INTERVAL", "off")),
-		BackupSnapshots: boolEnv("UMKIM_THIN_BACKUP_SNAPSHOTS", true),
+		BackupInterval:    duration(env("UMKIM_THIN_BACKUP_INTERVAL", "off")),
+		BackupSnapshots:   boolEnv("UMKIM_THIN_BACKUP_SNAPSHOTS", true),
+		BackupCompression: env("UMKIM_THIN_BACKUP_COMPRESSION", "default"),
+		HA:                boolEnv("UMKIM_THIN_HA", false),
+		BackupRootShared:  boolEnv("UMKIM_THIN_BACKUP_ROOT_SHARED", false),
 	}
 }
 
@@ -722,6 +735,9 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 			return Result{}, fmt.Errorf("%s: chart version %s is not available", e.Name, opts.ChartVersion)
 		}
 		e.Chart.Version = opts.ChartVersion
+	}
+	if err := in.checkMinimumVersion(e); err != nil {
+		return Result{}, err
 	}
 	if opts.Upgrade && opts.ChartVersion == "" {
 		return Result{}, fmt.Errorf("%s: an upgrade needs an explicit --to chart version", e.Name)
@@ -1647,6 +1663,27 @@ func copyStorageClasses(old, current any) {
 			copyStorageClasses(oldValue, newValue)
 		}
 	}
+}
+
+// checkMinimumVersion enforces the catalog's platform compatibility gate. A
+// dev/unknown build is allowed (it cannot prove a release), but a release
+// older than the chart's minimum is refused before Helm touches the cluster.
+func (in *Installer) checkMinimumVersion(e catalog.Entry) error {
+	minimum := e.Chart.MinimumUmkimThinVersion
+	for _, v := range e.Chart.Versions {
+		if v.Version == e.Chart.Version && v.MinimumUmkimThinVersion != "" {
+			minimum = v.MinimumUmkimThinVersion
+			break
+		}
+	}
+	if minimum == "" || !update.IsVersion(in.cfg.Version) {
+		return nil
+	}
+	if update.Compare(in.cfg.Version, minimum) < 0 {
+		return fmt.Errorf("%s: chart %s requires umkim-thin %s or newer (running %s)",
+			e.Name, e.Chart.Version, minimum, in.cfg.Version)
+	}
+	return nil
 }
 
 // chartRef resolves the chart: a packaged chart from the local mirror when

@@ -4,7 +4,7 @@
 
 | Layer | What it does |
 |---|---|
-| **Authelia portal** | The SSO session and the OIDC provider (`https://auth.<zone>`) |
+| **Authelia portal** | The SSO session and the OIDC provider (`https://auth.<zone>`); login pages are dark by default and the theme is changed in **Access → Login page appearance** |
 | **Forward-auth** | Traefik asks Authelia before proxying. It gates a route but does **not** pass an identity to the app |
 | **App identity** | The app's own session: OIDC, LDAP, or local |
 

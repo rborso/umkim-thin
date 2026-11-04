@@ -27,7 +27,20 @@ UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=7              # archives kept; 0 keeps everything
 UMKIM_THIN_BACKUP_INTERVAL=off        # off by default; "24h" enables
 UMKIM_THIN_BACKUP_SNAPSHOTS=true      # create VolumeSnapshots
+UMKIM_THIN_BACKUP_COMPRESSION=default # none | fastest | default | best
 ```
+
+**Compression** applies to the metadata archive and the volume file copies:
+
+| Preset | gzip level | Trade-off |
+|---|---|---|
+| `none` | 0 | gzip framing only; least CPU, largest files |
+| `fastest` | 1 | low CPU, larger files |
+| `default` | 6 | balanced |
+| `best` | 9 | most CPU, smallest files |
+
+The console's Backups form and `backup schedule --compression` set it; the
+archive manifest records the preset so a restore can explain the producer.
 
 The schedule runs inside the console process: one archive per interval, then a
 prune to the configured keep. The next run is measured from the newest archive,
@@ -42,7 +55,7 @@ minute:
 umkim-thin backup schedule                      # show
 umkim-thin backup schedule --interval 12h       # enable, every 12h
 umkim-thin backup schedule --interval off       # disable
-umkim-thin backup schedule --keep 5 --data auto
+umkim-thin backup schedule --keep 5 --data auto --compression fastest
 ```
 
 The **Data** setting is one of:
@@ -65,11 +78,29 @@ The console writes to one **target** at a time; pick it in **Backups → Target*
   `/backups/<name>`: `install.sh --backup-nfs server:/absolute/path` adds `nfs`
   at `/backups/nfs`, and a re-run keeps it. The chart also accepts a `pvc` or
   `hostPath` target (`backupTargets` in the console values).
+- **added targets** — **New target** creates a directory below the mounted
+  `backupRoot` (`/backups`) and proves it by creating, writing, syncing and
+  removing a probe file before the target is offered. The CLI equivalent is
+  `umkim-thin backup targets add <name>`. A name is a lowercase DNS label; it
+  cannot escape `/backups`.
+
+For a single node the installer mounts a writable host root at `/backups`
+(`/srv/umkim-thin/backups` by default). On HA the root must be shared by every
+node that can run the console — NFS/Samba, or a shared RWX PVC. The chart
+refuses `backupRoot.hostPath` when `ha: true`; the console also refuses to add a
+target when the root is not shared. An existing `backup_nfs` is reused as the HA
+root when no separate `backup_root_nfs` is configured.
 
 The target must be writable by the console's UID (65532); the screen shows each
 target's free space and refuses an unwritable one. Switching is immediate: the
 archive list, retention and restores follow the selected target. Archives on
 another target stay where they are — switch back to see them.
+
+**Size** in the archive table is the whole backup: metadata archive + file
+copies + the CSI driver's reported `restoreSize` for ready snapshots. The
+tooltip breaks out the three parts. A snapshot implementation that does not
+publish a restore size contributes no number; the Data column still shows each
+file copy.
 
 ## Platform backup
 
@@ -115,9 +146,10 @@ When the mode is `auto` (and the storage cannot snapshot) or `copy`, the console
 copies each selected volume's files:
 
 - It creates a short-lived pod in the app's namespace that mounts the PVC
-  **read-only** (as root, because app data is often owned by another UID), runs
-  `tar czf -` and is deleted afterwards. The token is not mounted and the
-  container root filesystem is read-only.
+  **read-only** (as root, because app data is often owned by another UID), streams
+  `tar cf -` and is deleted afterwards. The console compresses the stream with
+  the schedule's gzip level. The token is not mounted and the container root
+  filesystem is read-only.
 - The stream is written to `<archive>-data-<namespace>-<pvc>.tar.gz` next to
   the metadata archive, with a SHA-256 and size in the manifest. `backup verify`
   checks them; deleting or pruning the archive removes the copies too.
@@ -132,9 +164,10 @@ read-write (stop the app first), copy the `.tar.gz` in, and `tar xzf` it at the
 mount point. The console lists the copies in **Backups** (the Data column links
 to each file) and never overwrites live data itself.
 
-**The archives live on the console PVC.** Copy them off the host (`scp`, an NFS
-mount, or a backup agent) or the backup dies with the disk it protects. On HA
-with Longhorn, the PVC itself is replicated; that is redundancy, not a backup.
+**Archives on the console PVC die with that PVC.** Copy them off the host
+(`scp`, an NFS mount, or a backup agent), or select a mounted/added target that
+lives on separate storage. On HA with Longhorn, the PVC itself is replicated;
+that is redundancy, not a backup.
 
 ## Choosing what to back up
 

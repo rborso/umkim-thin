@@ -70,6 +70,10 @@ valkey:
 authelia:
   image: ghcr.io/authelia/authelia:4.38.19@sha256:46021dc20efdcc5cdc38a29e3050b8835429a155ae6215388ed3b793a02eb0ab
   port: 9091
+  # Login/password-reset page theme: dark (default), light, grey or auto.
+  # The console stores the operator's choice in identity-settings.yml; leaving
+  # this unset keeps the dark default for existing values files.
+  theme: dark
   # Required secrets. Generate them once per install and keep them out of git.
   sessionSecret: ""
   storageEncryptionKey: ""

@@ -175,6 +175,8 @@ fi
 [ -n "${console_persistence_class:-}" ] && printf 'console_persistence_class: "%s"\n' "${console_persistence_class}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${console_state_size:-}" ] && printf 'console_state_size: "%s"\n' "${console_state_size}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${backup_nfs:-}" ] && printf 'backup_nfs: "%s"\n' "${backup_nfs}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${backup_root_nfs:-}" ] && printf 'backup_root_nfs: "%s"\n' "${backup_root_nfs}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${backup_compression:-}" ] && printf 'backup_compression: "%s"\n' "${backup_compression}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${trusted_access_enabled:-}" ] && printf 'trusted_access_enabled: %s\n' "${trusted_access_enabled}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${trusted_management_enabled:-}" ] && printf 'trusted_management_enabled: %s\n' "${trusted_management_enabled}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${trusted_management_cidrs:-}" ] && printf 'trusted_management_cidrs: "%s"\n' "${trusted_management_cidrs}" >> "$stage/ansible/group_vars/all/99-local.yml"

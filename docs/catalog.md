@@ -1,8 +1,11 @@
 # Catalog format
 
 One YAML file per app under `catalog/`. An entry is everything needed to install
-the app, expose it, protect it, and *verify* it. The proposed model for an
-official catalog plus private/community sources is in
+the app, expose it, protect it, and *verify* it. The catalog has its own
+`VERSION` and release train: package it with `umkim-thin catalog package` and
+upload the tarball in the console, without rebuilding the console image. See
+[`release-trains.md`](release-trains.md). The proposed model for an official
+catalog plus private/community sources is in
 [`catalog-sources.md`](catalog-sources.md).
 
 ## Example
@@ -91,6 +94,7 @@ verify:
 | `name` | yes | catalog key; also the default release name |
 | `chart.ref`, `chart.version` | yes | pinned; the catalog never floats |
 | `chart.versions` | no | tested chart/app pairs and `stable`/`candidate` channels |
+| `minimumUmkimThinVersion` | no | on `chart` or a `versions[]` entry; a release console below it refuses the install |
 | `route.exposure` | no | `default`/`allowed`: `public`, `authelia`, `vpn`; `allowLocal` for VPN |
 | `route.certificate` | no | `default`/`allowed`: `acme`, `default`, `secret:<name>` |
 | `route.vpnHost` | no | optional legacy VPN hostname; derived as `<host>.vpn.<zone>` when omitted |

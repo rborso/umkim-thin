@@ -79,23 +79,27 @@ func (r installRequest) options() app.Options {
 // The endpoints mirror the CLI: the console is a client of the same API, not a
 // second implementation of the same logic.
 func serveAPI(catalogDir, addr, homeAddr string) error {
-	entries, err := catalog.Load(catalogDir)
+	cat, err := catalog.NewStore(catalogDir, envOr("UMKIM_THIN_CATALOG_DIR", "/data/catalog"))
 	if err != nil {
 		return err
 	}
-	byName := map[string]catalog.Entry{}
-	for _, e := range entries {
-		byName[e.Name] = e
+	cfg := app.ConfigFromEnv()
+	auth := newConsoleAuth()
+	if info := cat.Info(); info.Error != "" {
+		log.Printf("catalog: %s", info.Error)
 	}
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, entries)
+		writeJSON(w, cat.Entries())
+	})
+	mux.HandleFunc("GET /api/catalog/info", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, cat.Info())
 	})
 
 	mux.HandleFunc("GET /api/catalog/{name}", func(w http.ResponseWriter, r *http.Request) {
-		e, ok := byName[r.PathValue("name")]
+		e, ok := cat.Entry(r.PathValue("name"))
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -103,15 +107,80 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		writeJSON(w, e)
 	})
 
+	// Catalog and platform release trains are independent: a catalog release is
+	// a tarball (see `catalog package`) uploaded here and refreshed without a
+	// new console image. A bad bundle leaves the running snapshot untouched.
+	mutating(mux, "POST /api/catalog/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if err := cat.Reload(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		info := cat.Info()
+		audit(r, auth, "catalog-refresh", info.Source, "revision="+info.Revision)
+		writeJSON(w, info)
+	})
+	mutating(mux, "POST /api/catalog/upload", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		file, _, err := r.FormFile("catalog")
+		if err != nil {
+			http.Error(w, "a catalog .tar.gz is required (multipart field \"catalog\")", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		external := strings.TrimSpace(cat.ExternalDir())
+		cleanExternal := filepath.Clean(external)
+		if external == "" || cleanExternal == "." || cleanExternal == "/" ||
+			cleanExternal == filepath.Clean(cfg.StateDir) {
+			http.Error(w, "the external catalog directory is not safe to replace", http.StatusBadRequest)
+			return
+		}
+		tmp, err := os.MkdirTemp(cfg.StateDir, ".catalog-upload-")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(tmp)
+		if err := catalog.Extract(file, tmp); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := catalog.Load(tmp); err != nil {
+			http.Error(w, "invalid catalog: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := os.RemoveAll(external); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := os.Rename(tmp, external); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := cat.Reload(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		info := cat.Info()
+		audit(r, auth, "catalog-upload", info.Source, "revision="+info.Revision+" version="+info.Version)
+		writeJSON(w, info)
+	})
+
 	// Scaffold: these are the operations the product is built around, and the
 	// CLI calls the same handlers.
-	cfg := app.ConfigFromEnv()
 	installer := app.New(cfg)
+	// The installer cannot see the console PVC. Reapply the console-owned
+	// identity overlays (Authelia theme/default certificate) after a platform
+	// upgrade so they are not silently reverted to the installer's values.
+	go func() {
+		if err := installer.ReconcileIdentityOverlays(); err != nil {
+			log.Printf("identity overlays: %v", err)
+		}
+	}()
 	certs := cert.New(cert.Config{
 		Kubectl: cfg.Kubectl, Kubeconfig: cfg.Kubeconfig, TraefikNS: cfg.TraefikNS,
 		Helm: cfg.Helm, IdentityNS: cfg.IdentityNS, IdentityChart: cfg.IdentityChart,
 		IdentityValues: cfg.IdentityValues, IdentityApps: cfg.IdentityApps,
-		IdentityCerts: filepath.Join(cfg.StateDir, "identity-certs.yml"),
+		IdentityCerts: cfg.IdentityCerts, IdentitySettings: cfg.IdentitySettings,
 	})
 	directory := identity.New(identity.ConfigFromEnv())
 	storageSock := envOr("UMKIM_THIN_STORAGE_SOCKET", "/run/umkim-thin/storage.sock")
@@ -125,14 +194,13 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		Kubectl:    cfg.Kubectl,
 		Kubeconfig: cfg.Kubeconfig,
 	})
-	auth := newConsoleAuth()
 	jobs := newJobStore()
 	started := time.Now()
 
-	// The catalog and the version ship inside the image, so the console asks the
-	// public release metadata whether a newer one exists. Read-only, cached, and
-	// silent when it fails; UMKIM_THIN_UPDATE_CHECK=false disables it for an
-	// air-gapped install.
+	// The platform version ships inside the image; the catalog can be replaced
+	// at runtime. This read-only check is for the platform release train only.
+	// It is cached and silent when it fails; UMKIM_THIN_UPDATE_CHECK=false
+	// disables it for an air-gapped install.
 	updates := update.New(update.Config{
 		Current:   cfg.Version,
 		Enabled:   envBool("UMKIM_THIN_UPDATE_CHECK", true),
@@ -146,11 +214,12 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	// editable from the console and stored on the PVC; the installer's env
 	// values are only the initial default.
 	defSchedule := backup.Schedule{
-		Enabled:   cfg.BackupInterval > 0,
-		Interval:  "24h",
-		Keep:      cfg.BackupKeep,
-		Snapshots: cfg.BackupSnapshots,
-		DataMode:  backup.DataSnapshot,
+		Enabled:     cfg.BackupInterval > 0,
+		Interval:    "24h",
+		Keep:        cfg.BackupKeep,
+		Snapshots:   cfg.BackupSnapshots,
+		DataMode:    backup.DataSnapshot,
+		Compression: cfg.BackupCompression,
 	}
 	if !cfg.BackupSnapshots {
 		defSchedule.DataMode = backup.DataOff
@@ -171,6 +240,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		Keep:        cfg.BackupKeep,
 		Snapshots:   cfg.BackupSnapshots,
 		BackupNFS:   cfg.BackupNFS,
+		Compression: cfg.BackupCompression,
 		Schedule:    sched,
 		HelperImage: cfg.ConsoleImage,
 	})
@@ -225,7 +295,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		// may manage.
 		out := make([]app.Result, 0, len(installed))
 		for _, a := range installed {
-			if e, ok := byName[a.Name]; ok {
+			if e, ok := cat.Entry(a.Name); ok {
 				a.License = e.License
 				a.Links = e.Links
 				out = append(out, a)
@@ -248,7 +318,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	})
 	servarrTarget := func(w http.ResponseWriter, r *http.Request) (catalog.Entry, string, bool) {
 		name := r.PathValue("name")
-		e, ok := byName[name]
+		e, ok := cat.Entry(name)
 		if !ok || e.Name != app.ServarrApp {
 			http.Error(w, "servarr app not found", http.StatusNotFound)
 			return catalog.Entry{}, "", false
@@ -415,7 +485,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		e, ok := byName[app.ServarrApp]
+		e, ok := cat.Entry(app.ServarrApp)
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -464,7 +534,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		e, ok := byName[req.Name]
+		e, ok := cat.Entry(req.Name)
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -510,7 +580,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}))
 	})
 	mux.HandleFunc("GET /api/apps/{name}/storage", func(w http.ResponseWriter, r *http.Request) {
-		e, ok := byName[r.PathValue("name")]
+		e, ok := cat.Entry(r.PathValue("name"))
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -529,7 +599,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		writeJSON(w, plan)
 	})
 	mux.HandleFunc("GET /api/apps/{name}/plan", func(w http.ResponseWriter, r *http.Request) {
-		e, ok := byName[r.PathValue("name")]
+		e, ok := cat.Entry(r.PathValue("name"))
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -549,7 +619,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		writeJSON(w, plan)
 	})
 	mux.HandleFunc("GET /api/apps/{name}/release", func(w http.ResponseWriter, r *http.Request) {
-		e, ok := byName[r.PathValue("name")]
+		e, ok := cat.Entry(r.PathValue("name"))
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -562,7 +632,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		writeJSON(w, info)
 	})
 	mux.HandleFunc("POST /api/apps/{name}/validate", func(w http.ResponseWriter, r *http.Request) {
-		e, ok := byName[r.PathValue("name")]
+		e, ok := cat.Entry(r.PathValue("name"))
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -581,7 +651,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		writeJSON(w, result)
 	})
 	mux.HandleFunc("GET /api/apps/{name}/versions", func(w http.ResponseWriter, r *http.Request) {
-		e, ok := byName[r.PathValue("name")]
+		e, ok := cat.Entry(r.PathValue("name"))
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -595,7 +665,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	})
 	mutating(mux, "POST /api/apps/{name}/upgrade", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		e, ok := byName[name]
+		e, ok := cat.Entry(name)
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -836,15 +906,19 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		s := sched.Get()
 		resp := map[string]any{
-			"dir":       backups.Dir(),
-			"target":    backups.Dir(),
-			"targets":   backups.Targets(),
-			"keep":      s.Keep,
-			"snapshots": s.Snapshots,
-			"dataMode":  s.Mode(),
-			"enabled":   s.Enabled,
-			"interval":  s.Interval,
-			"archives":  list,
+			"dir":         backups.Dir(),
+			"target":      backups.Dir(),
+			"targets":     backups.Targets(),
+			"backupRoot":  "/backups",
+			"rootShared":  cfg.BackupRootShared,
+			"ha":          cfg.HA,
+			"keep":        s.Keep,
+			"snapshots":   s.Snapshots,
+			"dataMode":    s.Mode(),
+			"compression": s.CompressionPreset(),
+			"enabled":     s.Enabled,
+			"interval":    s.Interval,
+			"archives":    list,
 		}
 		var newest time.Time
 		if len(list) > 0 {
@@ -889,8 +963,31 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		saved := sched.Get()
 		audit(r, auth, "backup-schedule", "",
-			fmt.Sprintf("enabled=%t interval=%s keep=%d data=%s", saved.Enabled, saved.Interval, saved.Keep, saved.Mode()))
+			fmt.Sprintf("enabled=%t interval=%s keep=%d data=%s compression=%s", saved.Enabled, saved.Interval, saved.Keep, saved.Mode(), saved.CompressionPreset()))
 		writeJSON(w, saved)
+	})
+	// Add a target below the mounted backup root. The manager creates the
+	// directory and writes a synced probe file before it is offered, so a
+	// read-only or missing mount cannot become the schedule target.
+	mutating(mux, "POST /api/backups/targets", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if cfg.HA && !cfg.BackupRootShared {
+			http.Error(w, "HA requires a shared backup root (NFS/Samba or RWX PVC); set backupRoot.nfs, not backupRoot.hostPath", http.StatusBadRequest)
+			return
+		}
+		t, err := backups.AddTarget(req.Name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		audit(r, auth, "backup-target-add", t.Name, t.Path)
+		writeJSON(w, t)
 	})
 	mutating(mux, "POST /api/backups", func(w http.ResponseWriter, r *http.Request) {
 		// An empty body (or {"all":true}) is a full backup, which is what the
@@ -1044,7 +1141,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	mux.HandleFunc("GET /api/apps/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		var entry *catalog.Entry
-		if e, ok := byName[name]; ok {
+		if e, ok := cat.Entry(name); ok {
 			entry = &e
 		}
 		st, err := installer.Status(name, entry)
@@ -1077,7 +1174,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		out := make([]appStatus, 0, len(installed))
 		for _, a := range installed {
-			entry, ok := byName[a.Name]
+			entry, ok := cat.Entry(a.Name)
 			if !ok {
 				continue // a platform release, not a catalog app
 			}
@@ -1118,7 +1215,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, "setup is not implemented for this app", http.StatusNotFound)
 			return
 		}
-		e, ok := byName[name]
+		e, ok := cat.Entry(name)
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -1153,7 +1250,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	})
 	mutating(mux, "DELETE /api/apps/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		e, ok := byName[name]
+		e, ok := cat.Entry(name)
 		if !ok {
 			http.Error(w, "no such catalog entry", http.StatusNotFound)
 			return
@@ -1165,6 +1262,44 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+	// The Authelia login theme is console-owned state, separate from the
+	// installer-owned identity-values.yml (which the seed overwrites on every
+	// console start). A change rolls Authelia; Valkey keeps sessions.
+	mux.HandleFunc("GET /api/identity/settings", func(w http.ResponseWriter, r *http.Request) {
+		theme, err := installer.AutheliaTheme()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"theme":  theme,
+			"themes": append([]string(nil), app.AutheliaThemes...),
+		})
+	})
+	mutating(mux, "PUT /api/identity/settings", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		var req struct {
+			Theme string `json:"theme"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		theme := app.NormalizeAutheliaTheme(req.Theme)
+		if !app.AutheliaThemeValid(theme) {
+			http.Error(w, "theme must be dark, light, grey or auto", http.StatusBadRequest)
+			return
+		}
+		if err := installer.SetAutheliaTheme(theme); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		audit(r, auth, "identity-theme", "authelia", "theme="+theme)
+		writeJSON(w, map[string]any{
+			"theme":  theme,
+			"themes": append([]string(nil), app.AutheliaThemes...),
+		})
 	})
 	mux.HandleFunc("GET /api/invites", func(w http.ResponseWriter, r *http.Request) {
 		invites, err := directory.ListInvites()
@@ -1331,7 +1466,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			_, _ = w.Write([]byte("ok\n"))
 		})
-		homeMux.HandleFunc("GET /api/home", homeAPIHandler(installer, entries, cfg.DirectoryURL))
+		homeMux.HandleFunc("GET /api/home", homeAPIHandler(installer, cat.Entries, cfg.DirectoryURL))
 		homeMux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" {
 				http.NotFound(w, r)
@@ -1351,7 +1486,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}()
 	}
 
-	fmt.Printf("umkim-thin listening on %s (%d catalog entries)\n", addr, len(entries))
+	fmt.Printf("umkim-thin listening on %s (%d catalog entries from %s)\n", addr, len(cat.Entries()), cat.Info().Source)
 	srv := newHTTPServer(addr, securityHeaders(auth.requireAuth(mux)))
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -1401,9 +1536,9 @@ type homeResponse struct {
 // expensive Helm/kubectl work runs in the background: the first successful
 // build is shared by all users, and a stale snapshot is served immediately
 // while the next one is refreshed.
-func homeAPIHandler(installer *app.Installer, entries []catalog.Entry, directoryURL string) http.HandlerFunc {
+func homeAPIHandler(installer *app.Installer, entries func() []catalog.Entry, directoryURL string) http.HandlerFunc {
 	store := &homeStore{
-		build: func() []homeApp { return buildHomeApps(installer, entries) },
+		build: func() []homeApp { return buildHomeApps(installer, entries()) },
 		ready: make(chan struct{}),
 	}
 	store.start()

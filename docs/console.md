@@ -56,14 +56,18 @@ page:
   tables show the deployed application's licence, the chart licence and links
   to the upstream website/source; the install panel repeats those links and
   shows the full licence notice and any non-commercial warning.
-- **Access** — **Invitations** and **WireGuard clients**, the two person/device
-  onboarding surfaces. The WireGuard panel shows the endpoint the generated
-  configs dial and whether the gateway is installed, so a peer is never created
-  against a missing gateway or an unset endpoint.
+- **Access** — **Invitations**, **Login page appearance** and **WireGuard
+  clients**. The WireGuard panel shows the endpoint the generated configs dial
+  and whether the gateway is installed, so a peer is never created against a
+  missing gateway or an unset endpoint. Login page appearance sets Authelia's
+  `theme` (`dark` default, `light`, `grey`, `auto`) in the console-owned
+  `/data/identity-settings.yml` and rolls the identity release; sessions survive
+  in Valkey.
 - **Storage** — local-host disks/RAID/NFS exports and external NFS
   StorageClasses; see [`storage.md`](storage.md).
 - **Certificates** — manual TLS certificates and the default wildcard.
-- **Backups** — the editable automatic schedule, data mode and target, the archives, "Back up now" (data) and "Platform backup", and a restore dialog with optional volume/object restore
+- **Catalog** — the live entries plus **Upload catalog…**/**Refresh** (a catalog release can replace `/data/catalog` without a console image rebuild).
+- **Backups** — the editable automatic schedule, data mode, compression and target, **New target** (create + write probe), the archives with whole-backup size, "Back up now" (data) and "Platform backup", and a restore dialog with optional volume/object restore
   (optionally narrowed to selected apps and volumes), download, restore
   and delete; see [`backup.md`](backup.md).
 
@@ -469,9 +473,15 @@ to poll; a long install or upgrade blocks the terminal instead.
 | GET | `/api/config` | zone, portal, `homeUrl`, running `version`, default classes and `mediaAccessMode` |
 | GET | `/api/version` | running version, newest published release, `available`, release URL and the last check time |
 | POST | `/api/version/check` | run the release check now (same-origin, read-only) and return the same status |
-| GET | `/api/backups` | schedule, targets (with free space), retention and the archives with their manifests |
+| GET | `/api/identity/settings` | Authelia login-page theme and the allowed themes |
+| PUT | `/api/identity/settings` | `{theme}` (`dark`, `light`, `grey`, `auto`); writes `identity-settings.yml`, rolls the identity release and audits `identity-theme` |
+| GET | `/api/catalog/info` | current catalog source (`bundled`/`external`), catalog `VERSION`, revision and last load error |
+| POST | `/api/catalog/refresh` | re-read the external catalog directory; a bad refresh keeps the last good snapshot |
+| POST | `/api/catalog/upload` | multipart `catalog=<tar.gz>`; validates and atomically replaces the external catalog, then refreshes; no image rebuild |
+| GET | `/api/backups` | schedule, targets (with free space), retention/compression and the archives with their manifests and whole-backup `totalBytes` |
 | GET | `/api/backups/scope` | the apps and volumes a selective backup can include |
-| PUT | `/api/backups/schedule` | `{enabled,interval,keep,dataMode,target}` (`dataMode`: off, snapshot, auto, copy; `target`: a path from GET); saves the schedule and applies it without a restart |
+| POST | `/api/backups/targets` | `{name}`; creates and write-probes `/backups/<name>` below the mounted root, refuses on HA without a shared root |
+| PUT | `/api/backups/schedule` | `{enabled,interval,keep,dataMode,compression,target}` (`dataMode`: off, snapshot, auto, copy; `compression`: none, fastest, default, best; `target`: a path from GET); saves the schedule and applies it without a restart |
 | POST | `/api/backups` | write a data backup now; `{"apps":["immich"],"volumes":["immich/immich-data"]}` narrows it, an empty body or `{"all":true}` is a full backup |
 | POST | `/api/backups/platform` | write a platform backup (cluster objects, console/host state, identity/Traefik volumes) |
 | GET | `/api/backups/{name}/download` | the archive itself |
@@ -550,7 +560,13 @@ UMKIM_THIN_BOOTSTRAP_NODE=<first server's hostname>
 UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=7                 # 0 keeps everything
 UMKIM_THIN_BACKUP_INTERVAL=off           # automatic backups are opt-in
+UMKIM_THIN_BACKUP_COMPRESSION=default    # none | fastest | default | best
 UMKIM_THIN_BACKUP_SNAPSHOTS=true
+
+# Console-owned identity overlays. identity-values.yml is installer-owned and
+# re-seeded; these two files are not.
+UMKIM_THIN_IDENTITY_CERTS=/data/identity-certs.yml
+UMKIM_THIN_IDENTITY_SETTINGS=/data/identity-settings.yml
 
 # Console release check (read-only; false for an air-gapped install)
 UMKIM_THIN_UPDATE_CHECK=true

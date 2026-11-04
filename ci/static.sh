@@ -50,6 +50,15 @@ if ! printf '%s\n' "$identity_render" | grep -F 'name: valkey' >/dev/null; then
   echo "identity chart did not render the Valkey session store" >&2
   exit 1
 fi
+if ! printf '%s\n' "$identity_render" | grep -F 'theme: "dark"' >/dev/null; then
+  echo "identity chart did not render the dark Authelia theme by default" >&2
+  exit 1
+fi
+identity_light=$(helm template identity charts/identity -f "$identity_values" --set authelia.theme=light 2>/dev/null)
+if ! printf '%s\n' "$identity_light" | grep -F 'theme: "light"' >/dev/null; then
+  echo "identity chart ignored authelia.theme" >&2
+  exit 1
+fi
 echo "   ok"
 
 echo ">> identity does not shadow ACME with an HTTP ingress"

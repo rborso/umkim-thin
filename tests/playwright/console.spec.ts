@@ -133,6 +133,35 @@ test.describe('console', () => {
     await expect(page.locator('#catalog')).toContainText('chart Apache-2.0');
     await expect(page.locator('#catalog')).toContainText('website');
     await expect(page.locator('#catalog')).toContainText('GitHub');
+    await expect(page.locator('#catalog-refresh')).toBeVisible();
+    await expect(page.locator('#catalog-upload')).toBeVisible();
+    await expect(page.locator('#catalog-info')).not.toBeEmpty();
+    const catalogInfo = await page.evaluate(async () => {
+      const r = await fetch('/api/catalog/info', { credentials: 'same-origin' });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(catalogInfo.status, 'console /api/catalog/info').toBe(200);
+    expect(['bundled', 'external']).toContain(catalogInfo.body.source);
+    const catalogRefresh = await page.evaluate(async () => {
+      const r = await fetch('/api/catalog/refresh', { method: 'POST', credentials: 'same-origin' });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(catalogRefresh.status, 'console /api/catalog/refresh').toBe(200);
+
+    // Access: the portal theme control is present and the API reports the dark
+    // default. The save path is unit-tested; changing it here would restart
+    // Authelia during the console gate.
+    await page.locator('#tab-access-label').click();
+    await expect(page.getByRole('heading', { name: 'Login page appearance' })).toBeVisible();
+    await expect(page.locator('#authelia-theme')).toBeVisible();
+    await expect(page.locator('#authelia-theme-save')).toBeVisible();
+    const identitySettings = await page.evaluate(async () => {
+      const r = await fetch('/api/identity/settings', { credentials: 'same-origin' });
+      return { status: r.status, body: await r.json() };
+    });
+    expect(identitySettings.status, 'console /api/identity/settings').toBe(200);
+    expect(identitySettings.body.theme, 'Authelia default theme').toBe('dark');
+    expect(identitySettings.body.themes).toEqual(['dark', 'light', 'grey', 'auto']);
 
     // Backups: the tab renders the schedule and the API answers with the
     // archive list. The archive itself is exercised by ci/backup-check.sh; this
@@ -142,6 +171,9 @@ test.describe('console', () => {
     await expect(page.locator('#backup-schedule-form')).toBeVisible();
     await expect(page.locator('#backup-schedule-next')).not.toBeEmpty();
     await expect(page.locator('#backup-now')).toBeVisible();
+    await expect(page.locator('#backup-compression')).toHaveValue('default');
+    await expect(page.locator('#backup-target-name')).toBeVisible();
+    await expect(page.locator('#backup-target-add')).toBeVisible();
     const backups = await page.evaluate(async () => {
       const r = await fetch('/api/backups', { credentials: 'same-origin' });
       return { status: r.status, body: await r.json() };

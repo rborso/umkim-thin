@@ -64,8 +64,12 @@ still the authority for a real install.
 
 ## Conventions
 
-- `charts/apps/` is a git submodule pointing at `umkim-charts`; app chart
-  changes belong there, followed by a submodule/catalog bump here.
+- `charts/apps/` is a git submodule pointing at `umkim-charts`. Chart changes
+  belong there. Production chart releases are immutable OCI tags
+  (`oci://ghcr.io/rborso/charts/<app>`); the submodule is the development and
+  offline fallback, so a chart change no longer requires a platform release.
+  A catalog release (`catalog/VERSION`, `umkim-thin catalog package`, upload)
+  is independent too. See `docs/release-trains.md`.
 
 - Small, focused commits with a scope prefix (`app:`, `deploy:`, `ci:`,
   `wireguard:` …).

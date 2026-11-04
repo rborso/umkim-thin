@@ -163,6 +163,15 @@
   changed_when: false
   when: (storage_agent | default(false) | bool)
 
+- name: (host) create the writable backup root
+  ansible.builtin.file:
+    path: /srv/umkim-thin/backups
+    state: directory
+    owner: '65532'
+    group: '65532'
+    mode: '0750'
+  when: (storage_agent | default(false) | bool)
+
 - name: (host) NFS in the trusted zone
   ansible.posix.firewalld:
     zone: trusted

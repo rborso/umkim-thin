@@ -1,8 +1,11 @@
-# Catalog sources (proposed)
+# Catalog sources
 
-**Status:** proposal for discussion; the current code still loads one flat
-catalog directory. See [`catalog.md`](catalog.md) for the entry format that is
-already implemented.
+**Status:** the **runtime external catalog** part is implemented (see
+[`release-trains.md`](release-trains.md)): the console can load
+`/data/catalog`, refresh it, and accept a validated `catalog-*.tgz` upload
+without rebuilding the image. The bundled catalog remains the fallback. The
+multi-source manifest, trust levels and override rules below are still a
+proposal. See [`catalog.md`](catalog.md) for the entry format.
 
 ## Goal
 

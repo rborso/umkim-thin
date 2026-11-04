@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -409,11 +411,71 @@ func appCmd(dir string, args []string) error {
 
 func catalogCmd(dir string, args []string) error {
 	if wantsHelp(args) {
-		fmt.Print("usage: umkim-thin catalog list|show <name>\n")
+		fmt.Print(`usage: umkim-thin catalog <command>
+
+  list                       list installable apps
+  show <name>                show one entry, with its verification
+  package [--out FILE]       build the uploadable catalog .tar.gz (YAML + VERSION)
+
+The package can be uploaded on the console's Catalog tab; it does not require a
+new console image. Chart versions are still pulled from their OCI refs (or the
+local mirror when present).
+`)
 		return nil
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("catalog needs a subcommand: list | show")
+		return fmt.Errorf("catalog needs a subcommand: list | show | package")
+	}
+	if args[0] == "package" {
+		fs := flag.NewFlagSet("catalog package", flag.ContinueOnError)
+		out := fs.String("out", "", "output .tar.gz (default: catalog-<VERSION>.tgz)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		entries, err := catalog.Load(dir)
+		if err != nil {
+			return err
+		}
+		name := *out
+		if name == "" {
+			version := "dev"
+			if raw, err := os.ReadFile(filepath.Join(dir, "VERSION")); err == nil {
+				if v := strings.TrimSpace(string(raw)); v != "" {
+					version = v
+				}
+			}
+			name = "catalog-" + version + ".tgz"
+		}
+		tmp := name + ".tmp"
+		f, err := os.Create(tmp)
+		if err != nil {
+			return err
+		}
+		if err := catalog.Package(dir, f); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return err
+		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return err
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(tmp)
+			return err
+		}
+		if err := os.Rename(tmp, name); err != nil {
+			os.Remove(tmp)
+			return err
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(raw)
+		fmt.Printf("wrote %s (%d entries, sha256 %s)\n", name, len(entries), hex.EncodeToString(sum[:]))
+		return nil
 	}
 	entries, err := catalog.Load(dir)
 	if err != nil {
@@ -682,8 +744,10 @@ func backupCmd(dir string, args []string) error {
   scope                      list the apps and volumes a backup can include
   data <name> [--volume NS/PVC --out FILE]
                              list or extract a volume file copy
-  targets                    list where backups can be written
+  targets [add NAME]         list where backups can be written, or create one
+                             under the mounted backup root (write-tested)
   schedule [--interval 24h|off] [--keep N] [--data off|snapshot|auto|copy]
+           [--compression none|fastest|default|best]
                              show or change automatic backups
   verify <name>              recompute every checksum
   restore <name> [--apps] [--data] [--platform] [--confirm]
@@ -701,11 +765,12 @@ volumes. The console state is always archived whole: it is global and small.
 	}
 	cfg := app.ConfigFromEnv()
 	defSchedule := backup.Schedule{
-		Enabled:   cfg.BackupInterval > 0,
-		Interval:  "24h",
-		Keep:      cfg.BackupKeep,
-		Snapshots: cfg.BackupSnapshots,
-		DataMode:  backup.DataSnapshot,
+		Enabled:     cfg.BackupInterval > 0,
+		Interval:    "24h",
+		Keep:        cfg.BackupKeep,
+		Snapshots:   cfg.BackupSnapshots,
+		DataMode:    backup.DataSnapshot,
+		Compression: cfg.BackupCompression,
 	}
 	if !cfg.BackupSnapshots {
 		defSchedule.DataMode = backup.DataOff
@@ -726,6 +791,7 @@ volumes. The console state is always archived whole: it is global and small.
 		Keep:        cfg.BackupKeep,
 		Snapshots:   cfg.BackupSnapshots,
 		BackupNFS:   cfg.BackupNFS,
+		Compression: cfg.BackupCompression,
 		Schedule:    sched,
 		HelperImage: cfg.ConsoleImage,
 	})
@@ -739,7 +805,7 @@ volumes. The console state is always archived whole: it is global and small.
 			fmt.Printf("no backups in %s\n", m.Dir())
 			return nil
 		}
-		fmt.Printf("%-38s %-9s %-8s %-8s %-6s %-6s %-6s %s\n", "NAME", "KIND", "VERSION", "SCOPE", "APPS", "FILES", "SNAP", "DATA")
+		fmt.Printf("%-38s %-9s %-8s %-8s %-6s %-6s %-6s %-10s %s\n", "NAME", "KIND", "VERSION", "SCOPE", "APPS", "FILES", "SNAP", "SIZE", "DATA")
 		for _, a := range list {
 			scope := "full"
 			if a.Partial {
@@ -753,7 +819,11 @@ volumes. The console state is always archived whole: it is global and small.
 			if a.Data > 0 {
 				data = fmt.Sprintf("%d (%s)", a.Data, backup.HumanBytes(a.DataBytes))
 			}
-			fmt.Printf("%-38s %-9s %-8s %-8s %-6d %-6d %-6d %s\n", a.Name, kind, a.Version, scope, a.Apps, a.Files, a.Snapshots, data)
+			total := a.TotalBytes
+			if total == 0 {
+				total = a.Size
+			}
+			fmt.Printf("%-38s %-9s %-8s %-8s %-6d %-6d %-6d %-10s %s\n", a.Name, kind, a.Version, scope, a.Apps, a.Files, a.Snapshots, backup.HumanBytes(total), data)
 		}
 		return nil
 	case "create":
@@ -776,7 +846,7 @@ volumes. The console state is always archived whole: it is global and small.
 		if a.Selection != nil {
 			scope = fmt.Sprintf("partial backup: %d apps, %d volumes", len(a.Selection.Apps), len(a.Selection.Volumes))
 		}
-		fmt.Printf("wrote %s (%s, %d files, %d snapshots, %d copies)\n", a.Name, scope, a.Files, a.Snapshots, a.Data)
+		fmt.Printf("wrote %s (%s, %s, %d files, %d snapshots, %d copies)\n", a.Name, scope, backup.HumanBytes(a.TotalBytes), a.Files, a.Snapshots, a.Data)
 		for _, w := range a.Warnings {
 			fmt.Printf("  warning: %s\n", w)
 		}
@@ -786,7 +856,7 @@ volumes. The console state is always archived whole: it is global and small.
 		if err != nil {
 			return err
 		}
-		fmt.Printf("wrote %s (platform, %d files, %d snapshots, %d copies)\n", a.Name, a.Files, a.Snapshots, a.Data)
+		fmt.Printf("wrote %s (platform, %s, %d files, %d snapshots, %d copies)\n", a.Name, backup.HumanBytes(a.TotalBytes), a.Files, a.Snapshots, a.Data)
 		for _, w := range a.Warnings {
 			fmt.Printf("  warning: %s\n", w)
 		}
@@ -816,6 +886,17 @@ volumes. The console state is always archived whole: it is global and small.
 		}
 		return nil
 	case "targets":
+		if len(args) > 1 && args[1] == "add" {
+			if len(args) < 3 {
+				return fmt.Errorf("backup targets add needs a name")
+			}
+			t, err := m.AddTarget(args[2])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("added %s at %s (%s free)\n", t.Name, t.Path, backup.HumanBytes(t.FreeBytes))
+			return nil
+		}
 		for _, t := range m.Targets() {
 			state := "writable"
 			if !t.Writable {
@@ -833,6 +914,7 @@ volumes. The console state is always archived whole: it is global and small.
 		interval := fs.String("interval", "", `automatic interval ("12h", "24h") or "off"`)
 		keep := fs.Int("keep", -1, "archives to keep (0 keeps everything)")
 		data := fs.String("data", "", "data mode: off, snapshot, auto or copy")
+		compression := fs.String("compression", "", "compression: none, fastest, default or best")
 		target := fs.String("target", "", "backup target path (see `backup targets`)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -853,6 +935,7 @@ volumes. The console state is always archived whole: it is global and small.
 			}
 			fmt.Printf("  keep      %d%s\n", s.Keep, unlimited)
 			fmt.Printf("  data      %s\n", s.Mode())
+			fmt.Printf("  compress  %s\n", s.CompressionPreset())
 			fmt.Printf("  target    %s\n", m.Dir())
 			fmt.Printf("  file      %s\n", path)
 			return nil
@@ -875,6 +958,9 @@ volumes. The console state is always archived whole: it is global and small.
 		if set["data"] {
 			s.DataMode = strings.TrimSpace(*data)
 		}
+		if set["compression"] {
+			s.Compression = strings.TrimSpace(*compression)
+		}
 		if set["target"] {
 			v := strings.TrimSpace(*target)
 			ok := v == ""
@@ -895,7 +981,7 @@ volumes. The console state is always archived whole: it is global and small.
 		if s.Enabled {
 			state = "on, every " + s.Interval
 		}
-		fmt.Printf("automatic backups: %s (keep %d, data %s, target %s)\n", state, s.Keep, s.Mode(), m.Dir())
+		fmt.Printf("automatic backups: %s (keep %d, data %s, compression %s, target %s)\n", state, s.Keep, s.Mode(), s.CompressionPreset(), m.Dir())
 		return nil
 	case "data":
 		if len(args) < 2 {

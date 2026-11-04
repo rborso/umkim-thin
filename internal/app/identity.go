@@ -183,12 +183,8 @@ func (in *Installer) syncIdentity(c contributions) error {
 	if err := os.WriteFile(in.cfg.IdentityApps, raw, 0o600); err != nil {
 		return err
 	}
-	args := []string{"upgrade", "--install", "identity", in.cfg.IdentityChart,
-		"--namespace", "identity",
-		"--kubeconfig", in.cfg.Kubeconfig,
-		"--values", in.cfg.IdentityValues,
-		"--values", in.cfg.IdentityApps,
-		"--wait", "--timeout", "15m"}
+	args := in.identityHelmArgs()
+	args = append(args, "--wait", "--timeout", "15m")
 	if out, err := in.run(in.cfg.Helm, args...); err != nil {
 		return fmt.Errorf("updating identity release: %w\n%s", err, out)
 	}

@@ -9,6 +9,24 @@ configMapName: umkim-thin-config
 seedSecretName: umkim-thin-secrets
 mirrorConfigMap: umkim-thin-mirror
 storageSocket: {{ (storage_socket | default("")) | to_json }}
+ha: {{ (groups['server'] | default([]) | length > 1) | lower }}
+{% if storage_agent | default(false) | bool %}
+backupRoot:
+  hostPath:
+    path: /srv/umkim-thin/backups
+{% elif backup_root_nfs is defined and backup_root_nfs %}
+backupRoot:
+  nfs:
+    server: "{{ backup_root_nfs.split(':')[0] }}"
+    path: "{{ backup_root_nfs.split(':')[1] }}"
+{% elif backup_nfs is defined and backup_nfs %}
+backupRoot:
+  nfs:
+    server: "{{ backup_nfs.split(':')[0] }}"
+    path: "{{ backup_nfs.split(':')[1] }}"
+{% else %}
+backupRoot: {}
+{% endif %}
 {% if backup_nfs is defined and backup_nfs %}
 backupTargets:
   - name: nfs

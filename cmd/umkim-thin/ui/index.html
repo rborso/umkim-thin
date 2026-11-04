@@ -316,6 +316,13 @@ try {
           <span class="eyebrow">One-click installs</span>
           <h2>Catalog</h2>
           <p class="sub">Charts are pinned and verified. Choose an app, then review its hostname, exposure and certificate before installing.</p>
+          <p class="hint">The catalog is a separate release train: upload a <code>catalog-*.tgz</code> built with <code>umkim-thin catalog package</code>, then refresh. The console image is not rebuilt.</p>
+        </div>
+        <div>
+          <input id="catalog-upload-file" type="file" accept=".tgz,.tar.gz,application/gzip" hidden>
+          <button type="button" id="catalog-upload">Upload catalog…</button>
+          <button type="button" id="catalog-refresh">Refresh</button>
+          <span id="catalog-info" class="muted" role="status" aria-live="polite"></span>
         </div>
       </div>
       <div class="table-wrap">
@@ -365,6 +372,22 @@ try {
           <tbody id="invites"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
         </table>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <span class="eyebrow">Portal</span>
+          <h2>Login page appearance</h2>
+          <p class="sub">The theme for Authelia's sign-in, password-reset and consent pages. Dark is the default.</p>
+        </div>
+      </div>
+      <div class="schedule">
+        <label>Theme <select id="authelia-theme"></select></label>
+        <button type="button" id="authelia-theme-save" class="primary">Save</button>
+        <span id="authelia-theme-status" class="muted" role="status" aria-live="polite"></span>
+      </div>
+      <p class="hint">Saving rolls the Authelia pod so it reads the new configuration. Existing portal sessions stay valid (they are stored in Valkey).</p>
     </div>
 
     <div class="card">
@@ -561,8 +584,21 @@ try {
           <option value="copy">full copy (slow)</option>
         </select></label>
         <label>Target <select id="backup-target"></select></label>
+        <label>Compression <select id="backup-compression">
+          <option value="none">none — fastest, largest</option>
+          <option value="fastest">fastest — low CPU</option>
+          <option value="default">default — balanced</option>
+          <option value="best">best — smallest, slowest</option>
+        </select></label>
         <button type="button" id="backup-schedule-save">Save</button>
         <span id="backup-schedule-status" class="muted" role="status" aria-live="polite"></span>
+      </div>
+      <p class="hint" id="backup-compression-hint">Compression applies to the metadata archive and volume file copies. <strong>none</strong> stores the tar without compressing (fastest CPU, largest files); <strong>fastest</strong> uses gzip level 1; <strong>default</strong> level 6; <strong>best</strong> level 9 (smallest files, most CPU).</p>
+      <div class="schedule" id="backup-target-form">
+        <label>New target <input id="backup-target-name" placeholder="usb" size="10" maxlength="63"></label>
+        <button type="button" id="backup-target-add">Add target</button>
+        <span id="backup-target-status" class="muted" role="status" aria-live="polite"></span>
+        <span id="backup-target-hint" class="hint"></span>
       </div>
       <p class="hint" id="backup-schedule-next"></p>
       <details id="backup-scope" style="margin:.6rem 0 1rem">
@@ -824,6 +860,7 @@ function activateTab(name, updateHash = true) {
     if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   }
   if (name === 'backups') loadBackupScope();
+  if (name === 'access') loadIdentitySettings();
 }
 
 document.querySelectorAll('.tab').forEach(button => {
@@ -1357,7 +1394,7 @@ async function loadBackups() {
         `<td>${kind}</td>` +
         `<td>${a.version ? `<code>${esc(a.version)}</code>` : '—'}</td>` +
         `<td>${a.apps}</td><td>${a.files}</td><td${warn}>${snapshots}</td>` +
-        `<td>${dataCell}</td><td>${humanSize(a.size)}</td>`;
+        `<td title="archive ${humanSize(a.size)}${a.dataBytes ? ` + copies ${humanSize(a.dataBytes)}` : ''}${a.snapshotBytes ? ` + snapshots ${humanSize(a.snapshotBytes)}` : ''}">${humanSize(a.totalBytes || a.size)}</td>`;
       const td = document.createElement('td');
       const dl = document.createElement('a');
       dl.className = 'button';
@@ -1394,6 +1431,7 @@ function applyBackupSchedule(data) {
   interval.disabled = !data.enabled;
   document.getElementById('backup-keep').value = data.keep ?? 7;
   document.getElementById('backup-data-mode').value = data.dataMode || (data.snapshots ? 'snapshot' : 'off');
+  document.getElementById('backup-compression').value = data.compression || 'default';
   const targetSelect = document.getElementById('backup-target');
   targetSelect.innerHTML = '';
   for (const t of data.targets || []) {
@@ -1404,6 +1442,16 @@ function applyBackupSchedule(data) {
     targetSelect.appendChild(opt);
   }
   if (data.target) targetSelect.value = data.target;
+  const add = document.getElementById('backup-target-add');
+  const addHint = document.getElementById('backup-target-hint');
+  if (add && addHint) {
+    const blocked = data.ha && !data.rootShared;
+    add.dataset.blocked = blocked ? '1' : '';
+    add.disabled = blocked;
+    addHint.textContent = blocked
+      ? 'HA needs a shared backup root: configure backupRoot.nfs (or a shared RWX PVC), not hostPath.'
+      : `Targets are created under ${data.backupRoot || '/backups'} and write-tested before use.`;
+  }
   const bits = [];
   bits.push(data.enabled ? 'Automatic backups are on' : 'Automatic backups are off');
   if (data.enabled && data.next) bits.push(`next ${new Date(data.next).toLocaleString()}`);
@@ -1422,6 +1470,7 @@ async function saveBackupSchedule() {
     interval: document.getElementById('backup-interval').value.trim(),
     keep: Number(document.getElementById('backup-keep').value || 0),
     dataMode: document.getElementById('backup-data-mode').value,
+    compression: document.getElementById('backup-compression').value,
     target: document.getElementById('backup-target').value,
   };
   btn.disabled = true;
@@ -1439,6 +1488,38 @@ async function saveBackupSchedule() {
     status.textContent = 'Not saved: ' + String(err.message || err);
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function addBackupTarget() {
+  const input = document.getElementById('backup-target-name');
+  const status = document.getElementById('backup-target-status');
+  const btn = document.getElementById('backup-target-add');
+  const name = input.value.trim();
+  if (!name) {
+    status.textContent = 'Enter a target name.';
+    input.focus();
+    return;
+  }
+  btn.disabled = true;
+  status.textContent = 'Creating and write-testing…';
+  try {
+    const res = await fetch('/api/backups/targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw new Error(await responseError(res));
+    const t = await res.json();
+    input.value = '';
+    status.textContent = `Added ${t.name} (${humanSize(t.freeBytes)} free).`;
+    await loadBackups();
+    const select = document.getElementById('backup-target');
+    if (select) select.value = t.path;
+  } catch (err) {
+    status.textContent = 'Not added: ' + String(err.message || err);
+  } finally {
+    btn.disabled = btn.dataset.blocked === '1';
   }
 }
 
@@ -1585,6 +1666,7 @@ async function loadCatalog() {
   const rows = document.getElementById('catalog');
   try {
     const entries = await (await fetch('/api/catalog')).json();
+    for (const name of Object.keys(ENTRIES)) delete ENTRIES[name];
     rows.innerHTML = '';
     for (const e of entries) {
       ENTRIES[e.Name] = e;
@@ -1602,6 +1684,57 @@ async function loadCatalog() {
     }
   } catch (_) {
     rows.innerHTML = '<tr><td colspan="5">catalog unavailable</td></tr>';
+  }
+  await loadCatalogInfo();
+}
+
+async function loadCatalogInfo() {
+  const el = document.getElementById('catalog-info');
+  if (!el) return;
+  try {
+    const info = await (await fetch('/api/catalog/info')).json();
+    const bits = [info.source, info.version ? `v${info.version}` : '', info.revision || ''].filter(Boolean);
+    el.textContent = bits.join(' · ') + (info.error ? ' · ' + info.error : '');
+  } catch (_) { el.textContent = ''; }
+}
+
+async function refreshCatalog() {
+  const btn = document.getElementById('catalog-refresh');
+  const el = document.getElementById('catalog-info');
+  btn.disabled = true;
+  el.textContent = 'Refreshing…';
+  try {
+    const res = await fetch('/api/catalog/refresh', { method: 'POST' });
+    if (!res.ok) throw new Error(await responseError(res));
+    await loadCatalog();
+    note('catalog refreshed', 'ok');
+  } catch (err) {
+    el.textContent = 'Refresh failed: ' + String(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function uploadCatalog() {
+  const input = document.getElementById('catalog-upload-file');
+  const el = document.getElementById('catalog-info');
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const btn = document.getElementById('catalog-upload');
+  btn.disabled = true;
+  el.textContent = 'Uploading and validating…';
+  try {
+    const form = new FormData();
+    form.append('catalog', file);
+    const res = await fetch('/api/catalog/upload', { method: 'POST', body: form });
+    if (!res.ok) throw new Error(await responseError(res));
+    await loadCatalog();
+    note('catalog uploaded', 'ok');
+  } catch (err) {
+    el.textContent = 'Upload failed: ' + String(err.message || err);
+  } finally {
+    input.value = '';
+    btn.disabled = false;
   }
 }
 
@@ -2879,6 +3012,56 @@ document.getElementById('invite-form').addEventListener('submit', async (ev) => 
   finally { loadInvites(); }
 });
 
+const AUTHELIA_THEME_LABELS = {
+  dark: 'Dark',
+  light: 'Light',
+  grey: 'Grey',
+  auto: 'Auto (system)',
+};
+
+async function loadIdentitySettings() {
+  const select = document.getElementById('authelia-theme');
+  const status = document.getElementById('authelia-theme-status');
+  if (!select || !status) return;
+  try {
+    const data = await (await fetch('/api/identity/settings')).json();
+    select.innerHTML = '';
+    for (const theme of data.themes || []) {
+      const option = document.createElement('option');
+      option.value = theme;
+      option.textContent = AUTHELIA_THEME_LABELS[theme] || theme;
+      select.appendChild(option);
+    }
+    select.value = data.theme || 'dark';
+    status.textContent = 'Current: ' + (AUTHELIA_THEME_LABELS[data.theme] || data.theme || 'dark');
+  } catch (err) {
+    status.textContent = 'Not loaded: ' + String(err.message || err);
+  }
+}
+
+async function saveIdentitySettings() {
+  const select = document.getElementById('authelia-theme');
+  const status = document.getElementById('authelia-theme-status');
+  const btn = document.getElementById('authelia-theme-save');
+  if (!select || !status || !btn) return;
+  btn.disabled = true;
+  status.textContent = 'Applying… Authelia will restart.';
+  try {
+    const res = await fetch('/api/identity/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: select.value }),
+    });
+    if (!res.ok) throw new Error(await responseError(res));
+    status.textContent = 'Saved';
+    await loadIdentitySettings();
+  } catch (err) {
+    status.textContent = 'Not saved: ' + String(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function loadWg() {
   const rows = document.getElementById('wg-list');
   try {
@@ -3351,6 +3534,14 @@ document.getElementById('backup-apps-none').onclick = () => setBackupScopeAll('#
 document.getElementById('backup-vols-all').onclick = () => setBackupScopeAll('#backup-vols', true);
 document.getElementById('backup-vols-none').onclick = () => setBackupScopeAll('#backup-vols', false);
 document.getElementById('backup-schedule-save').onclick = saveBackupSchedule;
+document.getElementById('backup-target-add').onclick = addBackupTarget;
+document.getElementById('backup-target-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addBackupTarget();
+});
+document.getElementById('catalog-refresh').onclick = refreshCatalog;
+document.getElementById('catalog-upload').onclick = () => document.getElementById('catalog-upload-file').click();
+document.getElementById('catalog-upload-file').onchange = uploadCatalog;
+document.getElementById('authelia-theme-save').onclick = saveIdentitySettings;
 document.getElementById('backup-auto').onchange = () => {
   document.getElementById('backup-interval').disabled = !document.getElementById('backup-auto').checked;
 };
@@ -3374,6 +3565,7 @@ document.getElementById('upgrade-dialog').addEventListener('close', () => {
   setInterval(loadApplications, 120000);
   loadGroups();
   loadInvites();
+  loadIdentitySettings();
   loadWg();
   loadWgStatus();
   loadCerts();

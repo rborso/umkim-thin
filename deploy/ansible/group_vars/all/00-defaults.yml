@@ -53,6 +53,8 @@ backup_keep: 7
 # unquoted YAML off is boolean false, which the console would reject.
 backup_interval: "off"
 backup_snapshots: true
+# none | fastest | default | best; fastest/lowest CPU, best/smallest.
+backup_compression: default
 # The console's read-only release check (the update banner). Set false for an
 # air-gapped install with no egress.
 update_check: true
@@ -87,6 +89,10 @@ console_state_size: 2Gi
 # Optional NFS backup target, "server:/path"; the console mounts it at
 # /backups/nfs and it becomes a selectable backup target.
 backup_nfs: ""
+# Optional shared root for targets created from the console on HA. NFS/Samba
+# must be mounted on every possible console node. Empty falls back to backup_nfs
+# when that is set; a hostPath is rejected on HA.
+backup_root_nfs: ""
 # The single-node storage agent is a host service; HA uses Longhorn/external
 # NFS. Derive the default from the inventory so a one-node target gets the
 # socket and an HA target does not.

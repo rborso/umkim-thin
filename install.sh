@@ -65,6 +65,8 @@ MODE="install"
 
 DATA_DIR="${UMKIM_THIN_DATA_DIR:-/var/lib/umkim-thin}"
 STATE_DIR="${UMKIM_THIN_STATE_DIR:-/etc/umkim-thin}"
+# Writable root mounted at /backups; the console creates new targets below it.
+BACKUP_ROOT="${UMKIM_THIN_BACKUP_ROOT_HOST:-/srv/umkim-thin/backups}"
 HELM_VERSION="3.16.3"
 K3S_CHANNEL="${K3S_CHANNEL:-stable}"
 WG_PORT="${WG_PORT:-51820}"
@@ -813,8 +815,14 @@ configMapName: umkim-thin-config
 seedSecretName: umkim-thin-secrets
 mirrorConfigMap: umkim-thin-mirror
 storageSocket: /run/umkim-thin
+ha: false
+backupRoot:
+  hostPath:
+    path: "$BACKUP_ROOT"
 podSecurity:
-  seLinuxType: ""
+  # The console reads/writes host-backed paths (storage socket and backup root)
+  # on the single-node SELinux-enforcing path.
+  seLinuxType: "spc_t"
 $backup_targets
 EOF
   chmod 644 "$STATE_DIR/console-values.yml"
@@ -844,6 +852,8 @@ UMKIM_THIN_IDENTITY_NAMESPACE=$IDENTITY_NAMESPACE
 UMKIM_THIN_IDENTITY_CHART=/data/chart-mirror/$identity_tgz
 UMKIM_THIN_IDENTITY_VALUES=/data/identity-values.yml
 UMKIM_THIN_IDENTITY_APPS=/data/identity-apps.yml
+UMKIM_THIN_IDENTITY_CERTS=/data/identity-certs.yml
+UMKIM_THIN_IDENTITY_SETTINGS=/data/identity-settings.yml
 UMKIM_THIN_BIND_SECRET=lldap-service-accounts
 UMKIM_THIN_BASE_DN=$BASE_DN
 UMKIM_THIN_LLDAP_HOST=lldap.identity.svc.cluster.local
@@ -883,7 +893,10 @@ UMKIM_THIN_BACKUP_DIR=/data/backups
 UMKIM_THIN_BACKUP_KEEP=${BACKUP_KEEP:-7}
 UMKIM_THIN_BACKUP_INTERVAL=${BACKUP_INTERVAL:-off}
 UMKIM_THIN_BACKUP_SNAPSHOTS=${BACKUP_SNAPSHOTS:-true}
+UMKIM_THIN_BACKUP_COMPRESSION=${BACKUP_COMPRESSION:-default}
 UMKIM_THIN_BACKUP_TARGET_NFS=$BACKUP_NFS
+UMKIM_THIN_HA=false
+UMKIM_THIN_BACKUP_ROOT_SHARED=false
 # The console's read-only release check (it asks the public release metadata
 # for a newer umkim-thin). Cached and silent on failure; set false when the
 # console has no egress, e.g. an air-gapped install.
@@ -1220,6 +1233,13 @@ validate_traefik() {
   die "traefik service ports are '${ports:-unknown}', expected 80:30080 and 443:30443; check the router mapping and the HelmChartConfig"
 }
 
+prepare_backup_root() {
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  install -d -o 65532 -g 65532 -m 0750 "$BACKUP_ROOT" || \
+    die "could not create the backup root $BACKUP_ROOT (the console mounts it at /backups)"
+  info "backup root: $BACKUP_ROOT"
+}
+
 install_console() {
   log "installing the console"
   run "$HELM" upgrade --install umkim-thin charts/umkim-thin \
@@ -1530,6 +1550,7 @@ main() {
   apply_traefik
   install_vpn_dns
   install_storage_agent
+  prepare_backup_root
   seed_console
   install_console
   print_summary

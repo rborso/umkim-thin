@@ -48,6 +48,19 @@ storageSocket: ""
 #       hostPath: {path: /srv/backups}
 backupTargets: []
 
+# Writable root for targets created from the console. The console creates a
+# directory below it and writes a probe file before offering the target.
+# Single node: a hostPath (the installer creates and chowns it). HA: NFS/Samba
+# (or a shared RWX PVC) mounted on every possible console node; a hostPath is
+# rejected on HA because it is node-local.
+#   backupRoot:
+#     hostPath: {path: /srv/umkim-thin/backups}
+#   backupRoot:
+#     nfs: {server: 192.0.2.10, path: /export/umkim-thin-backups}
+backupRoot: {}
+# True on a multi-node install; enables the shared-root check for add-target.
+ha: false
+
 # State/config storage. The chart always creates the PVC; the installer selects
 # the class: local-path for single, longhorn-rwo for HA.
 persistence:

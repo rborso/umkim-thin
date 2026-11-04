@@ -18,6 +18,9 @@ chart:
     - version: 0.1.2
       appVersion: 1.37.5
       channel: stable
+      # This chart's SSO-only Vaultwarden configuration was verified against
+      # the v0.3.4 catalog/console behavior.
+      minimumUmkimThinVersion: "0.3.4"
     - version: 0.1.1
       appVersion: 1.37.5
       channel: stable

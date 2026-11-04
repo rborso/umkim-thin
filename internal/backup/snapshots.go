@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -129,7 +130,7 @@ func (m *Manager) Scope() (ScopeView, error) {
 // no VolumeSnapshotClass) the fallback is a full file copy streamed out of the
 // volume. The selection limits both. Unknown selected volumes are an error;
 // everything else is a warning, so a metadata archive is still written.
-func (m *Manager) backupVolumes(ctx context.Context, ts time.Time, sel *Selection, mode, archiveBase string) ([]SnapshotRecord, []DataRecord, []string, error) {
+func (m *Manager) backupVolumes(ctx context.Context, ts time.Time, sel *Selection, mode, compression, archiveBase string) ([]SnapshotRecord, []DataRecord, []string, error) {
 	if mode == DataOff || (sel != nil && len(sel.Volumes) == 0) {
 		return nil, nil, nil, nil
 	}
@@ -232,7 +233,7 @@ func (m *Manager) backupVolumes(ctx context.Context, ts time.Time, sel *Selectio
 			if snapshotted[key] {
 				continue
 			}
-			rec := m.copyVolume(ctx, p.Namespace, p.Name, archiveBase)
+			rec := m.copyVolume(ctx, p.Namespace, p.Name, compression, archiveBase)
 			data = append(data, rec)
 			if rec.Error != "" {
 				warns = append(warns, "copying "+key+": "+rec.Error)
@@ -286,13 +287,17 @@ func (m *Manager) waitReady(recs []SnapshotRecord) {
 			}
 			out, err := m.cfg.Run(m.cfg.Kubectl, "", "--kubeconfig", m.cfg.Kubeconfig,
 				"get", "volumesnapshot", recs[i].Snapshot, "-n", recs[i].Namespace,
-				"-o", "jsonpath={.status.readyToUse}")
+				"-o", `jsonpath={.status.readyToUse}{" "}{.status.restoreSize}`)
 			if err != nil {
 				recs[i].Error = shortErr(err)
 				continue
 			}
-			if strings.TrimSpace(out) == "true" {
+			fields := strings.Fields(strings.TrimSpace(out))
+			if len(fields) > 0 && fields[0] == "true" {
 				recs[i].Ready = true
+				if len(fields) > 1 {
+					recs[i].SizeBytes = quantityBytes(fields[1])
+				}
 				continue
 			}
 			pending++
@@ -307,6 +312,36 @@ func (m *Manager) waitReady(recs []SnapshotRecord) {
 		}
 		time.Sleep(m.cfg.SnapshotPoll)
 	}
+}
+
+// quantityBytes parses the Kubernetes quantity shape used by
+// VolumeSnapshot.status.restoreSize ("1073741824", "1Gi", "1G"). Unparseable
+// values contribute zero rather than making the backup fail.
+func quantityBytes(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	units := []struct {
+		suffix string
+		scale  float64
+	}{
+		{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}, {"Pi", 1 << 50}, {"Ei", 1 << 60},
+		{"k", 1e3}, {"K", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12}, {"P", 1e15}, {"E", 1e18},
+	}
+	scale := float64(1)
+	for _, u := range units {
+		if strings.HasSuffix(s, u.suffix) {
+			scale = u.scale
+			s = strings.TrimSuffix(s, u.suffix)
+			break
+		}
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return int64(n * scale)
 }
 
 // snapshotClass picks the first VolumeSnapshotClass. Multiple classes are an

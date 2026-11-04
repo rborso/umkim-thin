@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rborso/umkim-thin/internal/update"
 	"gopkg.in/yaml.v3"
 )
 
@@ -175,14 +176,19 @@ type ChartRef struct {
 	// Versions is the tested set; Version is the stable default. A missing
 	// list is a single-version catalog entry (backward compatible).
 	Versions []ChartVersion `yaml:"versions,omitempty"`
+	// MinimumUmkimThinVersion is the oldest platform this chart version
+	// supports. Per-version values override it. A dev build is allowed with a
+	// warning; a release build is refused.
+	MinimumUmkimThinVersion string `yaml:"minimumUmkimThinVersion,omitempty"`
 }
 
 // ChartVersion is one published chart/app pair.
 type ChartVersion struct {
-	Version    string `yaml:"version"`
-	AppVersion string `yaml:"appVersion,omitempty"`
-	Channel    string `yaml:"channel,omitempty"` // stable | candidate
-	Notes      string `yaml:"notes,omitempty"`
+	Version                 string `yaml:"version"`
+	AppVersion              string `yaml:"appVersion,omitempty"`
+	Channel                 string `yaml:"channel,omitempty"` // stable | candidate
+	Notes                   string `yaml:"notes,omitempty"`
+	MinimumUmkimThinVersion string `yaml:"minimumUmkimThinVersion,omitempty"`
 }
 
 // EffectiveRoutes returns the routes to publish, whether the entry used the
@@ -218,9 +224,15 @@ func (e Entry) Validate() error {
 	case e.Auth.Kind == "":
 		return fmt.Errorf("%s: auth.kind is required", e.Name)
 	}
+	if e.Chart.MinimumUmkimThinVersion != "" && !update.IsVersion(e.Chart.MinimumUmkimThinVersion) {
+		return fmt.Errorf("%s: invalid chart.minimumUmkimThinVersion %q", e.Name, e.Chart.MinimumUmkimThinVersion)
+	}
 	for _, v := range e.Chart.Versions {
 		if v.Version == "" {
 			return fmt.Errorf("%s: every chart version needs a version", e.Name)
+		}
+		if v.MinimumUmkimThinVersion != "" && !update.IsVersion(v.MinimumUmkimThinVersion) {
+			return fmt.Errorf("%s: chart %s has invalid minimumUmkimThinVersion %q", e.Name, v.Version, v.MinimumUmkimThinVersion)
 		}
 		switch v.Channel {
 		case "", "stable", "candidate":

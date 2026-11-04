@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestScheduleValidate(t *testing.T) {
-	good := Schedule{Enabled: true, Interval: "24h", Keep: 7, Snapshots: true}
+	good := Schedule{Enabled: true, Interval: "24h", Keep: 7, Snapshots: true, Compression: CompressionFastest}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("valid schedule rejected: %v", err)
 	}
@@ -24,10 +25,72 @@ func TestScheduleValidate(t *testing.T) {
 		{Enabled: true, Interval: "half a day"},
 		{Enabled: true, Interval: "30m"},
 		{Enabled: true, Interval: "800h"},
+		{Enabled: true, Interval: "24h", Compression: "turbo"},
 	} {
 		if err := s.Validate(); err == nil {
 			t.Fatalf("schedule %+v was accepted", s)
 		}
+	}
+}
+
+func TestCompressionPresets(t *testing.T) {
+	cases := map[string]string{
+		"":        CompressionDefault,
+		"unknown": CompressionDefault,
+		"none":    CompressionNone,
+		"fastest": CompressionFastest,
+		"BEST":    CompressionBest,
+	}
+	for in, want := range cases {
+		if got := NormalizeCompression(in); got != want {
+			t.Errorf("NormalizeCompression(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := CompressionLevel(CompressionFastest); got != 1 {
+		t.Errorf("fastest level = %d, want 1", got)
+	}
+	if got := CompressionLevel(CompressionDefault); got != gzip.DefaultCompression {
+		t.Errorf("default level = %d, want gzip default", got)
+	}
+	if got := CompressionLevel(CompressionBest); got != 9 {
+		t.Errorf("best level = %d, want 9", got)
+	}
+	if got := CompressionLevel(CompressionNone); got != 0 {
+		t.Errorf("none level = %d, want 0", got)
+	}
+}
+
+func TestAddTargetCreatesAndWriteChecks(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	root := t.TempDir()
+	m.cfg.TargetRoot = root
+	got, err := m.AddTarget("usb")
+	if err != nil {
+		t.Fatalf("AddTarget: %v", err)
+	}
+	if got.Name != "usb" || got.Path != filepath.Join(root, "usb") || !got.Writable {
+		t.Fatalf("target = %+v", got)
+	}
+	entries, err := os.ReadDir(got.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the write probe was left behind: %v", entries)
+	}
+	if _, err := m.AddTarget("bad/name"); err == nil {
+		t.Fatal("a path-like target name was accepted")
+	}
+	if _, err := m.AddTarget("console"); err == nil {
+		t.Fatal("the console target name was accepted")
+	}
+}
+
+func TestAddTargetRequiresMountedRoot(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	m.cfg.TargetRoot = filepath.Join(t.TempDir(), "missing")
+	if _, err := m.AddTarget("usb"); err == nil || !strings.Contains(err.Error(), "not mounted") {
+		t.Fatalf("AddTarget = %v, want a missing-root error", err)
 	}
 }
 
@@ -65,13 +128,13 @@ func TestNextRun(t *testing.T) {
 
 func TestScheduleStorePersistsAndSignals(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "backup-schedule.json")
-	def := Schedule{Enabled: true, Interval: "24h", Keep: 7, Snapshots: true}
+	def := Schedule{Enabled: true, Interval: "24h", Keep: 7, Snapshots: true, DataMode: DataSnapshot, Compression: CompressionDefault}
 	st := NewScheduleStore(path, def)
 	if got := st.Get(); got != def {
 		t.Fatalf("default = %+v, want %+v", got, def)
 	}
 	changed := st.Changed()
-	want := Schedule{Enabled: false, Interval: "12h", Keep: 3, Snapshots: false, DataMode: DataOff}
+	want := Schedule{Enabled: false, Interval: "12h", Keep: 3, Snapshots: false, DataMode: DataOff, Compression: CompressionDefault}
 	if err := st.Set(want); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +179,7 @@ func TestScheduleStoreReloadsExternalEdits(t *testing.T) {
 }
 
 func TestScheduleStoreMissingOrCorruptFileUsesDefault(t *testing.T) {
-	def := Schedule{Enabled: true, Interval: "24h", Keep: 7, Snapshots: true}
+	def := Schedule{Enabled: true, Interval: "24h", Keep: 7, Snapshots: true, DataMode: DataSnapshot, Compression: CompressionDefault}
 	dir := t.TempDir()
 	if got := NewScheduleStore(filepath.Join(dir, "missing.json"), def).Get(); got != def {
 		t.Fatalf("missing file = %+v, want the default", got)
@@ -156,6 +219,24 @@ func TestCreateUsesTheSchedulePolicy(t *testing.T) {
 	}
 	if len(f.applied) != 0 {
 		t.Fatalf("snapshots were taken although the schedule disabled them: %v", f.applied)
+	}
+}
+
+func TestCreateUsesTheScheduleCompression(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	m.cfg.Schedule = NewScheduleStore("", Schedule{
+		Enabled: false, Interval: "24h", Keep: 7, DataMode: DataOff,
+		Compression: CompressionNone,
+	})
+	a, err := m.Create(context.Background(), "compressed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Compression != CompressionNone {
+		t.Fatalf("archive compression = %q, want none", a.Compression)
+	}
+	if a.TotalBytes < a.Size || a.TotalBytes == 0 {
+		t.Fatalf("total size = %d, archive = %d", a.TotalBytes, a.Size)
 	}
 }
 
