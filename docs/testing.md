@@ -110,6 +110,12 @@ serially because OCR/indexing is sensitive to concurrent load.
 |---|---|
 | **Inventory CRUD** | Creates a location, item, tag and photo; reads them back; finds the item by search and in the CSV export. |
 
+### Vaultwarden
+
+| Journey | What the user/client does |
+|---|---|
+| **SSO + client master key** | Signs in through Authelia as a fresh directory user, completes the first-time client-side master-password setup, creates an encrypted secure note, then re-authenticates with SSO, unlocks with the master password, and verifies the note decrypts. |
+
 ### Cross-app (opt-in)
 
 | Journey | What the user/client does |

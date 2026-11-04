@@ -36,6 +36,51 @@ func validEntry() Entry {
 	}
 }
 
+func TestHomeLinks(t *testing.T) {
+	multi := func() Entry {
+		e := validEntry()
+		e.Route = nil
+		e.Routes = []Route{
+			{Key: "jellyfin", Mode: "site", Host: "jellyfin.{{ .zone }}", RequireAuth: true, ServiceName: "jellyfin", ServicePort: 80},
+			{Key: "seerr", Mode: "site", Host: "servarr.{{ .zone }}", RequireAuth: true, ServiceName: "seerr", ServicePort: 80},
+		}
+		e.Home = []HomeLink{
+			{Route: "jellyfin", DisplayName: "Jellyfin"},
+			{Route: "seerr", DisplayName: "Seerr"},
+		}
+		return e
+	}
+
+	if err := multi().Validate(); err != nil {
+		t.Fatalf("valid home links: %v", err)
+	}
+	single := validEntry()
+	single.Home = []HomeLink{{DisplayName: "Nextcloud"}}
+	if err := single.Validate(); err != nil {
+		t.Fatalf("single-route home link: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(*Entry)
+		wantErr string
+	}{
+		{"unknown route", func(e *Entry) { e.Home[0].Route = "sonarr" }, "unknown route"},
+		{"duplicate route", func(e *Entry) { e.Home[1].Route = "jellyfin" }, "duplicate home entry"},
+		{"missing display name", func(e *Entry) { e.Home[0].DisplayName = "" }, "needs displayName"},
+		{"multi-route without key", func(e *Entry) { e.Home[0].Route = "" }, "needs a route key"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := multi()
+			c.mutate(&e)
+			if err := e.Validate(); err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("Validate() = %v, want error containing %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidate(t *testing.T) {
 	cases := []struct {
 		name    string

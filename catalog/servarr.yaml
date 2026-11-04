@@ -1,6 +1,16 @@
 name: servarr
 displayName: Servarr stack
 description: Media automation — Seerr, Radarr, Sonarr, Prowlarr, qBittorrent and Jellyfin, wired together.
+# The household home page gets two cards instead of one Servarr link: Jellyfin
+# to watch, Seerr to request. Both are routes of this release; the other
+# routes stay operator-only.
+home:
+  - route: jellyfin
+    displayName: Jellyfin
+    description: Watch movies and shows.
+  - route: seerr
+    displayName: Seerr
+    description: Request movies and shows.
 
 license:
   chart: Apache-2.0

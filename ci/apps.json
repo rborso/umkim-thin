@@ -143,5 +143,12 @@
       "host": "homebox.{zone}",
       "auth": "oidc"
     }
+  ],
+  "vaultwarden": [
+    {
+      "name": "vaultwarden",
+      "host": "vaultwarden.{zone}",
+      "auth": "oidc"
+    }
   ]
 }

@@ -87,29 +87,127 @@
   <main class="wrap">
     <header>
       <div>
-        <h1>Home</h1>
-        <p class="lede">Your apps, in one place.</p>
+        <h1 data-i18n="title">Home</h1>
+        <p class="lede" data-i18n="lede">Your apps, in one place.</p>
       </div>
       <div class="account">
         <p class="user" id="user"></p>
         <a class="account-link" id="account" href="#" target="_blank" rel="noopener"
            title="Opens the directory (LLDAP) in a new tab; sign in with your directory account"
-           hidden>Change password</a>
+           data-i18n-title="accountTitle"
+           data-i18n="changePassword" hidden>Change password</a>
       </div>
     </header>
     <section class="grid" id="apps" aria-live="polite">
-      <p class="empty">Loading apps…</p>
+      <p class="empty" data-i18n="loading">Loading apps…</p>
     </section>
   </main>
   <script>
+    const TEXT = {
+      en: {
+        title: 'Home',
+        lede: 'Your apps, in one place.',
+        available: 'Available',
+        starting: 'Starting',
+        unavailable: 'Unavailable',
+        open: 'Open →',
+        openApp: 'Open {app}',
+        vpn: 'VPN',
+        loading: 'Loading apps…',
+        empty: 'No apps are installed yet.',
+        signedIn: 'Signed in as {user}',
+        changePassword: 'Change password',
+        accountTitle: 'Opens the directory (LLDAP) in a new tab; sign in with your directory account',
+        loadError: 'Could not load the app list. Reload the page or contact the administrator.',
+      },
+      hu: {
+        title: 'Otthon',
+        lede: 'Az alkalmazásaid egy helyen.',
+        available: 'Elérhető',
+        starting: 'Indítás alatt',
+        unavailable: 'Nem elérhető',
+        open: 'Megnyitás →',
+        openApp: '{app} megnyitása',
+        vpn: 'VPN',
+        loading: 'Alkalmazások betöltése…',
+        empty: 'Még nincs telepített alkalmazás.',
+        signedIn: 'Bejelentkezve: {user}',
+        changePassword: 'Jelszó módosítása',
+        accountTitle: 'Megnyitja a címtárat (LLDAP) új lapon; jelentkezz be a címtár-fiókoddal',
+        loadError: 'Nem sikerült betölteni az alkalmazáslistát. Töltsd újra az oldalt, vagy keresd az adminisztrátort.',
+      },
+    };
+
+    const APP_TEXT = {
+      hu: {
+        actualbudget: {
+          description: 'Helyi elsőbbségű személyes pénzügyek és költségvetés, többfelhasználós OIDC-vel.',
+        },
+        gitea: {
+          description: 'Könnyűsúlyú, saját üzemeltetésű Git szolgáltatás issue-kkal, PR-ekkel és CI-vel.',
+        },
+        homebox: {
+          description: 'Háztartási leltár, garanciakövetés és eszközcímkék.',
+        },
+        immich: {
+          description: 'Fotó- és videótár megosztással és mobilalkalmazásokkal.',
+        },
+        mealie: {
+          description: 'Receptkezelő étkezéstervezéssel, bevásárlólistákkal és háztartási megosztással.',
+        },
+        nextcloud: {
+          description: 'Fájlok, megosztások és együttműködés. Collabora a dokumentumszerkesztéshez.',
+        },
+        paperless: {
+          description: 'Dokumentumarchívum OCR-rel, címkékkel és teljes szöveges kereséssel.',
+        },
+        sparkyfitness: {
+          description: 'Egészség-, étel- és edzésnapló. Forráskód-elérhető, nem kereskedelmi; nem OSI nyílt forráskód.',
+        },
+        servarr: {
+          jellyfin: { name: 'Jellyfin', description: 'Filmek és sorozatok nézése.' },
+          seerr: { name: 'Seerr', description: 'Filmek és sorozatok kérése.' },
+        },
+      },
+    };
+
+    function detectLanguage() {
+      const tags = Array.isArray(navigator.languages) && navigator.languages.length
+        ? navigator.languages
+        : [navigator.language || 'en'];
+      for (const tag of tags) {
+        const code = String(tag || '').toLowerCase().split('-')[0];
+        if (TEXT[code]) return code;
+      }
+      return 'en';
+    }
+
+    function fill(template, values) {
+      return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
+    }
+
+    const language = detectLanguage();
+    const t = TEXT[language];
+    const appText = APP_TEXT[language] || {};
+    document.documentElement.lang = language;
+    document.title = t.title;
+    for (const el of document.querySelectorAll('[data-i18n]')) {
+      const value = t[el.dataset.i18n];
+      if (value) el.textContent = value;
+    }
+    for (const el of document.querySelectorAll('[data-i18n-title]')) {
+      const value = t[el.dataset.i18nTitle];
+      if (value) el.title = value;
+    }
+
     const grid = document.getElementById('apps');
     const user = document.getElementById('user');
     const account = document.getElementById('account');
 
     function statusLabel(status) {
-      if (status === 'available') return 'Available';
-      if (status === 'starting') return 'Starting';
-      return 'Unavailable';
+      if (status === 'available') return t.available;
+      if (status === 'starting') return t.starting;
+      return t.unavailable;
     }
 
     function render(apps) {
@@ -117,21 +215,26 @@
       if (!apps.length) {
         const empty = document.createElement('p');
         empty.className = 'empty';
-        empty.textContent = 'No apps are installed yet.';
+        empty.textContent = t.empty;
         grid.appendChild(empty);
         return;
       }
       for (const app of apps) {
+        const byName = appText[app.name];
+        const labels = (app.route && byName && byName[app.route]) || byName || {};
+        const displayName = labels.name || app.displayName || app.name;
+        const description = labels.description || app.description || '';
+
         const card = document.createElement('a');
         card.className = 'card';
         card.href = app.url;
-        card.setAttribute('aria-label', 'Open ' + app.displayName);
+        card.setAttribute('aria-label', fill(t.openApp, { app: displayName }));
 
         const top = document.createElement('div');
         top.className = 'top';
         const icon = document.createElement('span');
         icon.className = 'icon';
-        icon.textContent = (app.displayName || app.name).slice(0, 1).toUpperCase();
+        icon.textContent = displayName.slice(0, 1).toUpperCase();
         const status = document.createElement('span');
         status.className = 'status ' + (app.status || 'unavailable');
         const dot = document.createElement('span');
@@ -142,19 +245,19 @@
         top.append(icon, status);
 
         const name = document.createElement('h2');
-        name.textContent = app.displayName || app.name;
+        name.textContent = displayName;
         if (app.vpn) {
           const vpn = document.createElement('span');
           vpn.className = 'vpn';
-          vpn.textContent = 'VPN';
+          vpn.textContent = t.vpn;
           name.appendChild(vpn);
         }
         const desc = document.createElement('p');
         desc.className = 'desc';
-        desc.textContent = app.description || '';
+        desc.textContent = description;
         const open = document.createElement('span');
         open.className = 'open';
-        open.textContent = 'Open →';
+        open.textContent = t.open;
 
         card.append(top, name, desc, open);
         grid.appendChild(card);
@@ -166,7 +269,7 @@
         const res = await fetch('/api/home', { cache: 'no-store', headers: { Accept: 'application/json' } });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        user.textContent = data.user ? 'Signed in as ' + data.user : '';
+        user.textContent = data.user ? fill(t.signedIn, { user: data.user }) : '';
         // The directory (LLDAP) is where a user changes their own password.
         if (data.directoryUrl) {
           account.href = data.directoryUrl;
@@ -179,7 +282,7 @@
         grid.replaceChildren();
         const box = document.createElement('p');
         box.className = 'error';
-        box.textContent = 'Could not load the app list. Reload the page or contact the administrator.';
+        box.textContent = t.loadError;
         grid.appendChild(box);
       }
     }

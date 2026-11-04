@@ -1,9 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>umkim-thin</title>
+<script>
+try {
+  const savedTheme = localStorage.getItem('umkim-theme');
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    document.documentElement.dataset.theme = savedTheme;
+  }
+} catch (_) {}
+</script>
 <style>
   :root {
     color-scheme: light;
@@ -153,6 +161,64 @@
   .indexer-fields details > summary { cursor: pointer; font-weight: 650; color: var(--muted) }
   .indexer-fields details .indexer-field { margin-top: .55rem }
   .checkline { display: flex; align-items: center; gap: .45rem; margin: .75rem 0 0; font-weight: 600; font-size: .85rem }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f141c;
+    --card: #151c26;
+    --ink: #e6edf7;
+    --muted: #9aa8bd;
+    --line: #2b3646;
+    --accent: #8db1ff;
+    --accent-soft: #1b2940;
+    --ok-bg: #0f3325;
+    --ok-ink: #7ee2b0;
+    --warn-bg: #382a0b;
+    --warn-ink: #f4c96b;
+    --err-bg: #3a1714;
+    --err-ink: #ff9d91;
+  }
+  [data-theme="dark"] .tabs { background: rgba(15,20,28,.94) }
+  [data-theme="dark"] .checklist li,
+  [data-theme="dark"] tbody tr:hover,
+  [data-theme="dark"] .schedule,
+  [data-theme="dark"] #wg-result,
+  [data-theme="dark"] .indexer-result,
+  [data-theme="dark"] .indexer-fields details { background: #1a2431 }
+  [data-theme="dark"] code { background: #202b3a }
+  [data-theme="dark"] button,
+  [data-theme="dark"] .button,
+  [data-theme="dark"] input,
+  [data-theme="dark"] select { background: #121a24; border-color: #354357; color: var(--ink) }
+  [data-theme="dark"] button:hover,
+  [data-theme="dark"] .button:hover { background: #1c2735; border-color: #4a5a70 }
+  [data-theme="dark"] input:disabled { background: #1a2330; color: #718096 }
+  [data-theme="dark"] input:focus,
+  [data-theme="dark"] select:focus { outline-color: #30558f; border-color: var(--accent) }
+  [data-theme="dark"] .tab { background: transparent; border-color: transparent; border-bottom-color: transparent; color: var(--muted) }
+  [data-theme="dark"] .tab:hover { background: var(--accent-soft); color: var(--ink) }
+  [data-theme="dark"] .tab[aria-selected="true"] { background: var(--accent-soft); border-bottom-color: var(--accent); color: var(--accent) }
+  [data-theme="dark"] .segmented { background: #121a24; border-color: #354357 }
+  [data-theme="dark"] .segmented button { background: transparent; border: 0; color: var(--muted) }
+  [data-theme="dark"] .segmented button[aria-pressed="true"] { background: #253349; color: var(--accent) }
+  [data-theme="dark"] dialog.modal { background: #151c26 }
+  [data-theme="dark"] dialog.modal::backdrop { background: rgba(0,0,0,.65) }
+  [data-theme="dark"] #msg { background: #151c26 }
+  [data-theme="dark"] #install-panel,
+  [data-theme="dark"] #servarr-panel { background: #12203a; border-color: #2b4775 }
+  [data-theme="dark"] #storage-plan-out,
+  [data-theme="dark"] #external-plan-out,
+  [data-theme="dark"] #options-values { background: #121a24 }
+  [data-theme="dark"] #storage-format { border-color: #6b3a34 }
+  [data-theme="dark"] button.danger { background: #2a1512; border-color: #63342e; color: var(--err-ink) }
+  [data-theme="dark"] .brand-mark { color: #08111f }
+  [data-theme="dark"] button.primary,
+  [data-theme="dark"] .button.primary { background: var(--accent); border-color: var(--accent); color: #08111f }
+  [data-theme="dark"] button.primary:hover,
+  [data-theme="dark"] .button.primary:hover { background: #a8c4ff; border-color: #a8c4ff }
+  [data-theme="dark"] .card { box-shadow: 0 1px 2px rgba(0,0,0,.35) }
+  [data-theme="dark"] .checklist li.done { border-color: #1f5b3c }
+  [data-theme="dark"] #msg.ok { border-color: #1f5b3c }
+  [data-theme="dark"] #msg.err { border-color: #6b3a34 }
   @media (max-width: 620px) {
     body { padding: 0 .8rem 2rem }
     .topbar { align-items: flex-start; flex-direction: column; padding-top: 1rem }
@@ -177,6 +243,7 @@
   <div class="top-actions">
     <span id="update-chip" class="update-chip"></span>
     <span id="platform-links" class="platform-links"></span>
+    <button type="button" class="button" id="theme-toggle" aria-label="Switch to light theme" title="Switch to light theme">Light mode</button>
     <a class="button" href="/logout">Sign out</a>
   </div>
 </header>
@@ -715,6 +782,29 @@
 </dialog>
 
 <script>
+const themeToggle = document.getElementById('theme-toggle');
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('umkim-theme', theme); } catch (_) {}
+  if (!themeToggle) return;
+  const light = theme === 'light';
+  const label = light ? 'Switch to dark theme' : 'Switch to light theme';
+  themeToggle.textContent = light ? 'Dark mode' : 'Light mode';
+  themeToggle.setAttribute('aria-label', label);
+  themeToggle.title = label;
+}
+let initialTheme = 'dark';
+try {
+  const savedTheme = localStorage.getItem('umkim-theme');
+  if (savedTheme === 'light' || savedTheme === 'dark') initialTheme = savedTheme;
+} catch (_) {}
+applyTheme(initialTheme);
+if (themeToggle) {
+  themeToggle.onclick = () => applyTheme(
+    document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark',
+  );
+}
+
 const CFG = { zone: '', portalHost: '', configClass: 'local-path', mediaClass: 'umkim-thin-nfs', mediaAccessMode: 'ReadWriteMany', storageClasses: [], storageClassInfo: [] };
 const ENTRIES = {};
 

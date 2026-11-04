@@ -1,17 +1,74 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>umkim-thin — sign in</title>
+<script>
+try {
+  const savedTheme = localStorage.getItem('umkim-theme');
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    document.documentElement.dataset.theme = savedTheme;
+  }
+} catch (_) {}
+</script>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 22rem; margin: 5rem auto; padding: 0 1rem; color: #151515 }
+  :root {
+    color-scheme: dark;
+    --bg: #0f141c;
+    --card: #151c26;
+    --ink: #e6edf7;
+    --muted: #9aa8bd;
+    --line: #2b3646;
+    --accent: #8db1ff;
+    --err-bg: #3a1714;
+    --err-ink: #ff9d91;
+  }
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --ink: #151515;
+    --muted: #666666;
+    --line: #d0d5dd;
+    --accent: #2563eb;
+    --err-bg: #faeae8;
+    --err-ink: #a30000;
+  }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 22rem;
+    margin: 5rem auto;
+    padding: 0 1rem;
+    color: var(--ink);
+    background: var(--bg);
+  }
   h1 { font-size: 1.2rem; margin-bottom: .25rem }
-  p.sub { margin-top: 0; color: #666; font-size: .9rem }
+  p.sub { margin-top: 0; color: var(--muted); font-size: .9rem }
   label { display: block; margin: .9rem 0 .25rem; font-weight: 600; font-size: .9rem }
-  input { width: 100%; padding: .5rem; box-sizing: border-box }
-  button { margin-top: 1.1rem; padding: .55rem 1rem; font: inherit; font-weight: 600; cursor: pointer }
-  .err { margin-top: 1rem; padding: .6rem .8rem; border-radius: .25rem; background: #faeae8; color: #a30000 }
+  input {
+    width: 100%;
+    padding: .5rem;
+    box-sizing: border-box;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: .4rem;
+  }
+  input:focus { outline: 2px solid var(--accent); border-color: var(--accent) }
+  button {
+    margin-top: 1.1rem;
+    padding: .55rem 1rem;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    color: #08111f;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: .4rem;
+  }
+  [data-theme="light"] button { color: #fff }
+  .err { margin-top: 1rem; padding: .6rem .8rem; border-radius: .4rem; background: var(--err-bg); color: var(--err-ink) }
 </style>
 </head>
 <body>

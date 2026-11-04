@@ -1,0 +1,81 @@
+name: vaultwarden
+displayName: Vaultwarden
+description: Bitwarden-compatible password manager with Authelia OIDC and a self-hosted vault.
+
+license:
+  chart: Apache-2.0
+  application: "AGPL-3.0"
+  url: "https://github.com/dani-garcia/vaultwarden/blob/main/LICENSE.txt"
+
+links:
+  homepage: "https://github.com/dani-garcia/vaultwarden"
+  source: "https://github.com/dani-garcia/vaultwarden"
+
+chart:
+  ref: oci://ghcr.io/rborso/charts/vaultwarden
+  version: 0.1.2
+  versions:
+    - version: 0.1.2
+      appVersion: 1.37.5
+      channel: stable
+    - version: 0.1.1
+      appVersion: 1.37.5
+      channel: stable
+    - version: 0.1.0
+      appVersion: 1.37.5
+      channel: stable
+
+oidc:
+  clientId: vaultwarden
+  redirectUris:
+    - "https://{{ .host }}/identity/connect/oidc-signin"
+  requirePkce: true
+  scopes: [openid, profile, email, offline_access]
+
+namespace: vaultwarden
+
+route:
+  mode: site
+  host: "vaultwarden.{{ .zone }}"
+  requireAuth: true
+  # Native Bitwarden clients cannot complete Authelia forward-auth. The public
+  # web vault stays behind the portal; the trusted VPN/management path uses
+  # Vaultwarden's own email/master-password login.
+  exposure:
+    default: authelia
+    allowed: [authelia, vpn]
+  serviceName: vaultwarden
+  servicePort: 8080
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC SSO; the master password is still client-side for vault encryption."
+
+auth:
+  kind: oidc
+
+values:
+  externalUrl: "https://{{ .host }}"
+  persistence:
+    data:
+      storageClass: "{{ .storage.configClass }}"
+  # No local Vaultwarden password or signup path: only an Authelia identity
+  # can authenticate. The OIDC bootstrap below creates the first account; the
+  # user still sets the client-side master password.
+  signupsAllowed: false
+  sso:
+    only: true
+    signupsAllowed: true
+    matchEmail: false
+    allowUnknownEmailVerification: false
+
+verify:
+  playwright: tests/playwright/journeys/vaultwarden.spec.ts
+  checks:
+    - route_reachable
+    - sso_login_completes
+    - master_password_setup
+    - vault_item_create
+    - master_password_unlock

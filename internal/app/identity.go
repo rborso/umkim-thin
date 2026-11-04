@@ -321,6 +321,14 @@ func (in *Installer) applyOIDCValues(e catalog.Entry, values map[string]any, cli
 			"mappingEmail":       "email",
 			"mappingDisplayName": "name",
 		})
+	case "vaultwarden":
+		// Keep the catalog's SSO policy (only/signups/match) while filling the
+		// generated client. The master password never comes from here.
+		set(values, "sso.enabled", true)
+		set(values, "sso.authority", issuer)
+		set(values, "sso.clientId", client.ClientID)
+		set(values, "sso.clientSecret", client.ClientSecret)
+		set(values, "sso.scopes", strings.Join(client.Scopes, " "))
 	default:
 		set(values, "oidc", map[string]any{
 			"enabled":      true,

@@ -139,20 +139,32 @@ type Verify struct {
 
 // Entry is one catalog file.
 type Entry struct {
-	Name        string         `yaml:"name"`
-	DisplayName string         `yaml:"displayName,omitempty"`
-	Description string         `yaml:"description,omitempty"`
-	Chart       ChartRef       `yaml:"chart"`
-	Namespace   string         `yaml:"namespace"`
-	Route       *Route         `yaml:"route,omitempty"`
-	Routes      []Route        `yaml:"routes,omitempty"`
-	Auth        Auth           `yaml:"auth"`
-	License     *License       `yaml:"license"`
-	Links       *Links         `yaml:"links"`
-	OIDC        *OIDC          `yaml:"oidc,omitempty"`
-	Exposure    map[string]any `yaml:"exposure,omitempty"`
-	Values      map[string]any `yaml:"values,omitempty"`
-	Verify      Verify         `yaml:"verify"`
+	Name        string   `yaml:"name"`
+	DisplayName string   `yaml:"displayName,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	Chart       ChartRef `yaml:"chart"`
+	Namespace   string   `yaml:"namespace"`
+	Route       *Route   `yaml:"route,omitempty"`
+	Routes      []Route  `yaml:"routes,omitempty"`
+	// Home optionally splits one installed app into several user-facing home
+	// page entries. Each entry points at one of this app's route keys.
+	Home     []HomeLink     `yaml:"home,omitempty"`
+	Auth     Auth           `yaml:"auth"`
+	License  *License       `yaml:"license"`
+	Links    *Links         `yaml:"links"`
+	OIDC     *OIDC          `yaml:"oidc,omitempty"`
+	Exposure map[string]any `yaml:"exposure,omitempty"`
+	Values   map[string]any `yaml:"values,omitempty"`
+	Verify   Verify         `yaml:"verify"`
+}
+
+// HomeLink is one user-facing entry on the household home page. It lets a
+// multi-route app (the Servarr stack) present its movie player and request UI
+// as separate cards instead of one ambiguous app link.
+type HomeLink struct {
+	Route       string `yaml:"route"`
+	DisplayName string `yaml:"displayName"`
+	Description string `yaml:"description,omitempty"`
 }
 
 // ChartRef pins the chart and where it comes from. Charts live in their own
@@ -284,6 +296,29 @@ func (e Entry) Validate() error {
 			if !strings.HasPrefix(p, "^") {
 				return fmt.Errorf("%s: public path %q must be anchored with ^", e.Name, p)
 			}
+		}
+	}
+	if len(e.Home) > 0 {
+		routes := e.EffectiveRoutes()
+		keys := make(map[string]bool, len(routes))
+		for _, r := range routes {
+			keys[r.Key] = true
+		}
+		seen := make(map[string]bool, len(e.Home))
+		for _, h := range e.Home {
+			if h.DisplayName == "" {
+				return fmt.Errorf("%s: a home entry needs displayName", e.Name)
+			}
+			if h.Route == "" && len(routes) != 1 {
+				return fmt.Errorf("%s: a multi-route home entry needs a route key", e.Name)
+			}
+			if !keys[h.Route] {
+				return fmt.Errorf("%s: home entry references unknown route %q", e.Name, h.Route)
+			}
+			if seen[h.Route] {
+				return fmt.Errorf("%s: duplicate home entry for route %q", e.Name, h.Route)
+			}
+			seen[h.Route] = true
 		}
 	}
 	if e.Verify.Playwright == "" || len(e.Verify.Checks) == 0 {

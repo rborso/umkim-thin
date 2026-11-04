@@ -71,6 +71,13 @@ inside the image keeps its own license.
 | HomeBox | AGPL-3.0 | https://github.com/sysadminsmedia/homebox |
 | SQLite | Public Domain | https://www.sqlite.org/copyright.html |
 
+### Vaultwarden
+
+| Component | License | Source |
+|---|---|---|
+| Vaultwarden | AGPL-3.0 | https://github.com/dani-garcia/vaultwarden |
+| SQLite | Public Domain | https://www.sqlite.org/copyright.html |
+
 ### Gitea
 
 | Component | License | Source |

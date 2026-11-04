@@ -26,6 +26,7 @@ trust a proxy identity header.
 | Sonarr / Radarr / Prowlarr | local forms | no |
 | qBittorrent | local WebUI password | no |
 | Seerr | Jellyfin login (LDAP-backed) | no |
+| Vaultwarden | OIDC SSO via Authelia (LLDAP users); the master password remains client-side for vault encryption | no |
 | Console | own admin/breakglass login | no (deliberate) |
 | Home | Authelia forward-auth only | **yes** |
 | WireGuard | keys | n/a |

@@ -1320,6 +1320,49 @@ func (in *Installer) routes(ns string) []string {
 	return hosts
 }
 
+// RouteHosts maps each catalog route key to the host its primary Ingress
+// publishes. The household home page uses it to give a multi-route app (for
+// example Servarr) one card per route, rather than guessing from the
+// namespace-wide host list.
+func (in *Installer) RouteHosts(e catalog.Entry, namespace string) map[string]string {
+	if namespace == "" {
+		namespace = e.Namespace
+	}
+	out, err := in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", namespace,
+		"get", "ingress", "-o", "json")
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				Rules []struct {
+					Host string `json:"host"`
+				} `json:"rules"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal([]byte(out), &doc) != nil {
+		return nil
+	}
+	byName := make(map[string]string, len(doc.Items))
+	for _, item := range doc.Items {
+		if len(item.Spec.Rules) > 0 && item.Spec.Rules[0].Host != "" {
+			byName[item.Metadata.Name] = item.Spec.Rules[0].Host
+		}
+	}
+	hosts := make(map[string]string, len(e.EffectiveRoutes()))
+	for _, r := range e.EffectiveRoutes() {
+		if host := byName[route.ObjectName(e, r)]; host != "" {
+			hosts[r.Key] = host
+		}
+	}
+	return hosts
+}
+
 // Uninstall removes an installed app. With purge it also deletes the namespace
 // (and therefore the PVCs and the bind Secret); without it, data is kept so the
 // app can be reinstalled.

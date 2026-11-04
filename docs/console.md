@@ -11,8 +11,14 @@ The platform also publishes a separate read-only `home.<zone>` page for ordinary
 directory users. It is gated only by Authelia forward-auth and never asks for the
 console login. It lists installed catalog apps with their display name,
 description, launch URL and a coarse `Available` / `Starting` / `Unavailable`
-status. The home listener refuses requests without Authelia's `Remote-User`
-header, so the ClusterIP port is not a second unauthenticated surface.
+status. The Servarr stack is split into two cards: **Jellyfin** for watching and
+**Seerr** for requesting; the rest of its routes stay operator-only. A catalog
+entry can declare `home` entries to do this for any multi-route app.
+
+The page’s labels and the media descriptions follow the browser language
+(English and Hungarian; other languages fall back to English). The home
+listener refuses requests without Authelia's `Remote-User` header, so the
+ClusterIP port is not a second unauthenticated surface.
 
 The home page is deliberately not the console: it has no namespaces, Helm
 status, version details, installs, upgrades, uninstall, invite or storage
@@ -33,6 +39,10 @@ directory account, so the platform never handles the password. `GET /api/home`
 returns it as `directoryUrl` and the link is hidden when the zone is unknown.
 
 ## Layout
+
+The console defaults to a dark palette. The **Light mode** button in the header
+switches it and remembers the choice; the login page follows the same saved
+theme.
 
 The console is split into tabs so unrelated operations are not stacked on one
 page:

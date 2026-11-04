@@ -1380,6 +1380,7 @@ func requireRemoteUser(next http.Handler) http.Handler {
 // Namespaces, Helm phases, pod counts and mutations stay in the admin console.
 type homeApp struct {
 	Name        string         `json:"name"`
+	Route       string         `json:"route,omitempty"`
 	DisplayName string         `json:"displayName"`
 	Description string         `json:"description,omitempty"`
 	URL         string         `json:"url"`
@@ -1496,6 +1497,32 @@ func buildHomeApps(installer *app.Installer, entries []catalog.Entry) []homeApp 
 		displayName := e.DisplayName
 		if displayName == "" {
 			displayName = e.Name
+		}
+		if len(e.Home) > 0 {
+			hosts := installer.RouteHosts(e, a.Namespace)
+			for _, h := range e.Home {
+				host := hosts[h.Route]
+				if host == "" {
+					continue
+				}
+				name := h.DisplayName
+				if name == "" {
+					name = displayName
+				}
+				desc := h.Description
+				if desc == "" {
+					desc = e.Description
+				}
+				out = append(out, homeApp{
+					Name:        e.Name,
+					Route:       h.Route,
+					DisplayName: name,
+					Description: desc,
+					URL:         "https://" + host,
+					Links:       e.Links,
+				})
+			}
+			continue
 		}
 		out = append(out, homeApp{
 			Name:        e.Name,

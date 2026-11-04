@@ -63,6 +63,10 @@ test.describe('console', () => {
     expect(loginPage?.status(), 'console login page').toBe(200);
     const loginHeaders = loginPage?.headers() ?? {};
     expect(loginHeaders['content-security-policy'], 'console CSP').toBeTruthy();
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.theme),
+      'console login defaults to dark',
+    ).toBe('dark');
 
     // Authelia protects the console root; the console then has its own login.
     await portalLogin(page);
@@ -84,6 +88,21 @@ test.describe('console', () => {
     await expect(page.getByRole('heading', { name: 'Applications' })).toBeVisible({
       timeout: 15_000,
     });
+
+    // Dark mode is the default; the header toggle switches to the light palette
+    // and back without a reload.
+    const themeToggle = page.locator('#theme-toggle');
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.theme),
+      'console defaults to dark',
+    ).toBe('dark');
+    await expect(themeToggle).toHaveText('Light mode');
+    await themeToggle.click();
+    await expect(themeToggle).toHaveText('Dark mode');
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('light');
+    await themeToggle.click();
+    await expect(themeToggle).toHaveText('Light mode');
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
 
     // The Platform panel must be reachable even when no update is available,
     // and it must explain the host-side check/update path.

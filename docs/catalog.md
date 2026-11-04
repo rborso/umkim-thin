@@ -98,6 +98,7 @@ verify:
 | `route.trusted.vpn` | no | add the same host on the internal `vpn` entrypoint without Authelia |
 | `route.trusted.sameHost` | no | defaults to `true`; `false` keeps the legacy `.vpn.<zone>` host |
 | `route.appAuth.kind` | when trusted | `ldap`, `oidc`, `local` or `token`; never `none` |
+| `home` | no | split a multi-route app into home-page cards: `route` (a route key), `displayName`, optional `description` |
 | `namespace` | yes | created if absent |
 | `license.chart` | yes | licence of the Helm chart itself |
 | `license.application` | yes | licence of the deployed application; use a short mixed-stack expression where needed |
