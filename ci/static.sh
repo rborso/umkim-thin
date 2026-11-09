@@ -169,6 +169,21 @@ for d in charts/apps/*; do
 done
 echo "   ok"
 
+echo ">> servarr Seerr data lives on the config PVC"
+servarr_render=$(mktemp)
+helm template servarr charts/apps/servarr >"$servarr_render"
+grep -q 'name: CONFIG_DIRECTORY' "$servarr_render" || {
+  echo "servarr: Seerr does not set CONFIG_DIRECTORY (its database stays in the container layer)" >&2; exit 1;
+}
+grep -q 'value: "/config"' "$servarr_render" || {
+  echo "servarr: Seerr's CONFIG_DIRECTORY does not point at the config PVC" >&2; exit 1;
+}
+grep -q 'fsGroup: 1000' "$servarr_render" || {
+  echo "servarr: Seerr's config volume is not writable by the image's UID 1000" >&2; exit 1;
+}
+rm -f "$servarr_render"
+echo "   ok"
+
 echo ">> OIDC apps build their own CA bundle"
 paperless_render=$(mktemp)
 helm template paperless charts/apps/paperless \
