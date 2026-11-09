@@ -12,7 +12,7 @@ links:
   source: "https://github.com/go-gitea/gitea"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/gitea
+  ref: https://github.com/rborso/umkim-charts/tree/main/gitea
   version: 0.1.21
   versions:
     - version: 0.1.21

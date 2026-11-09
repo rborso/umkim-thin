@@ -23,7 +23,7 @@ links:
   source: "https://github.com/Servarr"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/servarr
+  ref: https://github.com/rborso/umkim-charts/tree/main/servarr
   version: 0.3.3
   versions:
     - version: 0.3.3

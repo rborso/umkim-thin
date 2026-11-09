@@ -12,7 +12,7 @@ links:
   source: "https://github.com/immich-app/immich"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/immich
+  ref: https://github.com/rborso/umkim-charts/tree/main/immich
   version: 0.1.11
   versions:
     - version: 0.1.11

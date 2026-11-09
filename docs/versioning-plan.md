@@ -14,9 +14,9 @@ tested versions available, and no floating image tags.
 > section, the automated N-1 upgrade matrix, and the platform-upgrade track.
 >
 > **Delivery note:** this plan predates the local-artifact policy. Internal
-> console/bootstrap images are built locally, and charts are packaged from the
-> `charts/apps` submodule into the local mirror. The OCI/publish references
-> below are historical options, not a required release pipeline.
+> console/bootstrap images are built locally, and charts are sourced from the
+> `charts/apps` submodule and packaged into the local mirror; there is no
+> chart registry.
 
 ## Why
 
@@ -107,7 +107,7 @@ existing entries:
 
 ```yaml
 chart:
-  ref: oci://ghcr.io/rborso/charts/nextcloud
+  ref: https://github.com/rborso/umkim-charts/tree/main/nextcloud
   version: 0.1.20          # stable default, must be in versions
   versions:
     - version: 0.1.19
@@ -128,22 +128,21 @@ Validation:
 - Every `versions[].version` is valid semver; every `appVersion` is non-empty.
 - A stable version is not also a candidate; channels are `stable` or
   `candidate`.
-- The chart tarball for each advertised version exists in the mirror/OCI and
+- The chart tarball for each advertised version exists in the local mirror and
   its `Chart.yaml` `version`/`appVersion` match the catalog entry. The static
   check enforces this.
 - The chart mirror and catalog are generated together; no hand-edited mismatch.
 
 ### Where the versions live
 
-- Publish each chart version immutably to the OCI registry
-  (`ghcr.io/rborso/charts/<app>:<version>`), tagged by chart version.
-- `install.sh` continues to package the **current** chart into
-  `chart-mirror/` for an offline/lab install. Keep the **previous stable**
-  tarball in the mirror (and in the catalog `versions`) so an upgrade and a
-  rollback work offline.
-- The console prefers `chart-mirror/<name>-<version>.tgz`; if it is absent,
-  use the OCI ref/version. `Installer.Install` passes the selected
-  `--version` for an OCI chart, so a mirror miss cannot pull an unpinned chart.
+- A chart version is a commit in the `umkim-charts` source tree. The platform
+  vendors it as the `charts/apps` submodule and the installer packages it into
+  `chart-mirror/`; there is no chart registry.
+- Keep the **previous stable** tarball in the mirror (and in the catalog
+  `versions`) so an upgrade and a rollback work offline.
+- The console resolves `chart-mirror/<name>-<version>.tgz`. If the exact
+  package is absent, the install fails; `chart.ref` is provenance, not a fetch
+  URL.
 - The catalog itself can now be replaced at runtime (`/data/catalog` plus the
   validated upload in the Catalog tab). A version-index change is **not** a
   console image rebuild. The bundled `/opt/umkim-thin/catalog` is only the
@@ -298,9 +297,10 @@ pins, it does not upgrade).
 - Add `GET /api/apps/{name}/versions`, extend `GET /api/apps` and
   `app status` with `appVersion` and `upgradeAvailable`.
 - Add `app versions <name>`.
-- Pass the selected chart version to Helm on every path, including the OCI
-  fallback (`--version`), and test with the mirror tarball removed.
-- Retain the N-1 chart tarball in the mirror and OCI; document the retention.
+- Pass the selected chart version to Helm on every path from the local mirror,
+  and test with the mirror tarball absent (it must fail clearly, not fetch a
+  registry).
+- Retain the N-1 chart tarball in the mirror; document the retention.
 - No upgrade action yet.
 
 **Acceptance:** `app versions nextcloud` shows installed/stable/candidate;
@@ -390,14 +390,14 @@ container.
   operator-confirmed VM snapshot; later add a Longhorn snapshot Job for HA and
   a host-side `install.sh --backup` marker.
 - **Chart distribution**: the submodule commit plus the local mirror is the
-  delivery path; OCI is an optional historical fallback. Keep the N-1 tarballs;
-  do not rely on the 30-day prune.
+  only delivery path; there is no chart registry. Keep the N-1 tarballs; do not
+  rely on the 30-day prune.
 - **Baked catalog vs runtime version index**: the catalog is in the console
   image, so shipping a version currently means rebuilding the console locally. Start
   with the baked catalog for reproducibility; if version updates need to avoid
-  a console rebuild, move the version index to a generated ConfigMap or an OCI
-  artifact read at startup. Recommendation: keep it baked in Phase 1 and add
-  the ConfigMap index in Phase 4 if release cadence demands it.
+  a console rebuild, move the version index to a generated ConfigMap or a
+  published catalog artifact read at startup. Recommendation: keep it baked in
+  Phase 1 and add the ConfigMap index in Phase 4 if release cadence demands it.
 - **Servarr** is a bundle of seven images. Version it as one chart (the tested
   bundle) and show the component versions in the release notes; per-component
   upgrades are not independent.

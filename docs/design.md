@@ -100,7 +100,7 @@ products consume.
 | License | Apache-2.0. LLDAP is deployed, never linked — see `NOTICE` and `docs/licenses.md` |
 | Stack | one small Go binary serving the API, a compact UI and the CLI |
 | Ingress | Traefik only (the middleware, file-provider fragment and route rendering are Traefik-specific) |
-| App charts | the `umkim-charts` repository, pinned as a `charts/apps` submodule and by OCI version |
+| App charts | the `umkim-charts` repository, pinned as a `charts/apps` submodule and packaged into the local mirror |
 | WireGuard | optional, and a **workload in the cluster** — see below |
 | Catalog | the apps verified on the lab cluster, then grow; sources are proposed in `docs/catalog-sources.md` |
 

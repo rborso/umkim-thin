@@ -94,8 +94,8 @@ You need:
 - a key that can reach the **Ansible executor** (`JUMP`), because
   `deploy/provision.sh` ships the playbook there;
 - `ansible` on that executor (the playbook is run there, not on your laptop);
-- access to the app charts: the catalog pins OCI references, or you can package
-  them into the local chart mirror (see §4).
+- access to the app charts: the `charts/apps` submodule is vendored and
+  packaged into the local chart mirror (see §4). There is no chart registry.
 
 `JUMP` can be the first/bootstrap server **after the first-run reboot has
 completed**. The `common` role may reboot every target to load a kernel with
@@ -324,10 +324,10 @@ issuer, etcd encryption, the Nextcloud directory lookup, cross-namespace
 NetworkPolicy, shared RWX media, and the WireGuard handshake/revocation. The
 WireGuard check dials the node directly, so run it from a connected host.
 
-> **App charts:** the catalog pins the app charts by OCI reference. The source
-> lives in the `umkim-charts` repository and is pinned as the `charts/apps/`
-> submodule; `provision.sh` packages it into the node's chart mirror, so the
-> cluster does not need to pull the OCI ref. Clone with
+> **App charts:** the catalog points at the charts' GitHub source and pins
+> their versions. The source lives in the `umkim-charts` repository, vendored
+> as the `charts/apps/` submodule; `provision.sh` packages it into the node's
+> chart mirror, so no registry is needed. Clone with
 > `--recurse-submodules`, or run `git submodule update --init --recursive`.
 > Use `chart_repos` only for an out-of-tree chart. A full URL such as
 > `https://example.com/me/charts.git:helm/app` is supported; it is cloned on

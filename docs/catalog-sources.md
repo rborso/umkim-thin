@@ -69,7 +69,7 @@ One source type, several transports:
 |---|---|---|
 | `builtin` | baked into the console image at `/opt/umkim-thin/catalog/official` | offline default |
 | `dir` | `/data/catalogs/home` on the console PVC, or a read-only mount | private apps, air-gapped installs |
-| `oci` | `oci://ghcr.io/rborso/catalogs/official:0.1.0` | published/cached official or community catalogs |
+| `oci` | `oci://registry.example.com/catalogs/official:0.1.0` | optional published/cached catalogs |
 
 Do not add a Kubernetes CRD just for this. A directory or an OCI artifact is
 portable, works with Git, and does not require the console to have cluster-scoped
@@ -104,7 +104,7 @@ Make validation trust-aware:
 | pinned `chart.version` | yes | yes | yes (or explicit local build) |
 | route/auth/exposure valid | yes | yes | yes |
 | `verify` present | yes | recommended | optional |
-| chart in the official mirror/OCI | yes | optional | optional |
+| chart in the local mirror | yes | optional | optional |
 | upstream license/source recorded | yes | yes | recommended |
 
 A custom entry without verification installs with a visible **unverified**
@@ -112,12 +112,16 @@ badge. It is not "official" and is not used by the official CI gate.
 
 ## Chart transport without lock-in
 
-`chart.ref` should support:
+`chart.ref` records where the chart comes from:
 
-- `oci://...` — the official and published path;
+- the chart's directory in a GitHub repository — the project default; the
+  installer vendors it as the `charts/apps` submodule and packages the local
+  mirror (this is the delivery path, not a fetch URL);
 - `file:///data/catalogs/home/charts/dashboard` — a chart directory on a
   mounted catalog source;
-- a packaged `.tgz` inside the same source root.
+- a packaged `.tgz` inside the same source root;
+- `oci://...` — an optional private-registry transport, not used by this
+  project.
 
 The resolver should confine `file://` paths to the source root (no `..`, no
 absolute paths outside a configured root). Do not allow arbitrary URLs by
@@ -165,7 +169,7 @@ Migration can therefore be incremental:
 
 1. Add the source manifest and loader; keep the flat directory working.
 2. Add repeatable sources and the collision/override rules.
-3. Publish the official catalog as an OCI artifact (optional, for caching and
+3. Publish the official catalog as a source artifact (optional, for caching and
    version pinning).
 4. Add the source/trust badges and the optional `upstream` fields to the UI.
 5. Only then move `catalog/*.yaml` into `catalog/official/`.

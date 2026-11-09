@@ -76,11 +76,12 @@ The same flow works for the other catalog entries. Before installing:
 - check the storage and resource needs;
 - check the hostname: the default is `<app>.<zone>`.
 
-The app charts are pinned through the `charts/apps/` submodule, so the
-single-node path does not need a private registry. The catalog still records the
-canonical OCI reference; the installer resolves the local package by name and
-version. Clone with `--recurse-submodules`, or run
-`git submodule update --init --recursive` before installing.
+The app charts come from the `charts/apps/` submodule and are packaged into the
+local chart mirror, so the single-node path does not need a private registry.
+The catalog records the chart's GitHub source and pins the version; the
+installer resolves the local package by name and version. Clone with
+`--recurse-submodules`, or run `git submodule update --init --recursive` before
+installing.
 
 ## Next
 

@@ -12,7 +12,7 @@ links:
   source: "https://github.com/paperless-ngx/paperless-ngx"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/paperless
+  ref: https://github.com/rborso/umkim-charts/tree/main/paperless
   version: 0.1.13
   versions:
     - version: 0.1.13

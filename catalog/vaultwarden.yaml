@@ -12,7 +12,7 @@ links:
   source: "https://github.com/dani-garcia/vaultwarden"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/vaultwarden
+  ref: https://github.com/rborso/umkim-charts/tree/main/vaultwarden
   version: 0.1.2
   versions:
     - version: 0.1.2

@@ -12,7 +12,7 @@ links:
   source: "https://github.com/sysadminsmedia/homebox"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/homebox
+  ref: https://github.com/rborso/umkim-charts/tree/main/homebox
   version: 0.1.1
   versions:
     - version: 0.1.1

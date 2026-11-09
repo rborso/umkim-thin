@@ -25,8 +25,10 @@ links:
   source: https://github.com/nextcloud/server
 
 chart:
-  # An OCI reference to the chart's own repository, pinned by version.
-  ref: oci://ghcr.io/example/charts/nextcloud
+  # The chart's directory in the umkim-charts GitHub repository, pinned by
+  # version. The installer vendors the submodule and packages it locally;
+  # there is no chart registry.
+  ref: https://github.com/rborso/umkim-charts/tree/main/nextcloud
   version: 0.1.20
   versions:
     - version: 0.1.20
@@ -123,10 +125,12 @@ verify:
 
 1. **Pin everything.** An entry names an exact chart version. Upgrades are a new
    entry revision, reviewed like code.
-2. **Charts live in their own repos.** `chart.ref` is an OCI URL
-   (`oci://ghcr.io/<owner>/charts/<name>`). A fork changes the ref to its own
-   registry, or packages the chart into the local mirror; the catalog pins the
-   version, not the location.
+2. **Charts are source, not a registry.** `chart.ref` points at the chart's
+   directory in the `umkim-charts` GitHub repository (the WireGuard gateway
+   lives in this repository's `charts/`). The installer vendors the
+   `charts/apps` submodule and packages the chart into the local mirror; the
+   catalog pins the version. A fork points the ref at its own repository and
+   packages its own mirror.
 3. **Auth is explicit.** An app is either forward-authed, OIDC, or deliberately
    public. There is no implicit default.
 4. **Exposure is explicit.** `public`, `authelia`, or `vpn`; `public` is

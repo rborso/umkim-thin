@@ -1719,10 +1719,12 @@ func (in *Installer) checkMinimumVersion(e catalog.Entry) error {
 	return nil
 }
 
-// chartRef resolves the chart: a packaged chart from the local mirror when
-// present (the private registry is not reachable from the cluster), else the
-// catalog's own ref (an OCI URL). The mirror file is named after the chart,
-// which is the last segment of the ref (e.g. .../wireguard-gateway).
+// chartRef resolves the chart from the local mirror. The catalog's ref records
+// provenance (the chart's GitHub source, or an optional OCI reference); the
+// exact-version package in chart-mirror is the delivery path. The mirror file
+// is named after the chart, which is the last segment of the ref (e.g.
+// .../wireguard-gateway). A standalone/custom setup that has no mirror gets the
+// ref back unchanged.
 func (in *Installer) chartRef(e catalog.Entry) string {
 	name := e.Name
 	if ref := strings.TrimSuffix(e.Chart.Ref, "/"); ref != "" {

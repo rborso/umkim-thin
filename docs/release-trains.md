@@ -7,7 +7,7 @@ not need a new console image.
 | Train | Artifact | Version source | How it is published |
 |---|---|---|---|
 | **Platform** | console image, installer, `VERSION` | `VERSION` / exact git tag | install/upgrade (`install.sh`, `deploy/provision.sh`) |
-| **Charts** | one immutable OCI chart per app and version | `charts/apps/<app>/Chart.yaml` → `version` | `helm push` from `umkim-charts`; the catalog pins it |
+| **Charts** | a chart version in the `umkim-charts` source tree | `charts/apps/<app>/Chart.yaml` → `version` | commit + submodule update; the installer packages the local mirror |
 | **Catalog** | `.tar.gz` of `catalog/*.yaml` + `VERSION` | `catalog/VERSION` | `umkim-thin catalog package`, then upload in the console |
 
 ## Platform
@@ -59,36 +59,39 @@ release build for production. The field is validated as a version by
 
 ## Chart release
 
-Charts live in `umkim-charts`; the platform's `charts/apps` submodule is the
-**development and offline fallback**, not the production distribution channel.
+Charts live in `umkim-charts`; the platform vendors them as the `charts/apps`
+submodule and packages them into the local mirror. There is no chart registry
+and nothing to push: a chart release is a version bump and a commit in
+`umkim-charts`, then a catalog entry that names that version.
 
 In `umkim-charts`:
 
 ```bash
-helm lint vaultwarden
-helm package vaultwarden --destination dist
-helm push dist/vaultwarden-0.1.3.tgz oci://ghcr.io/rborso/charts
+helm lint servarr
+helm package servarr --destination dist   # optional local check
 ```
 
-The OCI ref is already what the catalog pins:
+The catalog entry records the source and pins the version:
 
 ```yaml
 chart:
-  ref: oci://ghcr.io/rborso/charts/vaultwarden
-  version: 0.1.3
+  ref: https://github.com/rborso/umkim-charts/tree/main/servarr
+  version: 0.3.3
 ```
 
-Then publish a catalog release that adds the version (and its
-`minimumUmkimThinVersion`, if it needs one). The console resolves the chart in
-this order:
+Then bump the `charts/apps` submodule in the platform checkout (so the
+bundled/offline mirror carries the chart) and publish a catalog release that
+adds the version (and its `minimumUmkimThinVersion`, if it needs one). The
+console resolves the chart in this order:
 
-1. `chart-mirror/<name>-<version>.tgz` if the installer/cache has that exact
-   version (offline/lab fallback);
-2. otherwise the OCI ref with `--version <chart-version>`.
+1. `chart-mirror/<name>-<version>.tgz` from the installer/cache — this is the
+   only delivery path; the catalog's `ref` is provenance, not a fetch URL;
+2. if the exact package is absent, the install fails rather than reaching for a
+   registry. Install/update the platform or upload a catalog whose version is
+   present in the mirror.
 
-The local mirror currently packages only the current chart. That is intentional
-for a fresh offline install; a console that has network access can install a
-newer OCI-published chart without a platform release.
+The installer packages the current chart into the mirror; keep the previous
+stable tarball there too so an offline upgrade/rollback can still resolve it.
 
 ## Upgrade and rollback
 
@@ -102,5 +105,5 @@ newer OCI-published chart without a platform release.
 
 A backup records the chart version it saw. If a later catalog drops that version
 and the mirror no longer has it, restore the platform/console image that
-contains the fallback before restoring the app. Keep the OCI tags immutable so
+contains the fallback before restoring the app. Keep chart versions immutable so
 this window is rare.

@@ -12,7 +12,7 @@ links:
   source: "https://github.com/actualbudget/actual"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/actualbudget
+  ref: https://github.com/rborso/umkim-charts/tree/main/actualbudget
   version: 0.1.2
   versions:
     - version: 0.1.2

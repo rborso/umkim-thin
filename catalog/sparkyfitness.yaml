@@ -13,7 +13,7 @@ links:
   source: "https://github.com/CodeWithCJ/SparkyFitness"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/sparkyfitness
+  ref: https://github.com/rborso/umkim-charts/tree/main/sparkyfitness
   version: 0.1.1
   versions:
     - version: 0.1.1

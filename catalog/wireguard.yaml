@@ -15,7 +15,7 @@ links:
   source: "https://git.zx2c4.com/wireguard-linux/"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/wireguard-gateway
+  ref: https://github.com/rborso/umkim-thin/tree/main/charts/wireguard-gateway
   version: 0.1.8
   versions:
     - version: 0.1.8

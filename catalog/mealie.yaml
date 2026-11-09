@@ -12,7 +12,7 @@ links:
   source: "https://github.com/mealie-recipes/mealie"
 
 chart:
-  ref: oci://ghcr.io/rborso/charts/mealie
+  ref: https://github.com/rborso/umkim-charts/tree/main/mealie
   version: 0.1.4
   versions:
     - version: 0.1.4
