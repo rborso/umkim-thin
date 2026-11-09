@@ -74,7 +74,7 @@ func TestContextHostOverrides(t *testing.T) {
 	}
 }
 
-func TestPreserveStorageClasses(t *testing.T) {
+func TestPreserveImmutableStorage(t *testing.T) {
 	dir := t.TempDir()
 	in := testInstaller()
 	in.cfg.StateDir = dir
@@ -86,8 +86,10 @@ nextcloud:
   persistence:
     data:
       storageClass: external-nfs
+      accessMode: ReadWriteMany
     media:
       storageClass: ""
+      accessMode: ""
 postgres:
   persistence:
     storageClass: external-nfs
@@ -98,23 +100,29 @@ postgres:
 	current := map[string]any{
 		"nextcloud": map[string]any{
 			"persistence": map[string]any{
-				"data":  map[string]any{"storageClass": "longhorn-rwx"},
-				"media": map[string]any{"storageClass": "longhorn-rwx"},
+				"data":  map[string]any{"storageClass": "longhorn-rwx", "accessMode": "ReadWriteOnce"},
+				"media": map[string]any{"storageClass": "longhorn-rwx", "accessMode": "ReadWriteOnce"},
 			},
 		},
 		"postgres": map[string]any{
 			"persistence": map[string]any{"storageClass": "longhorn-rwo"},
 		},
 	}
-	if err := in.preserveStorageClasses("nextcloud", "nextcloud", current); err != nil {
+	if err := in.preserveImmutableStorage("nextcloud", "nextcloud", current); err != nil {
 		t.Fatal(err)
 	}
 	nested := current["nextcloud"].(map[string]any)["persistence"].(map[string]any)
 	if got := nested["data"].(map[string]any)["storageClass"]; got != "external-nfs" {
 		t.Fatalf("data storage class = %v", got)
 	}
+	if got := nested["data"].(map[string]any)["accessMode"]; got != "ReadWriteMany" {
+		t.Fatalf("data access mode = %v", got)
+	}
 	if got := nested["media"].(map[string]any)["storageClass"]; got != "longhorn-rwx" {
 		t.Fatalf("empty old storage class should not overwrite the new one: %v", got)
+	}
+	if got := nested["media"].(map[string]any)["accessMode"]; got != "ReadWriteOnce" {
+		t.Fatalf("empty old access mode should not overwrite the new one: %v", got)
 	}
 	if got := current["postgres"].(map[string]any)["persistence"].(map[string]any)["storageClass"]; got != "external-nfs" {
 		t.Fatalf("postgres storage class = %v", got)

@@ -873,7 +873,7 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 		opts.OCRLanguage = code
 	}
 	if opts.Upgrade {
-		if err := in.preserveStorageClasses(e.Name, e.Namespace, values); err != nil {
+		if err := in.preserveImmutableStorage(e.Name, e.Namespace, values); err != nil {
 			return Result{}, err
 		}
 	}
@@ -1609,19 +1609,25 @@ func (in *Installer) renderValues(e catalog.Entry, ctx siteContext) map[string]a
 	return out
 }
 
-// preserveStorageClasses keeps the previous install's storageClass values on
-// an upgrade. PVC storageClassName is immutable, so replacing it with the
-// current site default makes Helm fail at apply time even when nothing about
-// the app's data needs to change. Prefer the live Helm release values: a failed
-// upgrade can overwrite the local values file before Helm rolls back.
-func (in *Installer) preserveStorageClasses(name, namespace string, values map[string]any) error {
+// preserveImmutableStorage keeps the previous install's storageClass and
+// accessMode values on an upgrade. A PVC's storageClassName and a bound PVC's
+// access modes are immutable, so replacing them with the current site default
+// makes Helm fail at apply time even when nothing about the app's data needs to
+// change. Prefer the live Helm release values: a failed upgrade can overwrite
+// the local values file before Helm rolls back.
+func (in *Installer) preserveImmutableStorage(name, namespace string, values map[string]any) error {
 	if in.cfg.Helm != "" {
-		raw, err := in.run(in.cfg.Helm, "get", "values", name, "--namespace", namespace,
-			"--kubeconfig", in.cfg.Kubeconfig, "-o", "yaml")
-		if err == nil {
+		args := []string{"get", "values", name, "--namespace", namespace,
+			"--kubeconfig", in.cfg.Kubeconfig, "-o", "yaml"}
+		// A failed upgrade leaves the latest revision holding the values that
+		// failed to apply; read the last revision that actually deployed.
+		if rev, ok := in.lastDeployedRevision(name, namespace); ok {
+			args = append(args, "--revision", strconv.Itoa(rev))
+		}
+		if raw, err := in.run(in.cfg.Helm, args...); err == nil {
 			var old map[string]any
 			if yaml.Unmarshal([]byte(raw), &old) == nil && len(old) > 0 {
-				copyStorageClasses(old, values)
+				copyImmutableStorage(old, values)
 				return nil
 			}
 		}
@@ -1639,11 +1645,37 @@ func (in *Installer) preserveStorageClasses(name, namespace string, values map[s
 	if err := yaml.Unmarshal(raw, &old); err != nil {
 		return fmt.Errorf("parsing previous values for %s: %w", name, err)
 	}
-	copyStorageClasses(old, values)
+	copyImmutableStorage(old, values)
 	return nil
 }
 
-func copyStorageClasses(old, current any) {
+// lastDeployedRevision returns the newest revision Helm reports as deployed.
+// A failed upgrade or an interrupted rollback can leave later revisions behind
+// (failed, pending-rollback); their values are not the ones the workload is
+// running with.
+func (in *Installer) lastDeployedRevision(name, namespace string) (int, bool) {
+	raw, err := in.run(in.cfg.Helm, "history", name, "--namespace", namespace,
+		"--kubeconfig", in.cfg.Kubeconfig, "-o", "json")
+	if err != nil {
+		return 0, false
+	}
+	var revisions []struct {
+		Revision int    `json:"revision"`
+		Status   string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(raw), &revisions); err != nil {
+		return 0, false
+	}
+	best := 0
+	for _, r := range revisions {
+		if r.Status == "deployed" && r.Revision > best {
+			best = r.Revision
+		}
+	}
+	return best, best > 0
+}
+
+func copyImmutableStorage(old, current any) {
 	oldMap, ok := old.(map[string]any)
 	if !ok {
 		return
@@ -1653,14 +1685,15 @@ func copyStorageClasses(old, current any) {
 		return
 	}
 	for key, oldValue := range oldMap {
-		if key == "storageClass" {
-			if class, ok := oldValue.(string); ok && class != "" {
-				currentMap[key] = class
+		switch key {
+		case "storageClass", "accessMode":
+			if value, ok := oldValue.(string); ok && value != "" {
+				currentMap[key] = value
 			}
 			continue
 		}
 		if newValue, ok := currentMap[key]; ok {
-			copyStorageClasses(oldValue, newValue)
+			copyImmutableStorage(oldValue, newValue)
 		}
 	}
 }
