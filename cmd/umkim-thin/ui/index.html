@@ -160,6 +160,8 @@ try {
   .indexer-fields details { border: 1px solid var(--line); border-radius: .55rem; padding: .55rem .65rem; background: #fbfcfe }
   .indexer-fields details > summary { cursor: pointer; font-weight: 650; color: var(--muted) }
   .indexer-fields details .indexer-field { margin-top: .55rem }
+  #install-advanced { background: #fbfcfe }
+  #install-advanced > summary { cursor: pointer; font-weight: 650 }
   .checkline { display: flex; align-items: center; gap: .45rem; margin: .75rem 0 0; font-weight: 600; font-size: .85rem }
   [data-theme="dark"] {
     color-scheme: dark;
@@ -183,7 +185,8 @@ try {
   [data-theme="dark"] .schedule,
   [data-theme="dark"] #wg-result,
   [data-theme="dark"] .indexer-result,
-  [data-theme="dark"] .indexer-fields details { background: #1a2431 }
+  [data-theme="dark"] .indexer-fields details,
+  [data-theme="dark"] #install-advanced { background: #1a2431 }
   [data-theme="dark"] code { background: #202b3a }
   [data-theme="dark"] button,
   [data-theme="dark"] .button,
@@ -1800,8 +1803,8 @@ function openInstall(e) {
       `<div><label>Media access mode</label><select id="med-access"><option value="ReadWriteOnce">ReadWriteOnce</option><option value="ReadWriteMany">ReadWriteMany</option></select><span class="hint" id="med-access-hint"></span></div>` +
     `</div>` +
     `<div id="media-warn" class="muted"></div>` +
-    `<details id="install-advanced" style="margin-top:.75rem;border:1px solid var(--line);border-radius:.55rem;padding:.6rem .7rem;background:#fbfcfe">` +
-      `<summary style="cursor:pointer;font-weight:650">Advanced: namespace, storage and resources</summary>` +
+    `<details id="install-advanced" style="margin-top:.75rem;border:1px solid var(--line);border-radius:.55rem;padding:.6rem .7rem">` +
+      `<summary>Advanced: namespace, storage and resources</summary>` +
       `<div class="row" style="margin-top:.6rem">` +
         `<div><label>Namespace</label><input id="install-namespace" value="${esc(e.Namespace)}" style="width:100%"${e.Name === 'servarr' || e.Name === 'wireguard' ? ' disabled' : ''}>` +
         `<span class="hint">${e.Name === 'servarr' || e.Name === 'wireguard' ? 'This stack has namespace-specific wiring and stays in its catalog namespace.' : 'Leave empty/default for a normal install. A new app gets a new namespace; an installed app cannot be moved.'}</span></div>` +
