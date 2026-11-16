@@ -345,6 +345,43 @@ case "$out" in
   *) skip "no workload namespace yet" ;;
 esac
 
+echo "== in-cluster host aliases point at the live Traefik =="
+# Apps with OIDC call back to the portal by its public name. The chart points
+# that name at Traefik's ClusterIP so the call stays inside the cluster (and
+# gets a valid certificate). A Traefik re-create changes that IP, and an app
+# installed before the change keeps the old one: its OIDC login then times out
+# while everything else looks healthy.
+aliases=$(node_root <<'EOS'
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+K=/usr/local/bin/kubectl
+cur=$($K -n kube-system get svc traefik -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+[ -z "$cur" ] && { echo "SKIP"; exit 0; }
+$K get deploy -A -o json 2>/dev/null | jq -r --arg cur "$cur" '
+  .items[]
+  | select(.spec.template.spec.hostAliases != null)
+  | . as $d
+  | (.spec.template.spec.hostAliases[]
+     | select(.ip | startswith("10.43."))
+     | "\($d.metadata.namespace) \($d.metadata.name) \(.ip) \($cur)")' 2>/dev/null
+EOS
+)
+if [ "$aliases" = "SKIP" ] || [ -z "$aliases" ]; then
+  skip "no in-cluster host aliases to check"
+else
+  stale=""
+  count=0
+  while read -r ns dep ip cur; do
+    [ -z "$ns" ] && continue
+    count=$((count + 1))
+    [ "$ip" = "$cur" ] || stale="$stale $ns/$dep($ip)"
+  done <<<"$aliases"
+  if [ -n "$stale" ]; then
+    bad "hostAliases point at an old Traefik ClusterIP:$stale (reinstall the app so the chart re-renders them)"
+  else
+    ok "$count app host aliases match the live Traefik ClusterIP"
+  fi
+fi
+
 echo "== shared media (RWX) =="
 # The media volume is mounted by several apps at once and must be the same files
 # everywhere: write it through one app's pod and read it back through another's.
