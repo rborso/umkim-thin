@@ -9,6 +9,18 @@ metadata:
   name: umkim-thin-console-invite
   namespace: {{ .Release.Namespace }}
 spec:
+{{- if .Values.externalProxy }}
+  # Traefik terminates no TLS here: the front proxy does, and forwards plain
+  # HTTP to the "web" entrypoint.
+  entryPoints: [web]
+  routes:
+    - match: Host(`{{ $host }}`) && Path(`/api/invites/redeem`)
+      kind: Rule
+      priority: 100000
+      services:
+        - name: umkim-thin-console
+          port: 8080
+{{- else }}
   entryPoints: [websecure]
   routes:
     - match: Host(`{{ $host }}`) && Path(`/api/invites/redeem`)
@@ -19,3 +31,4 @@ spec:
           port: 8080
   tls:
     certResolver: letsencrypt
+{{- end }}

@@ -28,6 +28,12 @@ type Context struct {
 	Entrypoint   string // Traefik entrypoint; empty uses websecure
 	CertResolver string // ACME resolver; empty uses letsencrypt
 
+	// TLS says whether Traefik terminates TLS for this route (and thus whether
+	// a certresolver or a tls block is rendered). nil means yes: the installed
+	// default is Traefik + ACME. A cluster behind an external TLS-terminating
+	// proxy sets false and publishes on the plain "web" entrypoint instead.
+	TLS *bool
+
 	// Exposure is the install-time choice for this route: public, authelia or
 	// vpn. Empty derives it from the catalog (requireAuth).
 	Exposure   string
@@ -76,6 +82,12 @@ func (c Context) certResolver() string {
 		return c.CertResolver
 	}
 	return "letsencrypt"
+}
+
+// tlsTermination reports whether Traefik terminates TLS for this route. The
+// zero value (nil) keeps the default: Traefik terminates and obtains certs.
+func (c Context) tlsTermination() bool {
+	return c.TLS == nil || *c.TLS
 }
 
 func (c Context) vpnEntrypoint() string {
@@ -170,6 +182,13 @@ func Render(e catalog.Entry, r catalog.Route, ctx Context) (string, error) {
 	if secret == "" && strings.HasPrefix(cert, "secret:") {
 		secret = strings.TrimPrefix(cert, "secret:")
 	}
+	// An external proxy terminates TLS: Traefik serves plain HTTP on the "web"
+	// entrypoint and renders no tls/certresolver at all. VPN routes keep their
+	// own entrypoint (the gateway talks to it directly, inside the cluster).
+	terminate := ctx.tlsTermination()
+	if !terminate && exp != "vpn" {
+		entrypoint = "web"
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `apiVersion: networking.k8s.io/v1
@@ -179,11 +198,17 @@ metadata:
   namespace: %s
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: %s
-    traefik.ingress.kubernetes.io/router.tls: "true"
 `, objectName(e, r, ctx.NameSuffix), e.Namespace, entrypoint)
-	if cert == "acme" {
-		fmt.Fprintf(&b, `    traefik.ingress.kubernetes.io/router.tls.certresolver: %s
+	if terminate || exp == "vpn" {
+		b.WriteString(`    traefik.ingress.kubernetes.io/router.tls: "true"
+`)
+		// No ACME resolver in external-proxy mode: no certificate is issued
+		// inside the cluster at all, so the VPN route falls back to the
+		// configured default certificate.
+		if terminate && cert == "acme" {
+			fmt.Fprintf(&b, `    traefik.ingress.kubernetes.io/router.tls.certresolver: %s
 `, ctx.certResolver())
+		}
 	}
 
 	// Middleware is a route property: public has none, Authelia has the
@@ -198,21 +223,36 @@ metadata:
 `, ctx.vpnMiddleware())
 	}
 
-	if cert == "secret" || strings.HasPrefix(cert, "secret:") {
-		fmt.Fprintf(&b, `spec:
+	if terminate {
+		if cert == "secret" || strings.HasPrefix(cert, "secret:") {
+			fmt.Fprintf(&b, `spec:
   ingressClassName: traefik
   tls:
     - hosts:
         - %q
       secretName: %q
 `, host, secret)
-	} else {
+		} else {
+			fmt.Fprintf(&b, `spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - %q
+`, host)
+		}
+	} else if exp == "vpn" {
+		// Internal entrypoint: the gateway keeps TLS end to end, so it still
+		// needs the certificate block even in external-proxy mode.
 		fmt.Fprintf(&b, `spec:
   ingressClassName: traefik
   tls:
     - hosts:
         - %q
 `, host)
+	} else {
+		b.WriteString(`spec:
+  ingressClassName: traefik
+`)
 	}
 	fmt.Fprintf(&b, `  rules:
     - host: %q

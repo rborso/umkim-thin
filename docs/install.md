@@ -122,6 +122,7 @@ on-host installer.
 | **Lab CA fallback** | `lab_ca_default=true`, `acme_staging=true` | Traefik serves a wildcard signed by a local CA; ACME is attempted but the default cert covers the routes | air-gapped/lab, or when HTTP-01 cannot reach the cluster |
 | **ACME staging** | `lab_ca_default=false`, `acme_staging=true` | real Let's Encrypt *staging* certs, untrusted by browsers | testing ACME end to end |
 | **ACME production** | `lab_ca_default=false`, `acme_staging=false` | trusted certs | production |
+| **External proxy** | `external_proxy=true` | Traefik serves plain HTTP and requests no certificate; a reverse proxy you run in front holds the wildcard certificate | the cluster is behind another host's proxy, or you already have a wildcard |
 
 The default in the examples is the lab CA. Import `<state_dir>/tls/ca.crt`
 (default `/etc/umkim-thin/tls/ca.crt` on the primary) into your browser or OS
@@ -129,6 +130,64 @@ trust store, or use `curl --cacert`.
 
 Never enable production ACME in lab or repeated test runs: the limit is 50
 certificates per registered domain per 7 days.
+
+#### External reverse proxy
+
+Set `external_proxy=true` (`install.sh --external-proxy`) when TLS terminates
+somewhere in front of the cluster, e.g. a proxy on `dev.example.com` holding
+`*.dev.example.com`.
+
+- Every route (console, home, portal, LLDAP, apps) is published on Traefik's
+  plain **`web`** entrypoint (NodePort 30080) instead of `websecure`, and no
+  Ingress carries `tls`/`certresolver`.
+- Traefik's `web -> websecure` redirect and the ACME resolver arguments are
+  removed, so `http://` is the real path and nothing tries to issue a
+  certificate.
+- Traefik is told to accept the proxy's `X-Forwarded-Proto`/`X-Forwarded-For`
+  (`external_proxy_trusted_ips` narrows that to specific sources; the installer
+  uses `forwardedHeaders.insecure=true` on `web`/`websecure` by default). This
+  is required: without it Traefik reports the peer scheme and Authelia rejects
+  the forward-auth request with *"Target URL ... has an insecure scheme
+  'http'"*.
+- URLs the platform prints and stores stay `https://<host>`: the front proxy is
+  what makes them https.
+- The VPN routes are unchanged: they stay on the internal `vpn` entrypoint and
+  keep TLS, because the WireGuard gateway terminates at Traefik inside the
+  cluster.
+
+The proxy must preserve the request `Host` (virtual hosting depends on it) and
+set `X-Forwarded-Proto: https` so apps that build absolute URLs get the right
+scheme. Point it at the node (or the HA VIP) on port 80/30080:
+
+```nginx
+# one server block per host, or a wildcard block with $host
+server {
+  listen 443 ssl;
+  server_name *.dev.example.com;
+  ssl_certificate     /etc/ssl/wildcard.dev.example.com.crt;
+  ssl_certificate_key /etc/ssl/wildcard.dev.example.com.key;
+  location / {
+    proxy_pass         http://172.16.10.100:30080;   # VIP (HA) or the node
+    proxy_set_header   Host              $host;
+    proxy_set_header   X-Forwarded-Proto https;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+  }
+}
+```
+
+Two consequences worth knowing:
+
+- **Trusted-network bypass cannot see the client.** The management and
+  same-host VPN routes match `ClientIP`, which is the TCP peer address, and
+  behind a proxy that is the proxy. Only public/Authelia routes work as
+  expected; do not put the proxy address in `trusted_management_cidrs` unless
+  you intend to give the proxy's own traffic the bypass.
+- **The console trusts the first `X-Forwarded-For` hop** when it logs the
+  client address, so only a proxy you control should be able to reach the `web`
+  entrypoint. Keep the NodePort off any network where that is not true. That is
+  also why `forwardedHeaders.insecure=true` is acceptable here and why a real
+  proxy should be pinned with `external_proxy_trusted_ips` when its address is
+  stable.
 
 ---
 
@@ -172,6 +231,8 @@ The important fields:
 | `storage_socket` | `/run/umkim-thin` on single; empty on HA |
 | `chart_repos` | optional `url:subdir` or `repo:subdir` list for out-of-tree charts; vendored app charts are packaged automatically |
 | `ci_apps` | only used by the maintainer e2e; harmless for a manual install |
+| `external_proxy` | `true` when a reverse proxy outside the cluster terminates TLS (see [TLS: pick one](#tls-pick-one)); Traefik then publishes plain HTTP and runs no ACME |
+| `external_proxy_trusted_ips` | Optional CSV of the proxy's source addresses. Empty means Traefik trusts forwarded headers from any source on `web`/`websecure`; set it when the proxy's address is stable |
 
 Keep the file out of git: `deploy/provision*.env` is ignored.
 

@@ -5,17 +5,21 @@ metadata:
   name: umkim-thin-home
   namespace: {{ .Release.Namespace }}
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ ternary "web" "websecure" .Values.externalProxy }}
+{{- if not .Values.externalProxy }}
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+{{- end }}
     # The home page has no console login. Authelia is the only gate; it also
     # supplies Remote-User, which the home listener requires.
     traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.forwardAuthMiddleware | quote }}
 spec:
   ingressClassName: traefik
+{{- if not .Values.externalProxy }}
   tls:
     - hosts:
         - {{ $homeHost | quote }}
+{{- end }}
   rules:
     - host: {{ $homeHost | quote }}
       http:

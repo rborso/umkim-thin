@@ -270,11 +270,11 @@ Each failure found during the manual runs now has a check:
 | Failure | Guard |
 |---|---|
 | Traefik picked random NodePorts, so the router's 80/443 forward hit closed ports | `install.sh` pins `80:30080` / `443:30443` and `validate_traefik` fails the install if the service does not expose them |
-| An LLDAP plain-HTTP Ingress shadowed `/.well-known/acme-challenge` | The identity chart renders the LLDAP HTTP Ingress **only** when the portal is explicitly on `web` (external-proxy mode); Tier 1 asserts it is absent in `websecure` mode |
+| An LLDAP plain-HTTP Ingress shadowed `/.well-known/acme-challenge` | The identity chart's LLDAP Ingress follows `portalEntrypoint`/`portalTLS` like the Authelia portal; in the default (Traefik + ACME) mode it is on `websecure` with a certresolver, and Tier 1 asserts both modes |
 | A hidden failure could burn the ACME failed-authorization limit | `ci/acme-check.sh` is read-only (DNS + issuer, no ACME requests); HTTP-01 is kept with `allowACMEByPass`; the installer does not loop or clear `acme.json` on failure |
 | Paperless/Immich pointed the OIDC client at the lab CA, which is absent on a public install | Both charts build `/etc/ssl/combined/ca.crt` from the image roots plus the optional platform CA; Tier 1 renders both with OIDC on and asserts the combined path |
 | Collabora's WOPI calls were answered by Authelia, so the editor showed “Unauthorized WOPI host” | The two `richdocuments/wopi` prefixes are in the Nextcloud `publicPaths`; `ci/apps.json` probes a token-bearing WOPI path and expects no auth redirect |
-| A render/route regression could reintroduce any of these | `ci/static.sh` and `ci/novice-test.sh` assert the rendered Traefik config, identity HTTP-ingress condition, app CA bundles and catalog/chart versions |
+| A render/route regression could reintroduce any of these | `ci/static.sh` and `ci/novice-test.sh` assert the rendered Traefik config, the identity portal in both TLS modes, app CA bundles and catalog/chart versions |
 
 ## What this timing does not include
 

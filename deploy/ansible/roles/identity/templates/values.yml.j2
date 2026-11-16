@@ -43,8 +43,15 @@ traefik:
   # Put the file-provider middleware ConfigMap where Traefik runs, so the
   # traefik role can mount it.
   middlewareNamespace: kube-system
+{% if external_proxy | default(false) | bool %}
+  # A front proxy terminates TLS with the wildcard certificate: publish the
+  # portal (and every route) on plain HTTP; Traefik runs no ACME.
+  portalEntrypoint: web
+  portalTLS: false
+{% else %}
   portalEntrypoint: websecure
   portalTLS: true
+{% endif %}
   portalCertResolver: letsencrypt
   # Keep the VPN allowlist aligned with the gateway's actual tunnel subnet.
   vpnSourceRanges:

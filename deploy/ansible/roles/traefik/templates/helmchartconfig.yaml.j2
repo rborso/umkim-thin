@@ -18,6 +18,10 @@ spec:
     ports:
       web:
         nodePort: {{ web_nodeport }}
+{% if external_proxy | default(false) | bool %}
+        # Plain HTTP is the published path: a front proxy terminates TLS.
+        allowACMEByPass: true
+{% else %}
         # Send plain HTTP to HTTPS, but never redirect the ACME HTTP-01
         # challenge (or certificate issuance breaks).
         allowACMEByPass: true
@@ -27,6 +31,7 @@ spec:
               to: websecure
               scheme: https
               permanent: true
+{% endif %}
       websecure:
         nodePort: {{ tls_nodeport }}
       vpn:
@@ -49,6 +54,7 @@ spec:
         expose:
           default: true
     additionalArguments:
+{% if not external_proxy | default(false) | bool %}
       - "--certificatesresolvers.letsencrypt.acme.email={{ acme_email }}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
@@ -57,6 +63,24 @@ spec:
       # so runs never touch the 50 certs / 7 days production limit. Certs are
       # untrusted by browsers, which is fine for CI.
       - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+{% endif %}
+{% else %}
+      # A front proxy terminates TLS, so Traefik must accept its
+      # X-Forwarded-Proto / X-Forwarded-For. Without that, Authelia sees an
+      # http target URL and rejects the forward-auth request as insecure.
+      #
+      # A NodePort address (Cluster traffic policy) is SNATed to the node the
+      # request lands on, so a proxy that dials the VIP/NodePort usually shows
+      # up as a node address rather than its own. List the addresses here when
+      # they are stable; otherwise insecure=true is required, which is safe
+      # only while the web entrypoint is reachable solely by the proxy.
+{% if external_proxy_trusted_ips | default([]) | length %}
+      - "--entryPoints.web.forwardedHeaders.trustedIPs={{ external_proxy_trusted_ips | join(',') }}"
+      - "--entryPoints.websecure.forwardedHeaders.trustedIPs={{ external_proxy_trusted_ips | join(',') }}"
+{% else %}
+      - "--entryPoints.web.forwardedHeaders.insecure=true"
+      - "--entryPoints.websecure.forwardedHeaders.insecure=true"
+{% endif %}
 {% endif %}
       - "--providers.file.directory=/etc/traefik/dynamic"
       - "--providers.file.watch=true"

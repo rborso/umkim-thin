@@ -79,6 +79,12 @@ type Config struct {
 	WGNamespace                   string
 	WGVPNDNSConfigMap             string
 
+	// ExternalProxy is true when a reverse proxy in front of the cluster
+	// terminates TLS (a wildcard certificate lives there, not here). Traefik
+	// then publishes plain HTTP on its "web" entrypoint and requests no ACME
+	// certificates; the public URLs are still https://<host>.
+	ExternalProxy bool
+
 	// Console and on-demand bootstrap. The console image is the source of the
 	// pinned bootstrap build context, so the builder never accepts one from a
 	// caller; the image is imported into the pinned node's containerd and the
@@ -180,6 +186,7 @@ func ConfigFromEnv() Config {
 		TraefikNodeIP:                 env("UMKIM_THIN_TRAEFIK_NODE_IP", ""),
 		WGNamespace:                   env("UMKIM_THIN_WG_NAMESPACE", "wireguard"),
 		WGVPNDNSConfigMap:             env("UMKIM_THIN_WG_VPN_DNS_CONFIGMAP", "wireguard-vpn-dns"),
+		ExternalProxy:                 boolEnv("UMKIM_THIN_EXTERNAL_PROXY", false),
 
 		ConsoleImage:     env("UMKIM_THIN_CONSOLE_IMAGE", "localhost/umkim-thin:dev"),
 		BootstrapImage:   env("UMKIM_THIN_BOOTSTRAP_IMAGE", "localhost/umkim-thin/servarr-bootstrap"),
@@ -597,6 +604,7 @@ func (in *Installer) repl(e catalog.Entry, c siteContext) map[string]string {
 // one entry and removes stale bypass objects. It is shared by Install and
 // ReconcileRoutes so a route-only reconcile cannot drift from a full install.
 func (in *Installer) applyRoutes(e catalog.Entry, ctx siteContext, opts Options) ([]string, error) {
+	externalTLS := !in.cfg.ExternalProxy
 	rc := route.Context{
 		Zone:                   ctx.zone,
 		Release:                e.Name,
@@ -605,6 +613,7 @@ func (in *Installer) applyRoutes(e catalog.Entry, ctx siteContext, opts Options)
 		ManagementCIDRs:        in.cfg.TrustedManagementCIDRs,
 		ManagementExcludeCIDRs: in.cfg.TrustedManagementExcludeCIDRs,
 		VPNSubnet:              firstNonEmpty(in.cfg.VPNSubnet, "192.168.168.0/24"),
+		TLS:                    &externalTLS,
 	}
 	var hosts []string
 	for _, r := range e.EffectiveRoutes() {

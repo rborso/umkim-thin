@@ -13,8 +13,11 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/gitea
-  version: 0.1.21
+  version: 0.1.22
   versions:
+    - version: 0.1.22
+      appVersion: 28.4.0
+      channel: stable
     - version: 0.1.21
       appVersion: 28.3.0
       channel: stable

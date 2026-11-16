@@ -1,19 +1,30 @@
 {{- if and .Values.enabled .Values.traefik.deployMiddleware .Values.lldap.exposeWebUI .Values.lldap.webUIHost }}
+{{- /* Portal entrypoint/TLS mirror the portal itself: with an external
+       TLS-terminating proxy the whole install publishes plain HTTP on "web"
+       and Traefik runs no ACME, so there is no /.well-known/acme-challenge/
+       router for this host to shadow. */}}
+{{- $entrypoint := .Values.traefik.portalEntrypoint | default "websecure" }}
+{{- $tls := true }}
+{{- if hasKey .Values.traefik "portalTLS" }}{{ $tls = .Values.traefik.portalTLS }}{{ end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: lldap-portal
   namespace: {{ include "identity.namespace" . }}
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ $entrypoint }}
+{{- if $tls }}
     traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    traefik.ingress.kubernetes.io/router.tls.certresolver: {{ .Values.traefik.portalCertResolver | default "letsencrypt" }}
+{{- end }}
     traefik.ingress.kubernetes.io/router.middlewares: {{ include "identity.protectedIngressMiddlewares" . | quote }}
 spec:
   ingressClassName: traefik
+{{- if $tls }}
   tls:
     - hosts:
         - {{ .Values.lldap.webUIHost | quote }}
+{{- end }}
   rules:
     - host: {{ .Values.lldap.webUIHost | quote }}
       http:

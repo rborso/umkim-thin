@@ -181,6 +181,7 @@ fi
 [ -n "${trusted_management_enabled:-}" ] && printf 'trusted_management_enabled: %s\n' "${trusted_management_enabled}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${trusted_management_cidrs:-}" ] && printf 'trusted_management_cidrs: "%s"\n' "${trusted_management_cidrs}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${trusted_management_exclude_cidrs:-}" ] && printf 'trusted_management_exclude_cidrs: "%s"\n' "${trusted_management_exclude_cidrs}" >> "$stage/ansible/group_vars/all/99-local.yml"
+[ -n "${external_proxy:-}" ] && printf 'external_proxy: %s\n' "$(printf '%s' "$external_proxy" | tr '[:upper:]' '[:lower:]')" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${longhorn_replica_count:-}" ] && printf 'longhorn_replica_count: %s\n' "${longhorn_replica_count}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${longhorn_extra_disk:-}" ] && printf 'longhorn_extra_disk: "%s"\n' "${longhorn_extra_disk}" >> "$stage/ansible/group_vars/all/99-local.yml"
 [ -n "${longhorn_data_fs:-}" ] && printf 'longhorn_data_fs: "%s"\n' "${longhorn_data_fs}" >> "$stage/ansible/group_vars/all/99-local.yml"

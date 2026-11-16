@@ -253,6 +253,7 @@ func configCmd(args []string) error {
 		TrustedAccess     bool        `json:"trustedAccessEnabled"`
 		TrustedManagement bool        `json:"trustedManagementEnabled"`
 		TrustedCIDRs      []string    `json:"trustedManagementCIDRs,omitempty"`
+		ExternalProxy     bool        `json:"externalProxy"`
 	}{
 		Version: cfg.Version, Zone: cfg.Zone, PortalHost: cfg.PortalHost,
 		HomeHost: cfg.HomeHost, HomeURL: cfg.HomeURL(),
@@ -264,6 +265,7 @@ func configCmd(args []string) error {
 		TrustedAccess:     cfg.TrustedAccessEnabled,
 		TrustedManagement: cfg.TrustedManagementEnabled,
 		TrustedCIDRs:      cfg.TrustedManagementCIDRs,
+		ExternalProxy:     cfg.ExternalProxy,
 	}
 	for _, c := range classes {
 		view.StorageClasses = append(view.StorageClasses, classView{Name: c.Name, Modes: c.AccessModes})
@@ -292,6 +294,9 @@ func configCmd(args []string) error {
 		view.BackupDir, choose(humanInterval(cfg.BackupInterval), "off"), view.BackupKeep, view.BackupSnapshots)
 	fmt.Printf("update check   %t\n", view.UpdateCheck)
 	fmt.Printf("trusted access %t (management %t)\n", view.TrustedAccess, view.TrustedManagement)
+	if view.ExternalProxy {
+		fmt.Printf("tls            terminated by an external proxy (Traefik serves plain HTTP)\n")
+	}
 	return nil
 }
 

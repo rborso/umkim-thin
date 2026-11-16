@@ -47,6 +47,20 @@ additionally opt into trusted access with `route.trusted`:
 other request header is trusted, and the management route is never generated
 for `exposure: public`.
 
+### Behind an external TLS-terminating proxy
+
+With `external_proxy=true` (installer `--external-proxy`, env
+`UMKIM_THIN_EXTERNAL_PROXY`) a proxy in front of the cluster terminates TLS and
+Traefik publishes plain HTTP:
+
+- the *public* route becomes `web` + Authelia instead of `websecure`;
+- no Ingress carries `tls`/`certresolver`, and Traefik runs no ACME;
+- the management route still matches `ClientIP`, which is now the **proxy**, not
+  the client, so it stops being a trustworthy client-network bypass — leave
+  `trusted_management_cidrs` empty (or exclude the proxy) in this mode;
+- the VPN path is unchanged: the gateway DNATs to the internal `vpn` entrypoint
+  and Traefik still terminates that TLS leg.
+
 The VPN path is the same public hostname, not a separate `.vpn.<zone>` name.
 The WireGuard client DNS is the dedicated VPN DNS service (`10.43.200.53` by
 default), which resolves only the opted-in app hosts to the gateway and

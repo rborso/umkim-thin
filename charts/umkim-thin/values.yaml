@@ -22,6 +22,11 @@ wireguardNamespace: wireguard
 # Where the app is published (Authelia gates it, then the console's own login).
 # Required: no default, so an install cannot accidentally claim a real hostname.
 consoleHost: ""
+# External TLS termination. When true a reverse proxy in front of the cluster
+# holds the wildcard certificate and forwards plain HTTP to Traefik's "web"
+# entrypoint; the chart then renders no TLS/certresolver on its Ingresses and
+# the public URLs are still https://<host>.
+externalProxy: false
 # User-facing read-only home page. Empty derives home.<rest> from consoleHost
 # (console.example.com -> home.example.com). Set explicitly for a custom host.
 homeHost: ""

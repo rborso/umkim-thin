@@ -1,6 +1,7 @@
 image: localhost/umkim-thin:dev
 imagePullPolicy: Never
 consoleHost: {{ console_host }}
+externalProxy: {{ external_proxy | default(false) | bool | lower }}
 forwardAuthMiddleware: {{ middleware | default('identity-authelia@file') }}
 persistence:
   storageClass: "{{ console_persistence_class | default(storage_class_config) }}"

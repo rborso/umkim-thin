@@ -319,3 +319,59 @@ func TestRenderSameHostVPN(t *testing.T) {
 		t.Fatalf("same-host VPN route leaked the public gate:\n%s", out)
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestRenderExternalProxy(t *testing.T) {
+	e := entry(catalog.Route{Mode: "site", Host: "app.{{ .zone }}", RequireAuth: true, ServiceName: "svc", ServicePort: 8080})
+	out, err := Render(e, *e.Route, Context{Zone: "example.com", TLS: boolPtr(false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"router.entrypoints: web", `host: "app.example.com"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("external-proxy route missing %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"certresolver:", "router.tls", "secretName:", "  tls:"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("external-proxy route still terminates TLS (%q present):\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "identity-authelia@file") {
+		t.Errorf("external-proxy route lost its forward-auth middleware:\n%s", out)
+	}
+}
+
+func TestRenderExternalProxyKeepsVPNTLS(t *testing.T) {
+	e := entry(catalog.Route{Mode: "site", Host: "app.{{ .zone }}", RequireAuth: true, ServiceName: "svc"})
+	out, err := Render(e, *e.Route, Context{
+		Zone: "example.com", Exposure: "vpn", TLS: boolPtr(false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The VPN entrypoint is inside the cluster and the gateway keeps TLS, so
+	// this route must stay on "vpn" with the certificate block.
+	for _, want := range []string{"router.entrypoints: vpn", `router.tls: "true"`, "  tls:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("VPN route in external-proxy mode missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "certresolver:") {
+		t.Errorf("VPN route inherited an ACME resolver in external-proxy mode:\n%s", out)
+	}
+}
+
+func TestRenderExternalProxyManualCertIsIgnored(t *testing.T) {
+	e := entry(catalog.Route{Mode: "site", Host: "app.{{ .zone }}", RequireAuth: false, ServiceName: "svc"})
+	out, err := Render(e, *e.Route, Context{
+		Zone: "example.com", TLS: boolPtr(false), Certificate: "secret:wildcard-example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "secretName:") {
+		t.Fatalf("an external-proxy route still mounts a TLS secret:\n%s", out)
+	}
+}

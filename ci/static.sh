@@ -61,21 +61,40 @@ if ! printf '%s\n' "$identity_light" | grep -F 'theme: "light"' >/dev/null; then
 fi
 echo "   ok"
 
-echo ">> identity does not shadow ACME with an HTTP ingress"
+echo ">> identity portal TLS is driven by portalEntrypoint/portalTLS"
 identity_http=$(helm template identity charts/identity -f "$identity_values" \
   --set lldap.exposeWebUI=true --set lldap.webUIHost=lldap.example.com \
   --set traefik.portalEntrypoint=websecure 2>/dev/null)
-if printf '%s\n' "$identity_http" | grep -F 'name: lldap-portal-http' >/dev/null; then
-  echo "the LLDAP HTTP ingress is rendered with the portal on websecure; it shadows /\\.well-known/acme-challenge/" >&2
+printf '%s\n' "$identity_http" | grep -F 'certresolver: letsencrypt' >/dev/null || {
+  echo "the portal renders no certresolver with the default (Traefik + ACME) mode" >&2
+  exit 1
+}
+lldap_doc=$(printf '%s\n' "$identity_http" | awk 'BEGIN{RS="---\n"} /name: lldap-portal\n/')
+if ! printf '%s\n' "$lldap_doc" | grep -F 'router.entrypoints: websecure' >/dev/null; then
+  echo "the LLDAP ingress is not on the portal entrypoint (websecure)" >&2
   exit 1
 fi
 identity_web=$(helm template identity charts/identity -f "$identity_values" \
   --set lldap.exposeWebUI=true --set lldap.webUIHost=lldap.example.com \
-  --set traefik.portalEntrypoint=web 2>/dev/null)
-printf '%s\n' "$identity_web" | grep -F 'name: lldap-portal-http' >/dev/null || {
-  echo "the LLDAP HTTP ingress is missing when the portal is explicitly on web" >&2
+  --set traefik.portalEntrypoint=web --set traefik.portalTLS=false 2>/dev/null)
+for host in 'host: "auth.example.com"' 'host: "lldap.example.com"'; do
+  if ! printf '%s\n' "$identity_web" | grep -F "$host" >/dev/null; then
+    echo "external-proxy render is missing $host" >&2
+    exit 1
+  fi
+done
+if printf '%s\n' "$identity_web" | grep -F 'certresolver:' >/dev/null; then
+  echo "the external-proxy render still asks Traefik for a certificate" >&2
   exit 1
-}
+fi
+if printf '%s\n' "$identity_web" | grep -F 'router.tls' >/dev/null; then
+  echo "the external-proxy render still terminates TLS in Traefik" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$identity_web" | grep -F 'router.entrypoints: web' >/dev/null; then
+  echo "the external-proxy render does not publish on the web entrypoint" >&2
+  exit 1
+fi
 echo "   ok"
 
 echo ">> identity VPN middlewares and default cert"
@@ -125,6 +144,30 @@ printf '%s\n' "$socket_render" | grep -F 'path: "/run/umkim-thin"' >/dev/null ||
 }
 echo "   ok"
 
+echo ">> console external-proxy (TLS terminated by a front proxy)"
+proxy_render=$(helm template t charts/umkim-thin "${console_args[@]}" \
+  --set persistence.storageClass=nfs --set externalProxy=true)
+# Every console/home ingress moves to the web entrypoint and drops TLS.
+if printf '%s\n' "$proxy_render" | grep -F 'certresolver:' >/dev/null; then
+  echo "console external-proxy render still requests a certificate" >&2
+  exit 1
+fi
+if printf '%s\n' "$proxy_render" | grep -F 'router.tls' >/dev/null; then
+  echo "console external-proxy render still terminates TLS in Traefik" >&2
+  exit 1
+fi
+for v in "router.entrypoints: web" "entryPoints: [web]"; do
+  if ! printf '%s\n' "$proxy_render" | grep -F "$v" >/dev/null; then
+    echo "console external-proxy render is missing $v" >&2
+    exit 1
+  fi
+done
+if printf '%s\n' "$console_render" | grep -E 'router\.entrypoints: web$' >/dev/null; then
+  echo "the default console render lost its TLS entrypoint" >&2
+  exit 1
+fi
+echo "   ok"
+
 echo ">> required values fail closed"
 if helm template t charts/identity >/dev/null 2>&1; then
   echo "charts/identity rendered without its required values" >&2
@@ -158,6 +201,28 @@ echo "   ok"
 echo ">> no floating image tags"
 if grep -RIn -E 'image:.*:(latest|release|stable)([[:space:]]|$)|tag:[[:space:]]*"?(latest|release|stable)' charts catalog; then
   echo "floating image tag found; pin an exact version or digest" >&2
+  exit 1
+fi
+echo "   ok"
+
+# A Deployment that mounts a ReadWriteOnce claim must use strategy: Recreate.
+# With RollingUpdate the replacement pod is scheduled before the old one
+# releases the volume, so it sits in FailedAttachVolume and the upgrade hits
+# its deadline (this is what broke the Mealie upgrade).
+echo ">> RWO workloads recreate instead of rolling"
+rwo_bad=0
+for f in charts/apps/*/templates/*.yaml; do
+  [ -f "$f" ] || continue
+  grep -q '^kind: Deployment' "$f" || continue
+  grep -q 'persistentVolumeClaim' "$f" || continue
+  if grep -q 'ReadWriteMany' "$f"; then continue; fi
+  if ! grep -q 'type: Recreate' "$f"; then
+    echo "  $f mounts a PVC but has no strategy: Recreate" >&2
+    rwo_bad=1
+  fi
+done
+if [ "$rwo_bad" -ne 0 ]; then
+  echo "an app Deployment with a ReadWriteOnce claim would hang on upgrade" >&2
   exit 1
 fi
 echo "   ok"

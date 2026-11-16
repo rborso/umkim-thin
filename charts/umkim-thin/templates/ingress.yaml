@@ -1,20 +1,28 @@
 {{- $host := required "consoleHost is required (e.g. console.example.com)" .Values.consoleHost -}}
+{{- /* externalProxy: a front proxy terminates TLS, so Traefik serves plain HTTP
+       on the "web" entrypoint and this Ingress carries no tls/certresolver. */}}
+{{- $entrypoint := "websecure" -}}
+{{- if .Values.externalProxy -}}{{- $entrypoint = "web" -}}{{- end -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: umkim-thin-console
   namespace: {{ .Release.Namespace }}
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ $entrypoint }}
+{{- if not .Values.externalProxy }}
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+{{- end }}
     # Authelia gates it first; then the console's own login (admin/breakglass).
     traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.forwardAuthMiddleware | quote }}
 spec:
   ingressClassName: traefik
+{{- if not .Values.externalProxy }}
   tls:
     - hosts:
         - {{ $host | quote }}
+{{- end }}
   rules:
     - host: {{ $host | quote }}
       http:
@@ -36,16 +44,20 @@ metadata:
   name: umkim-thin-console-login
   namespace: {{ .Release.Namespace }}
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ $entrypoint }}
+{{- if not .Values.externalProxy }}
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+{{- end }}
     # Beat the catch-all / Prefix route.
     traefik.ingress.kubernetes.io/router.priority: "1000"
 spec:
   ingressClassName: traefik
+{{- if not .Values.externalProxy }}
   tls:
     - hosts:
         - {{ $host | quote }}
+{{- end }}
   rules:
     - host: {{ $host | quote }}
       http:

@@ -68,6 +68,16 @@ trusted_management_cidrs: ""
 # would otherwise match the ClientIP bypass. Put that address here.
 trusted_management_exclude_cidrs: ""
 
+# External TLS termination: a reverse proxy in front of the cluster holds the
+# wildcard certificate and forwards plain HTTP to Traefik's web entrypoint.
+# Traefik then runs no ACME and publishes every route without TLS.
+external_proxy: false
+# Source addresses of that proxy. Traefik only accepts its X-Forwarded-*
+# headers (notably X-Forwarded-Proto) from these, which Authelia needs to see
+# the request as https. Leave empty and Traefik uses the TCP peer scheme, so
+# forward-auth rejects the target URL as insecure.
+external_proxy_trusted_ips: []
+
 # NetworkPolicy: default-deny ingress for the app namespaces, with allowances.
 enable_network_policies: true
 netpol_app_namespaces:

@@ -13,8 +13,14 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/mealie
-  version: 0.1.4
+  version: 0.1.6
   versions:
+    - version: 0.1.6
+      appVersion: 3.31.0
+      channel: stable
+    - version: 0.1.5
+      appVersion: 3.31.0
+      channel: stable
     - version: 0.1.4
       appVersion: 3.30.0
       channel: stable

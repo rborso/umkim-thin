@@ -143,6 +143,44 @@ grep -q '^UMKIM_THIN_WG_ENDPOINT=wg.example.com:51999$' "$tmp/render-wg/config.e
   || fail "an explicit WireGuard endpoint port was doubled"
 ok "an explicit WireGuard endpoint port is kept"
 
+echo "== external proxy render =="
+./install.sh --render-only --zone example.com --email admin@example.com \
+  --external-proxy --out "$tmp/render-proxy" >/dev/null || fail "install.sh --external-proxy --render-only failed"
+grep -q '^UMKIM_THIN_EXTERNAL_PROXY=true$' "$tmp/render-proxy/config.env" \
+  || fail "external-proxy mode is not recorded in config.env"
+grep -q '^  portalEntrypoint: web$' "$tmp/render-proxy/identity-values.yml" \
+  || fail "the portal is not published on the web entrypoint behind a proxy"
+grep -q '^  portalTLS: false$' "$tmp/render-proxy/identity-values.yml" \
+  || fail "the portal still terminates TLS behind a proxy"
+grep -q '^externalProxy: true$' "$tmp/render-proxy/console-values.yml" \
+  || fail "the console values do not enable external-proxy mode"
+python3 - "$tmp/render-proxy/traefik-config.yaml" <<'PY'
+import sys, yaml
+values = yaml.safe_load(open(sys.argv[1]))["spec"]["valuesContent"]
+assert "certificatesresolvers" not in values, "ACME is still configured behind a proxy"
+assert "redirections" not in values, "web must not redirect to websecure behind a proxy"
+assert "nodePort: 30080" in values
+PY
+helm template identity charts/identity -f "$tmp/render-proxy/identity-values.yml" >/dev/null || \
+  fail "the external-proxy identity values do not render"
+helm template console charts/umkim-thin -f "$tmp/render-proxy/console-values.yml" >/dev/null || \
+  fail "the external-proxy console values do not render"
+ok "--external-proxy publishes plain HTTP and disables ACME"
+
+# Pinning the proxy's source addresses must replace the insecure trust with an
+# explicit allowlist (no insecure flag, no silent widening).
+./install.sh --render-only --zone example.com --email admin@example.com \
+  --external-proxy --external-proxy-trusted-ips 10.0.0.5,10.0.0.6 --out "$tmp/render-proxy-ips" >/dev/null || \
+  fail "install.sh --external-proxy-trusted-ips --render-only failed"
+python3 - "$tmp/render-proxy-ips/traefik-config.yaml" <<'PY'
+import sys, yaml
+values = yaml.safe_load(open(sys.argv[1]))["spec"]["valuesContent"]
+assert "web.forwardedHeaders.trustedIPs=10.0.0.5,10.0.0.6" in values, values
+assert "websecure.forwardedHeaders.trustedIPs=10.0.0.5,10.0.0.6" in values, values
+assert "forwardedHeaders.insecure" not in values, "an allowlist must not also trust every source"
+PY
+ok "--external-proxy-trusted-ips pins the forwarded-header trust"
+
 echo "== trust-lan detection =="
 fakebin="$tmp/fakebin"
 mkdir -p "$fakebin"

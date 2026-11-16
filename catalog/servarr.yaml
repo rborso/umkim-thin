@@ -24,8 +24,11 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/servarr
-  version: 0.3.3
+  version: 0.3.4
   versions:
+    - version: 0.3.4
+      appVersion: 1.0.0
+      channel: stable
     - version: 0.3.3
       appVersion: 1.0.0
       channel: stable
