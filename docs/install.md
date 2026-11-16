@@ -749,6 +749,48 @@ The check is a no-op on HA.
 | Certificate issuance never happens | a matching default cert is present (`lab_ca_default=true`); set it false and ensure port 80 reaches Traefik |
 | HA VIP not reachable | kube-vip pod/lease, the VIP is outside the DHCP pool, and the router forwards to it |
 | SSH warns that the host key changed after a reset | expected after a snapshot restore; remove the old key on the connecting host with `ssh-keygen -R <address>` |
+| An app runs but its settings/data are missing, `ls /config` returns `I/O error` | a faulted Longhorn volume: `kubectl -n longhorn-system get volumes.longhorn.io -o custom-columns=NAME:.metadata.name,STATE:.status.state,ROBUSTNESS:.status.robustness` — see [storage recovery](#storage-recovery-a-faulted-longhorn-volume) |
+
+### Storage recovery: a faulted Longhorn volume
+
+A volume goes `faulted` when it loses every in-sync replica — typically one
+engine-related event (a k3s restart killing the engines, a node losing its disk)
+marks all replicas failed at once. The pods stay `Running` and serve I/O errors,
+so nothing looks broken until an app cannot read its config.
+
+`auto-salvage` is deliberately **off**: an operator decides which replica is the
+truth rather than letting Longhorn pick one after a split. That means a faulted
+volume waits for you. Check and repair it with:
+
+```bash
+# 1. Is anything faulted?
+kubectl -n longhorn-system get volumes.longhorn.io \
+  -o custom-columns='NAME:.metadata.name,STATE:.status.state,ROBUSTNESS:.status.robustness'
+
+# 2. The replica data is usually still on disk. Confirm before salvaging:
+kubectl -n longhorn-system get replicas.longhorn.io \
+  -o custom-columns='NAME:.metadata.name,NODE:.spec.nodeID,STATE:.status.currentState,FAILED:.spec.failedAt'
+
+# 3. Scale down whatever mounts the volume, then salvage it with its replica
+#    names (the volume must be detached and faulted):
+kubectl -n <ns> scale deploy/<app> --replicas=0
+POD=$(kubectl -n longhorn-system get pods -l app=longhorn-manager -o name | head -1)
+NAMES=$(kubectl -n longhorn-system get replicas.longhorn.io -o json \
+  | jq -c '[.items[] | select(.spec.volumeName=="pvc-…") | .metadata.name]')
+kubectl -n longhorn-system exec "$POD" -- \
+  curl -s -X POST -H 'Content-Type: application/json' \
+  -d "{\"names\":$NAMES}" \
+  'http://longhorn-backend:9500/v1/volumes/pvc-…?action=salvage'
+
+# 4. Scale back up and confirm the volume is healthy and the app can read data.
+kubectl -n <ns> scale deploy/<app> --replicas=1
+```
+
+There is no `salvageRequested` field on the Volume spec (Longhorn 1.6): the
+salvage is an API *action*, and it returns HTTP 200 with an empty body on
+success. `install.sh --doctor` and the CI platform gate (`ci/assert.sh`) both
+report faulted volumes and probe that each app can list its data directory, so
+this is caught without being looked for.
 
 Logs:
 

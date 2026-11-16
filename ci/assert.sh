@@ -372,6 +372,90 @@ case "$rwx" in
   *) bad "media volume not shared (${rwx:-no answer})" ;;
 esac
 
+echo "== storage health (faulted volumes) =="
+# A volume that loses every in-sync replica stays faulted until an operator
+# salvages it (auto-salvage is deliberately off). The apps keep serving from
+# their last attached state, so nothing else in the gate notices: their
+# /config silently returns EIO. Check the Longhorn volumes directly, and read
+# a real file back through the apps that mount them.
+vols=$(node_root <<'EOS'
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+K=/usr/local/bin/kubectl
+if ! $K -n longhorn-system get volumes.longhorn.io >/dev/null 2>&1; then echo "SKIP"; exit 0; fi
+$K -n longhorn-system get volumes.longhorn.io -o json 2>/dev/null | jq -r '
+  .items[] | "\(.metadata.name) \(.status.robustness // "unknown")"' 2>/dev/null
+EOS
+)
+if [ "$vols" = "SKIP" ] || [ -z "$vols" ]; then
+  skip "no Longhorn volumes (single-node local-path target)"
+else
+  total=0; faulted=0; degraded=0
+  while read -r name rob; do
+    [ -z "$name" ] && continue
+    total=$((total + 1))
+    case "$rob" in
+      healthy) ;;
+      degraded) degraded=$((degraded + 1)) ;;
+      *) faulted=$((faulted + 1)); printf '  faulted: %s (%s)\n' "$name" "$rob" ;;
+    esac
+  done <<<"$vols"
+  if [ "$faulted" -gt 0 ]; then
+    bad "$faulted of $total Longhorn volumes are faulted; salvage them (see docs/install.md, storage recovery)"
+  else
+    ok "$total Longhorn volumes, none faulted"
+  fi
+  # Degraded is normal right after a fault (replicas are rebuilding), but a
+  # gate run starts from a settled cluster, so anything still degraded means a
+  # replica never came back and the next fault would take the last one.
+  if [ "$degraded" -gt 0 ]; then
+    bad "$degraded of $total Longhorn volumes are degraded (replicas not rebuilt)"
+  fi
+fi
+
+# The volumes above are named Longhorn resources; prove the apps can actually
+# read their data. A faulted-but-attached volume serves EIO, and the app
+# container reports Running the whole time.
+appio=$(node_root <<'EOS'
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+K=/usr/local/bin/kubectl
+probe() { # ns deploy container path
+  if ! $K -n "$1" get deploy "$2" >/dev/null 2>&1; then echo "$2:absent"; return; fi
+  # Name the container: a multi-container pod otherwise prints a "Defaulted
+  # container … out of:" notice that would land in this output.
+  if $K -n "$1" exec "deploy/$2" -c "$3" -- sh -c "ls '$4' >/dev/null 2>&1" >/dev/null 2>&1; then
+    echo "$2:ok"
+  else
+    echo "$2:EIO"
+  fi
+}
+probe servarr sonarr sonarr /config
+probe servarr radarr radarr /config
+probe mealie mealie mealie /app/data
+probe paperless paperless-web paperless /usr/src/paperless/data
+probe nextcloud nextcloud nextcloud /var/www/html/config
+probe gitea gitea gitea /data
+probe immich immich-server immich-server /data
+EOS
+)
+io_bad=""
+io_ok=0
+while read -r line; do
+  [ -z "$line" ] && continue
+  case "$line" in
+    *:absent) ;;
+    *:ok) io_ok=$((io_ok + 1)) ;;
+    *:EIO) io_bad="$io_bad ${line%%:*}" ;;
+    *) io_bad="$io_bad ${line%%:*}" ;;
+  esac
+done <<<"$appio"
+if [ -n "$io_bad" ]; then
+  bad "an app cannot read its data volume:$io_bad"
+elif [ "$io_ok" -gt 0 ]; then
+  ok "$io_ok app data volumes readable"
+else
+  skip "no app data volumes to probe"
+fi
+
 echo "== wireguard tunnel =="
 if [ "${ASSERT_NO_INSTALL:-0}" = "1" ]; then
   skip "wireguard: installation disabled for existing-installation test"

@@ -1522,6 +1522,56 @@ do_doctor() {
     fi
   fi
 
+  # Storage faults are silent: the pods stay Running and serve I/O errors from
+  # their data volumes. Longhorn only leaves a volume faulted until an operator
+  # salvages it (auto-salvage is off on purpose), so report it here.
+  section "storage"
+  if kubectl -n longhorn-system get volumes.longhorn.io >/dev/null 2>&1; then
+    local vols name rob total=0 faulted=0 degraded=0
+    vols=$(kubectl -n longhorn-system get volumes.longhorn.io \
+      -o jsonpath='{range .items[*]}{.metadata.name} {.status.robustness}{"\n"}{end}' 2>/dev/null)
+    while read -r name rob; do
+      [ -z "$name" ] && continue
+      total=$((total + 1))
+      case "$rob" in
+        healthy) ;;
+        degraded) degraded=$((degraded + 1)) ;;
+        *) faulted=$((faulted + 1))
+           bad "volume $name is ${rob:-unknown}; salvage it (docs/install.md, storage recovery)" ;;
+      esac
+    done <<<"$vols"
+    if [ "$faulted" -eq 0 ]; then
+      ok "$total Longhorn volumes, none faulted"
+    fi
+    if [ "$degraded" -gt 0 ]; then
+      bad "$degraded volume(s) degraded (a replica has not rebuilt)"
+    fi
+  else
+    info "Longhorn is not installed"
+  fi
+
+  # Prove the apps can actually read their data; a faulted volume serves EIO
+  # while the container still reports Running.
+  local io_bad="" io_ok=0
+  for spec in "servarr:sonarr:sonarr:/config" "servarr:radarr:radarr:/config" \
+              "mealie:mealie:mealie:/app/data" "paperless:paperless-web:paperless:/usr/src/paperless/data" \
+              "nextcloud:nextcloud:nextcloud:/var/www/html" "gitea:gitea:gitea:/data" \
+              "immich:immich-server:immich-server:/data" "vaultwarden:vaultwarden:vaultwarden:/data" \
+              "homebox:homebox:homebox:/data" "actualbudget:actualbudget:actualbudget:/data"; do
+    local nsp=${spec%%:*} r1=${spec#*:} dep=${r1%%:*} r2=${r1#*:} ctr=${r2%%:*} path=${r2#*:}
+    kubectl -n "$nsp" get deploy "$dep" >/dev/null 2>&1 || continue
+    if kubectl -n "$nsp" exec "deploy/$dep" -c "$ctr" -- sh -c "ls '$path' >/dev/null 2>&1" >/dev/null 2>&1; then
+      io_ok=$((io_ok + 1))
+    else
+      io_bad="$io_bad $dep"
+    fi
+  done
+  if [ -n "$io_bad" ]; then
+    bad "an app cannot read its data volume:$io_bad"
+  elif [ "$io_ok" -gt 0 ]; then
+    ok "$io_ok app data volumes readable"
+  fi
+
   section "routes"
   if [ -z "$ZONE" ]; then
     bad "no zone in $STATE_DIR/config.env"
