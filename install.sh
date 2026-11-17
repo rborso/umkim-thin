@@ -91,7 +91,11 @@ TRUSTED_MANAGEMENT_EXCLUDE_CIDRS="${TRUSTED_MANAGEMENT_EXCLUDE_CIDRS:-}"
 # setting (the resulting CIDRs are saved in config.env).
 TRUST_LAN="${TRUST_LAN:-}"
 HELM=""
-BASE_DN="dc=umkim,dc=thin"
+# The directory base DN. This must stay stable for the life of a cluster: LLDAP's
+# entries and every app's bind search base are rooted at it, so changing it on an
+# upgrade breaks every app's directory login (the shell default below is only a
+# first-install convenience; reuse_previous_values keeps the stored one).
+BASE_DN="${BASE_DN:-}"
 CONSOLE_NAMESPACE="umkim-thin"
 IDENTITY_NAMESPACE="identity"
 # The console chart carries RBAC in this namespace so it can manage the
@@ -125,6 +129,10 @@ Options:
   --image-tar <file>    Import an image archive into k3s; pass --image with the
                         archive's tag (default localhost/umkim-thin:novice).
   --acme-staging        Use the Let's Encrypt staging directory (testing only).
+  --base-dn <dn>        Directory base DN for a fresh install (default
+                        dc=umkim,dc=thin). It is fixed for the life of the
+                        cluster: apps bind into this subtree, so a re-run always
+                        reuses the stored value.
   --external-proxy      A reverse proxy in front of the cluster terminates TLS
                         (a wildcard certificate). Traefik serves plain HTTP on
                         the "web" entrypoint and requests no ACME certificates;
@@ -188,6 +196,8 @@ while [ $# -gt 0 ]; do
     --out=*)           OUT="${1#*=}"; shift ;;
     --build-image)     BUILD_IMAGE=1; shift ;;
     --acme-staging)    ACME_STAGING=1; shift ;;
+    --base-dn)         BASE_DN="${2:?--base-dn needs a value}"; shift 2 ;;
+    --base-dn=*)       BASE_DN="${1#*=}"; shift ;;
     --external-proxy)  EXTERNAL_PROXY=true; shift ;;
     --no-external-proxy) EXTERNAL_PROXY=false; shift ;;
     --external-proxy-trusted-ips) EXTERNAL_PROXY_TRUSTED_IPS="${2:?--external-proxy-trusted-ips needs a value}"; EXTERNAL_PROXY=true; shift 2 ;;
@@ -249,6 +259,17 @@ reuse_previous_values() {
     if [ -n "$got" ]; then
       EMAIL="$got"
       info "reusing email $EMAIL from the existing install"
+    fi
+  fi
+
+  # The base DN is fixed at first install. A re-run that silently reset it (as
+  # it did when it was hardcoded) rewrote config.env and left every app pointing
+  # at a subtree LLDAP does not serve, which breaks directory login everywhere.
+  if [ -z "$BASE_DN" ]; then
+    got=$(sed -n 's/^UMKIM_THIN_BASE_DN=//p' "$cfg" | head -1)
+    if [ -n "$got" ]; then
+      BASE_DN="$got"
+      info "reusing directory base DN $BASE_DN from $cfg"
     fi
   fi
 
@@ -374,6 +395,8 @@ validate_inputs() {
     [ -f charts/apps/gitea/Chart.yaml ] || \
       die "charts/apps submodule is missing; run: git submodule update --init --recursive"
     reuse_previous_values
+    # A first install (nothing reused above) gets the default directory DN.
+    [ -n "$BASE_DN" ] || BASE_DN="dc=umkim,dc=thin"
     if [ "$TRUST_LAN" = true ] && [ "$TRUSTED_MANAGEMENT_ENABLED" != false ]; then
       detect_trusted_lan
     fi

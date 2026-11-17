@@ -890,10 +890,13 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 		values["ocrLanguages"] = code
 		opts.OCRLanguage = code
 	}
-	if opts.Upgrade {
-		if err := in.preserveImmutableStorage(e.Name, e.Namespace, values); err != nil {
-			return Result{}, err
-		}
+	// Preserve a bound PVC's immutable fields on any upgrade *or reinstall*. A
+	// plain `app install` against an existing release is a reinstall (the
+	// documented path after an uninstall that kept the data), and Helm would
+	// otherwise try to change storageClassName/accessMode on the kept claim and
+	// fail. Runs whether or not the caller set Upgrade.
+	if err := in.preserveImmutableStorage(e.Name, e.Namespace, values); err != nil {
+		return Result{}, err
 	}
 	if e.Name == ServarrApp {
 		// Upgrades keep the operator's current media defaults unless the caller
