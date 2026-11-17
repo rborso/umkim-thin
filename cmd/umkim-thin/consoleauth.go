@@ -43,6 +43,10 @@ type loginLimiter struct {
 	failures map[string][]time.Time
 	max      int
 	window   time.Duration
+	// pruneAt bounds the map: a busy or hostile network can present many source
+	// addresses, and entries were previously only removed when that same key
+	// tried again.
+	pruneAt int
 }
 
 func newLoginLimiter() *loginLimiter { return newLoginLimiterN(5) }
@@ -52,6 +56,24 @@ func newLoginLimiterN(max int) *loginLimiter {
 		failures: map[string][]time.Time{},
 		max:      max,
 		window:   5 * time.Minute,
+		pruneAt:  4096,
+	}
+}
+
+// prune drops entries with no failure inside the window. Caller holds the lock.
+func (l *loginLimiter) prune(now time.Time) {
+	for key, times := range l.failures {
+		keep := times[:0]
+		for _, t := range times {
+			if now.Sub(t) < l.window {
+				keep = append(keep, t)
+			}
+		}
+		if len(keep) == 0 {
+			delete(l.failures, key)
+		} else {
+			l.failures[key] = keep
+		}
 	}
 }
 
@@ -59,6 +81,9 @@ func (l *loginLimiter) allow(key string) bool {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.failures) > l.pruneAt {
+		l.prune(now)
+	}
 	recent := l.failures[key][:0]
 	for _, t := range l.failures[key] {
 		if now.Sub(t) < l.window {
@@ -77,6 +102,9 @@ func (l *loginLimiter) fail(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.failures[key] = append(l.failures[key], time.Now())
+	if len(l.failures) > l.pruneAt {
+		l.prune(time.Now())
+	}
 }
 
 func (l *loginLimiter) reset(key string) {
@@ -85,19 +113,61 @@ func (l *loginLimiter) reset(key string) {
 	delete(l.failures, key)
 }
 
-// clientKey is the client address as seen through Traefik. The first
-// X-Forwarded-For entry is the original client; Traefik appends its own. A
-// spoofed first entry only changes the bucket, not the credential check.
+// clientKey identifies a client for the login and redeem limiters.
+//
+// The console only ever sees its immediate peer: Traefik (in-cluster), or an
+// external reverse proxy in front of it. Trusting the *first* X-Forwarded-For
+// entry, as this used to, lets a client pick its own limiter bucket by sending
+// a fresh X-Forwarded-For on every request and brute-force the login, so the
+// bucket has to be derived from the part of the chain the client cannot forge.
+//
+// Rules:
+//   - peer is not private/loopback -> nothing in XFF is trustworthy; use the
+//     peer address (a direct, non-proxied caller).
+//   - peer is private/loopback (Traefik/proxy) -> walk XFF from the right and
+//     skip private/loopback hops; the first public address is the client. If
+//     every hop is private, use the leftmost (a fully private lab chain).
+//
+// A client can still forge entries to the *left* of a proxy, but the rightmost
+// public hop is written by the proxy, so it stays stable per client.
 func clientKey(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if first := strings.TrimSpace(strings.Split(xff, ",")[0]); first != "" {
-			return first
+	peer := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		peer = host
+	}
+	if !isPrivateOrLoopback(peer) {
+		return peer
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return peer
+	}
+	var hops []string
+	for _, h := range strings.Split(xff, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			hops = append(hops, h)
 		}
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	for i := len(hops) - 1; i >= 0; i-- {
+		if !isPrivateOrLoopback(hops[i]) {
+			return hops[i]
+		}
 	}
-	return r.RemoteAddr
+	if len(hops) > 0 {
+		return hops[0]
+	}
+	return peer
+}
+
+// isPrivateOrLoopback reports whether an address is one we would accept as a
+// proxy hop (RFC1918, IPv6 ULA, link-local or loopback). Anything else is a
+// real client, which is what the limiter buckets on.
+func isPrivateOrLoopback(s string) bool {
+	ip := net.ParseIP(strings.Trim(s, "[]"))
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
 }
 
 func newConsoleAuth() *consoleAuth {

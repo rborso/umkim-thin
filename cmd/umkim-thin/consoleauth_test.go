@@ -1,11 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -30,15 +32,125 @@ func TestLoginLimiter(t *testing.T) {
 	}
 }
 
+// A hostile network can present many source addresses; the limiter must not
+// grow without bound.
+func TestLoginLimiterPrunesStaleKeys(t *testing.T) {
+	l := newLoginLimiterN(5)
+	l.pruneAt = 8
+	for i := 0; i < 8; i++ {
+		l.fail(fmt.Sprintf("198.51.100.%d", i))
+	}
+	// Age every failure past the window, then trip the threshold.
+	l.mu.Lock()
+	for k := range l.failures {
+		l.failures[k] = []time.Time{time.Now().Add(-2 * l.window)}
+	}
+	l.mu.Unlock()
+	l.fail("203.0.113.1")
+	l.fail("203.0.113.2")
+	l.mu.Lock()
+	n := len(l.failures)
+	l.mu.Unlock()
+	if n > l.pruneAt {
+		t.Fatalf("the limiter kept %d entries; stale keys were not pruned", n)
+	}
+	if n != 2 {
+		t.Fatalf("want the two fresh keys, got %d entries", n)
+	}
+}
+
+func TestJobStoreEvictsFinishedJobs(t *testing.T) {
+	s := newJobStore()
+	for i := 0; i < maxFinishedJobs+25; i++ {
+		s.start("install", "app", func(progress func(string)) (any, error) {
+			return nil, nil
+		})
+	}
+	// Count completions rather than expecting every job to remain in the map:
+	// the point is that the history is capped, so old ones are evicted.
+	var done atomic.Int64
+	for i := 0; i < maxFinishedJobs+25; i++ {
+		s.start("install", "app", func(progress func(string)) (any, error) {
+			done.Add(1)
+			return nil, nil
+		})
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if done.Load() == int64(maxFinishedJobs+25) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if done.Load() != int64(maxFinishedJobs+25) {
+		t.Fatalf("only %d/%d jobs finished", done.Load(), maxFinishedJobs+25)
+	}
+	s.mu.Lock()
+	n := len(s.m)
+	s.mu.Unlock()
+	if n > maxFinishedJobs {
+		t.Fatalf("job history kept %d entries; bound is %d", n, maxFinishedJobs)
+	}
+}
+
+func TestRandomIDIsNotZero(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		id := randomID()
+		if id == "" || id == "0000000000000000" {
+			t.Fatalf("randomID returned %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("randomID repeated %q", id)
+		}
+		seen[id] = true
+	}
+}
+
 func TestClientKey(t *testing.T) {
 	r := httptest.NewRequest("POST", "/login", nil)
 	r.RemoteAddr = "10.244.0.9:1234"
 	if got := clientKey(r); got != "10.244.0.9" {
 		t.Errorf("clientKey without XFF = %q", got)
 	}
+
+	// Traefik appends the address it saw, so the rightmost public hop is the
+	// client and cannot be forged.
 	r.Header.Set("X-Forwarded-For", "203.0.113.7, 10.244.0.9")
 	if got := clientKey(r); got != "203.0.113.7" {
 		t.Errorf("clientKey with XFF = %q", got)
+	}
+
+	// A client that prepends a fresh spoofed entry on every request must still
+	// land in one stable bucket: the limiter depends on it.
+	first := ""
+	for _, spoof := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"} {
+		r.Header.Set("X-Forwarded-For", spoof+", 198.51.100.9, 10.244.0.9")
+		got := clientKey(r)
+		if got != "198.51.100.9" {
+			t.Errorf("spoofed XFF %q gave bucket %q; want the proxy-written hop", spoof, got)
+		}
+		if first == "" {
+			first = got
+		}
+		if got != first {
+			t.Errorf("spoofing moved the bucket from %q to %q", first, got)
+		}
+	}
+
+	// A direct, non-proxied caller cannot pick a bucket at all.
+	direct := httptest.NewRequest("POST", "/login", nil)
+	direct.RemoteAddr = "203.0.113.44:5555"
+	direct.Header.Set("X-Forwarded-For", "9.9.9.9")
+	if got := clientKey(direct); got != "203.0.113.44" {
+		t.Errorf("direct client trusted XFF: %q", got)
+	}
+
+	// An external proxy in front of Traefik: both hops are private, so the
+	// leftmost entry (the original client) is the bucket.
+	r.Header.Set("X-Forwarded-For", "203.0.113.9, 172.16.10.5, 10.244.0.9")
+	if got := clientKey(r); got != "203.0.113.9" {
+		t.Errorf("external proxy chain = %q", got)
 	}
 }
 
