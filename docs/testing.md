@@ -13,6 +13,7 @@ that tier.
 | Tier 2 | **Functional user journeys** | A user or client can complete a real workflow. Informational, reported in full. | `tests/e2e/run.sh journeys` |
 | Tier 2 | **Backup and restore** | The console creates an archive, verifies it, lists it, restores it (state unchanged) and the console stays healthy. | `ci/backup-check.sh single|ha` |
 | Tier 2 | **Upgrade** | Re-runs the documented platform upgrade, then asserts the console rolled, the state survived, the new config landed and every app is ready. The app-chart N-1 path runs when the mirror carries the older tarball. | `ci/upgrade-check.sh single|ha` |
+| Tier 2 | **Uninstall keeps data** | Uninstalls an app *without* purge and proves the data claim, the generated credential Secret, its bytes and a reinstall all survive. `purge` still deletes the namespace. | `ci/uninstall-check.sh single|ha` |
 | Tier 2 | **Existing-installation run** | The same platform, acceptance and optional journey checks run against an installation that is already deployed; no reset, provisioning or app install. | `ci/test-existing.sh single|ha` |
 | Tier 2 | **Migration / upgrade tests** | Existing single-node installer state moved to the console PVC intact. | `tests/e2e/run.sh migration` |
 | Tier 2 | **Security checks** | No secrets in the tree, logs or ConfigMaps; secret/security invariants. Split between static checks and platform conformance. | `ci/static.sh`, `ci/assert.sh` |
@@ -121,6 +122,22 @@ serially because OCR/indexing is sensitive to concurrent load.
 | Journey | What the user/client does |
 |---|---|
 | **Mealie → SparkyFitness** | Creates a Mealie recipe, runs the console's one-click Mealie integration, and finds the recipe through SparkyFitness's Mealie provider. Requires `--integrations`. |
+
+## Fault injection
+
+`ci/faults.sh` breaks a target on purpose and waits for it to heal, so a cluster
+that returns `Ready` but has lost data or a volume fails the run:
+
+| Scenario | What it does |
+|---|---|
+| `--k3s-restart` / `--k3s-crash` | Restart (or `SIGKILL`) the k3s service on a node whose VM stays up. This is the failure that faulted the Longhorn volumes in November: the restart killed the node's iSCSI sessions. A VM power-off does not reproduce it. |
+| `--vip` (HA) | Power off the node carrying the control-plane VIP. |
+| `--reboot` | Gracefully reboot each node, then hard-reset the first. |
+| `--full-stop` | Stop the whole cluster (gracefully, or `--full-stop-hard`). |
+
+After every fault it waits for the API, the nodes, the pods, the app endpoints,
+the data markers (`ci/markers.sh`) and — where Longhorn is present — every
+replica in sync. Run `create` markers first: `./ci/markers.sh create single`.
 
 ## Tier 2 runner
 

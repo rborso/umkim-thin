@@ -48,6 +48,26 @@ ADMIN="\$(cat /tmp/admin)"
 EOS
 }
 
+# verify_login : prove the account can actually authenticate. Redeeming an
+# invite reports success even when the name already exists (the redemption
+# refuses to take over an account rather than resetting it), so a stale
+# account with a different password looks "created" and then fails every app
+# login for the whole run. One firstfactor call catches that here.
+verify_login() {
+  local pw_b64 user_b64
+  pw_b64=$(printf '%s' "$password" | base64 -w0)
+  user_b64=$(printf '%s' "$name" | base64 -w0)
+  node_root <<EOS
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+user=\$(printf '%s' "$user_b64" | base64 -d)
+pw=\$(printf '%s' "$pw_b64" | base64 -d)
+body=\$(printf '{"username":"%s","password":"%s","targetURL":"https://%s/"}' "\$user" "\$pw" "$CONSOLE_HOST")
+code=\$(curl -sk -o /tmp/verify.out -w '%{http_code}' -H 'Content-Type: application/json' \
+  -d "\$body" "https://$PORTAL_HOST/api/firstfactor")
+echo "\$code"
+EOS
+}
+
 for attempt in 1 2 3 4 5; do
   resp=$(create_invite)
   token=$(printf '%s' "$resp" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("invite") or {}).get("token",""))' 2>/dev/null || true)
@@ -84,8 +104,29 @@ EOS
 )
   case "$direct" in
     2[0-9][0-9]*|*"already exists"*|*"never takes over"*)
-      echo "   created $name (regular tenant)"
-      exit 0
+      code=$(verify_login)
+      if [ "$code" = "200" ]; then
+        echo "   created $name (regular tenant, login verified)"
+        exit 0
+      fi
+      # The invite was accepted but this account cannot log in: an earlier run
+      # left the same name with a different password and redemption refused to
+      # take it over. That account is a test account; remove it and retry.
+      echo "   $name exists but cannot log in (HTTP ${code:-?}); deleting the stale test account" >&2
+      stale_b64=$(printf '%s' "$admin_pw" | base64 -w0)
+      node_root >/dev/null 2>&1 <<EOS || true
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+printf '%s' "$stale_b64" | base64 -d > /tmp/stale-admin
+ADMIN=\$(cat /tmp/stale-admin)
+/usr/local/bin/kubectl -n umkim-thin exec -i deploy/umkim-thin-console -c console -- sh -c '
+  ADMIN="\$1"
+  curl -s -c /tmp/c -o /dev/null -X POST -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "username=admin" --data-urlencode "password=\$ADMIN" http://127.0.0.1:8080/login
+  curl -s -b /tmp/c -o /dev/null -X DELETE "http://127.0.0.1:8080/api/directory/users/$name"
+' _ "\$ADMIN" < /dev/null
+rm -f /tmp/stale-admin
+EOS
+      sleep 3
       ;;
   esac
   echo "   invite redeem attempt $attempt failed: $direct" >&2

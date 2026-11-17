@@ -6,6 +6,8 @@
 #   ./ci/faults.sh ha --vip
 #   ./ci/faults.sh ha --reboot
 #   ./ci/faults.sh ha --full-stop
+#   ./ci/faults.sh single --k3s-restart   (restart the service, VM stays up)
+#   ./ci/faults.sh single --k3s-crash     (SIGKILL k3s under load)
 #   ./ci/faults.sh ha all
 #
 # The VM -> hypervisor map comes from ci/lab.env (CI_SINGLE_VMS / CI_HA_VMS).
@@ -14,7 +16,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-TARGET="${1:?usage: ci/faults.sh single|ha [--vip|--reboot|--full-stop|all]}"
+TARGET="${1:?usage: ci/faults.sh single|ha [--vip|--reboot|--full-stop|--k3s-restart|--k3s-crash|all]}"
 shift || true
 MODE="${1:-all}"
 export TARGET
@@ -173,6 +175,9 @@ wait_longhorn() { # wait_longhorn [timeout] - no volume is faulted/unknown
 # stays faulted. Wait for the rebuild before injecting the next fault.
 wait_longhorn_healthy() { # wait_longhorn_healthy [timeout]
   local t="${1:-3600}" i bad
+  # A target without Longhorn (single node uses local-path) has nothing to wait
+  # for; only a real non-healthy robustness should fail.
+  if ! k "get crd volumes.longhorn.io" >/dev/null 2>&1; then return 0; fi
   for i in $(seq 1 $((t / 15))); do
     bad=$(k "get volumes.longhorn.io -n longhorn-system -o json" 2>/dev/null | jq '
       [.items[] | select(.status.robustness != "healthy")] | length' 2>/dev/null) || { sleep 15; continue; }
@@ -232,6 +237,29 @@ vip_holder() { # echo "<index> <ip>" of the node carrying the VIP
     i=$((i + 1))
   done
   return 1
+}
+
+# fault_service <ip> [hard] : restart the k3s service on a live node while the
+# VM stays up. This is the failure that actually took the November volumes down:
+# k3s.service exited (status=1/FAILURE) under an etcd stall, the restart killed
+# the node's iSCSI sessions, and Longhorn marked every replica of the volumes on
+# that node failed. A VM power-off test does not reproduce it, because the guest
+# never stops iSCSI under load.
+fault_service() {
+  local ip="$1" hard="${2:-}" i
+  [ -n "$ip" ] || ip="${ip_list[0]}"
+  if [ "$hard" = "hard" ]; then
+    say "kill -9 k3s on $ip (ungraceful service crash)"
+    node_at "$ip" "sudo systemctl kill -s SIGKILL k3s" || { bad "could not kill k3s on $ip"; return; }
+  else
+    say "restart the k3s service on $ip"
+    node_at "$ip" "sudo systemctl restart k3s" || { bad "could not restart k3s on $ip"; return; }
+  fi
+  wait_healthy "k3s service $([ "$hard" = hard ] && echo crash || echo restart) on $ip"
+  # The storage layer is the real subject: a service bounce must not leave a
+  # faulted volume behind (auto-salvage is off, so it would stay faulted).
+  wait_longhorn_healthy 900 && ok "every Longhorn replica rebuilt after the service bounce" \
+    || bad "a Longhorn volume did not return to healthy after the service bounce"
 }
 
 fault_vip() {
@@ -390,6 +418,8 @@ case "$MODE" in
   --reboot) fault_reboot ;;
   --full-stop) fault_full_stop graceful ;;
   --full-stop-hard) fault_full_stop hard ;;
+  --k3s-restart) fault_service "${ip_list[0]}" ;;
+  --k3s-crash) fault_service "${ip_list[0]}" hard ;;
   *) echo "unknown mode $MODE" >&2; exit 2 ;;
 esac
 
