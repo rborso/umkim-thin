@@ -6,6 +6,16 @@
 # storage_agent is true.
 
 - name: copy the chart mirror to the target
+  # The mirror is seeded into a ConfigMap (256 KiB annotation / 1 MiB object
+  # cap) and every release used to leave the previous versions behind, so after a
+  # handful of chart bumps the seed failed with "metadata.annotations: Too long".
+  # Replace the directory instead of merging into it: the staged mirror already
+  # contains every packaged chart, and a stale tarball is never resolvable by a
+  # catalogued install or rollback.
+  ansible.builtin.file:
+    path: "{{ remote_dir }}/chart-mirror"
+    state: absent
+- name: copy the chart mirror to the target
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/artifacts/chart-mirror"
     dest: "{{ remote_dir }}/"

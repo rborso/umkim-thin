@@ -1132,15 +1132,60 @@ render_all() {
 package_charts() {
   log "packaging charts into $DATA_DIR/chart-mirror"
   mkdir -p "$DATA_DIR/chart-mirror"
-  local d
+  local d fresh
+  fresh=$(mktemp)
   for d in charts/identity charts/umkim-thin charts/wireguard-gateway charts/apps/*; do
     [ -d "$d" ] || continue
     "$HELM" package "$d" --destination "$DATA_DIR/chart-mirror" >/dev/null
+    # Record what this run produced: those are the current versions and must
+    # never be pruned (the platform charts are not in the catalog).
+    printf '%s\n' "$(basename "$("$HELM" show chart "$d" | awk '/^name:/{print $2; exit}')")-$(awk '/^version:/{print $2; exit}' "$d/Chart.yaml").tgz" >>"$fresh"
   done
-  # Keep catalogued versions for upgrade/rollback. Pruning by age would delete
-  # the N-1 chart that the catalog still advertises; prune explicitly instead.
-
+  # Drop stale app tarballs. The mirror is seeded into a ConfigMap (256 KiB
+  # annotation cap, 1 MiB object cap) and every release used to leave the
+  # previous versions behind: after a handful of chart bumps the seed fails with
+  # "metadata.annotations: Too long". Keep what this run packaged plus every
+  # version the catalog advertises for upgrade/rollback
+  # (docs/versioning-plan.md), which is also what chartRef resolves.
+  prune_mirror "$fresh"
+  rm -f "$fresh"
   info "$(find "$DATA_DIR/chart-mirror" -name '*.tgz' | wc -l) charts packaged"
+}
+
+# prune_mirror <keep-file> removes any *.tgz in the mirror that is neither in
+# <keep-file> (just packaged) nor advertised by a catalog entry.
+prune_mirror() {
+  local fresh="$1" list keep
+  list=$(mktemp)
+  cat "$fresh" >>"$list"
+  for f in catalog/*.yaml; do
+    [ -f "$f" ] || continue
+    python3 - "$f" >>"$list" <<'PY' || true
+import sys, pathlib
+try:
+    import yaml
+except Exception:
+    sys.exit(0)
+d = yaml.safe_load(open(sys.argv[1])) or {}
+name = d.get("name") or pathlib.Path(sys.argv[1]).stem
+ref = ((d.get("chart") or {}).get("ref") or "").rstrip("/")
+chart = ref.split("/")[-1] if ref else name
+c = d.get("chart") or {}
+vers = {c.get("version")} | {v.get("version") for v in (c.get("versions") or [])}
+for v in sorted(x for x in vers if x):
+    print(f"{chart}-{v}.tgz")
+PY
+  done
+  sort -u -o "$list" "$list"
+  for tgz in "$DATA_DIR/chart-mirror"/*.tgz; do
+    [ -f "$tgz" ] || continue
+    keep=$(basename "$tgz")
+    grep -qxF "$keep" "$list" || {
+      info "pruning $keep (not packaged now and no catalog entry references it)"
+      rm -f "$tgz"
+    }
+  done
+  rm -f "$list"
 }
 
 build_or_import_image() {
@@ -1247,9 +1292,18 @@ seed_console() {
   local tarfile
   tarfile=$(mktemp)
   tar cf "$tarfile" -C "$DATA_DIR/chart-mirror" .
-  kubectl -n "$CONSOLE_NAMESPACE" create configmap umkim-thin-mirror \
+  # Replace rather than apply: `apply` stores the whole object (including this
+  # tar, base64 in the annotation) in last-applied-configuration, which doubles
+  # the payload against the 256 KiB annotation cap for no benefit -- nothing else
+  # manages this ConfigMap. Create first, then replace in place so the volume
+  # mount keeps its name.
+  local doc
+  doc=$(kubectl -n "$CONSOLE_NAMESPACE" create configmap umkim-thin-mirror \
     --from-file=mirror.tar="$tarfile" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    --dry-run=client -o yaml)
+  if ! printf '%s' "$doc" | kubectl -n "$CONSOLE_NAMESPACE" replace -f - >/dev/null 2>&1; then
+    printf '%s' "$doc" | kubectl -n "$CONSOLE_NAMESPACE" create -f - >/dev/null
+  fi
   rm -f "$tarfile"
 }
 

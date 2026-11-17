@@ -61,7 +61,15 @@ spec:
                 esac
                 cp -f "/seed/$f" "/data/$f"
               done
-              [ -f /mirror/mirror.tar ] && tar xf /mirror/mirror.tar -C /data/chart-mirror || true
+              [ -f /mirror/mirror.tar ] && {
+                # The tar is the complete mirror the installer packaged. Clear the
+                # directory first: extracting over it left every superseded chart
+                # version on the PVC forever (43 files after 23 were seeded), which
+                # is also what accumulates against the ConfigMap cap.
+                rm -rf /data/chart-mirror
+                mkdir -p /data/chart-mirror
+                tar xf /mirror/mirror.tar -C /data/chart-mirror
+              } || true
           volumeMounts:
             - { name: seed, mountPath: /seed, readOnly: true }
             - { name: mirror, mountPath: /mirror, readOnly: true }

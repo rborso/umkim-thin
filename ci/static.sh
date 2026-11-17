@@ -518,6 +518,32 @@ if ! grep -q 'eviction-hard=' install.sh || ! grep -q 'eviction-hard=' deploy/an
 fi
 echo "   ok"
 
+echo ">> chart mirror fits the seeding ConfigMap"
+# install.sh and the Ansible console role seed the mirror as one ConfigMap. Its
+# tarball must stay well under the 1 MiB object limit (and client-side apply's
+# 256 KiB annotation limit), or the seed fails with "metadata.annotations: Too
+# long" -- which is what happened once chart versions accumulated. Packaging here
+# mirrors install.sh: the platform charts plus every app chart, each at ONE
+# version, so the budget is deterministic.
+if command -v helm >/dev/null 2>&1; then
+  stage=$(mktemp -d)
+  for d in charts/identity charts/umkim-thin charts/wireguard-gateway charts/apps/*; do
+    [ -d "$d" ] || continue
+    helm package "$d" --destination "$stage" >/dev/null
+  done
+  size=$(du -sb "$stage" | cut -f1)
+  count=$(find "$stage" -name '*.tgz' | wc -l)
+  rm -rf "$stage"
+  # A tar of the directory is the payload; leave headroom for tar headers and
+  # base64 expansion (Ansible's server-side apply still stores the object).
+  if [ "$count" -gt 40 ] || [ "${size:-0}" -gt 350000 ]; then
+    echo "the chart mirror is $count charts / $((${size:-0} / 1024)) KiB; it must fit the seeding ConfigMap" >&2
+    echo "prune superseded chart versions (see prune_mirror in install.sh)" >&2
+    exit 1
+  fi
+fi
+echo "   ok"
+
 echo ">> ansible syntax-check"
 if command -v ansible-playbook >/dev/null 2>&1; then
   inv=$(mktemp)
