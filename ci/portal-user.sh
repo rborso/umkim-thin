@@ -53,19 +53,19 @@ EOS
 # refuses to take over an account rather than resetting it), so a stale
 # account with a different password looks "created" and then fails every app
 # login for the whole run. One firstfactor call catches that here.
+#
+# It runs from this host, like ci/assert.sh, so it uses the same DNS path (the
+# lab runner pins the zone to the VIP). Running it on the node would bypass
+# those pins; running it against the public DDNS gets a 403, which the caller
+# must not mistake for a bad password.
 verify_login() {
-  local pw_b64 user_b64
-  pw_b64=$(printf '%s' "$password" | base64 -w0)
-  user_b64=$(printf '%s' "$name" | base64 -w0)
-  node_root <<EOS
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-user=\$(printf '%s' "$user_b64" | base64 -d)
-pw=\$(printf '%s' "$pw_b64" | base64 -d)
-body=\$(printf '{"username":"%s","password":"%s","targetURL":"https://%s/"}' "\$user" "\$pw" "$CONSOLE_HOST")
-code=\$(curl -sk -o /tmp/verify.out -w '%{http_code}' -H 'Content-Type: application/json' \
-  -d "\$body" "https://$PORTAL_HOST/api/firstfactor")
-echo "\$code"
-EOS
+  local body code
+  body=$(printf '{"username":"%s","password":"%s","targetURL":"https://%s/"}' \
+    "$name" "$password" "$CONSOLE_HOST")
+  code=$(curl -ksS -o /tmp/verify.out -m 20 -w '%{http_code}' \
+    -H 'Content-Type: application/json' -d "$body" \
+    "https://$PORTAL_HOST/api/firstfactor" 2>/dev/null || echo 000)
+  printf '%s' "$code"
 }
 
 for attempt in 1 2 3 4 5; do
@@ -109,12 +109,14 @@ EOS
         echo "   created $name (regular tenant, login verified)"
         exit 0
       fi
-      # The invite was accepted but this account cannot log in: an earlier run
-      # left the same name with a different password and redemption refused to
-      # take it over. That account is a test account; remove it and retry.
-      echo "   $name exists but cannot log in (HTTP ${code:-?}); deleting the stale test account" >&2
-      stale_b64=$(printf '%s' "$admin_pw" | base64 -w0)
-      node_root >/dev/null 2>&1 <<EOS || true
+      case "$code" in
+        401)
+          # A definite credential rejection: an earlier run left the same name
+          # with a different password and redemption refused to take it over.
+          # That account is a test account; remove it and retry.
+          echo "   $name exists but the password is rejected (401); deleting the stale test account" >&2
+          stale_b64=$(printf '%s' "$admin_pw" | base64 -w0)
+          node_root >/dev/null 2>&1 <<EOS || true
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 printf '%s' "$stale_b64" | base64 -d > /tmp/stale-admin
 ADMIN=\$(cat /tmp/stale-admin)
@@ -126,7 +128,17 @@ ADMIN=\$(cat /tmp/stale-admin)
 ' _ "\$ADMIN" < /dev/null
 rm -f /tmp/stale-admin
 EOS
-      sleep 3
+          sleep 3
+          ;;
+        *)
+          # Anything else (000, 403, 5xx) is the check itself failing to reach
+          # the portal, not a bad credential. Never delete a working account
+          # because the network was unavailable; report it and stop.
+          echo "   could not verify the login for $name (HTTP ${code:-?}); not touching the account." >&2
+          echo "   run this on a host that can reach $PORTAL_HOST (the lab runner pins it to the VIP)." >&2
+          exit 1
+          ;;
+      esac
       ;;
   esac
   echo "   invite redeem attempt $attempt failed: $direct" >&2
