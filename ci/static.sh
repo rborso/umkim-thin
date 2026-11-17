@@ -203,6 +203,28 @@ if grep -RIn -E 'image:.*:(latest|release|stable)([[:space:]]|$)|tag:[[:space:]]
   echo "floating image tag found; pin an exact version or digest" >&2
   exit 1
 fi
+# The grep above cannot see a tag that is chosen in a template expression
+# (`{{ .app.tag | default "latest" }}`). Render every chart and reject a
+# rendered image whose tag is floating or absent.
+render_float=0
+for d in charts/apps/*/; do
+  app=$(basename "$d")
+  if ! out=$(helm template floatcheck "$d" 2>&1); then
+    echo "$app: does not render" >&2; exit 1
+  fi
+  bad=$(printf '%s\n' "$out" | awk '
+    /^[[:space:]]*image:/ {
+      img = $2; gsub(/"/, "", img)
+      n = split(img, parts, ":")
+      if (n < 2 || parts[n] == "latest" || parts[n] == "release" || parts[n] == "stable") print img
+    }' | sort -u)
+  if [ -n "$bad" ]; then
+    echo "$app: floating or untagged image after rendering:" >&2
+    printf '  %s\n' "$bad" >&2
+    render_float=1
+  fi
+done
+[ "$render_float" -eq 0 ] || exit 1
 echo "   ok"
 
 # A Deployment that mounts a ReadWriteOnce claim must use strategy: Recreate.
