@@ -14,8 +14,11 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/sparkyfitness
-  version: 0.1.3
+  version: 0.1.4
   versions:
+    - version: 0.1.4
+      appVersion: 1.12.1
+      channel: stable
     - version: 0.1.3
       appVersion: 1.12.1
       channel: stable

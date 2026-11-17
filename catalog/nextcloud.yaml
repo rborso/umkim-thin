@@ -13,8 +13,11 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/nextcloud
-  version: 0.1.21
+  version: 0.1.22
   versions:
+    - version: 0.1.22
+      appVersion: 35.0.3
+      channel: stable
     - version: 0.1.21
       appVersion: 35.0.3
       channel: stable

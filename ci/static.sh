@@ -373,6 +373,44 @@ if [ -e charts/apps/.git ]; then
 fi
 echo "   ok"
 
+echo ">> a chart change ships with a version bump"
+# A template change without a new chart version never reaches an installed
+# cluster: the console only upgrades when the catalog names a different chart
+# version. The uninstall-keep fix touched 27 templates across all ten charts and
+# moved no version, so no cluster would have received it.
+if [ -e charts/apps/.git ]; then
+  changed=$(git -C charts/apps diff --name-only HEAD -- '*templates*' 2>/dev/null | cut -d/ -f1 | sort -u)
+  if [ -n "$changed" ]; then
+    bumped=$(git -C charts/apps diff --name-only HEAD -- '*Chart.yaml' 2>/dev/null | cut -d/ -f1 | sort -u)
+    for app in $changed; do
+      case " $bumped " in
+        *" $app "*) ;;
+        *)
+          echo "charts/apps/$app: templates changed but Chart.yaml version did not; the catalog cannot deliver it" >&2
+          exit 1
+          ;;
+      esac
+    done
+  fi
+fi
+echo "   ok"
+
+echo ">> catalog version is newer than the previous release"
+# A catalog release is a tarball upload; a stale catalog/VERSION means an
+# operator cannot tell the new entries from the ones they already have.
+if git rev-parse --git-dir >/dev/null 2>&1 && \
+   git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  prev=$(git show HEAD:catalog/VERSION 2>/dev/null | tr -d '[:space:]')
+  now=$(tr -d '[:space:]' < catalog/VERSION)
+  if [ -n "$prev" ] && [ "$prev" != "$now" ]; then
+    newer=$(printf '%s\n%s\n' "$prev" "$now" | sort -V | tail -1)
+    if [ "$newer" != "$now" ]; then
+      echo "catalog/VERSION went backwards ($prev -> $now)" >&2; exit 1
+    fi
+  fi
+fi
+echo "   ok"
+
 echo ">> catalog loads and validates"
 if ! go run ./cmd/umkim-thin --catalog catalog catalog list >/dev/null; then
   echo "the catalog does not load; fix the YAML before shipping it" >&2

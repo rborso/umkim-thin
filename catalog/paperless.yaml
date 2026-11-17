@@ -13,8 +13,11 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/paperless
-  version: 0.1.14
+  version: 0.1.15
   versions:
+    - version: 0.1.15
+      appVersion: 3.4.2
+      channel: stable
     - version: 0.1.14
       appVersion: 3.4.2
       channel: stable
