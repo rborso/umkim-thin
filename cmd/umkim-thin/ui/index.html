@@ -2166,7 +2166,12 @@ async function uninstall(name, purge) {
   try {
     const res = await fetch('/api/apps/' + encodeURIComponent(name) + (purge ? '?purge=true' : ''), { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
-    note(`uninstalled ${name}${purge ? ' (purged)' : ''}`, 'ok');
+    const kept = purge ? null : (await res.json().catch(() => null));
+    if (kept && kept.kept && kept.kept.length) {
+      note(`uninstalled ${name}; data kept in ${kept.kept.length} volume(s): ${kept.kept.join(', ')}`, 'ok');
+    } else {
+      note(`uninstalled ${name}${purge ? ' (purged)' : ''}`, 'ok');
+    }
   } catch (err) { note(String(err.message || err), 'err'); }
   finally { loadInstalled(); loadApplications(); }
 }

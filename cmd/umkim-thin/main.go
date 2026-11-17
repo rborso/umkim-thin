@@ -339,13 +339,17 @@ func appCmd(dir string, args []string) error {
 		if e, ok := byName[args[1]]; ok {
 			entry = &e
 		}
+		kept := in.KeptData(args[1], entry)
 		if err := in.Uninstall(args[1], entry, *purge); err != nil {
 			return err
 		}
 		if *purge {
-			fmt.Printf("uninstalled %s (purged namespace)\n", args[1])
+			fmt.Printf("uninstalled %s (purged namespace, data deleted)\n", args[1])
 		} else {
 			fmt.Printf("uninstalled %s (data kept; use --purge to remove it)\n", args[1])
+			for _, p := range kept {
+				fmt.Printf("  kept volume %s\n", p)
+			}
 		}
 		return nil
 	case "status":
@@ -765,11 +769,14 @@ volumes. The console state is always archived whole: it is global and small.
 	}
 	cfg := app.ConfigFromEnv()
 	defSchedule := backup.Schedule{
-		Enabled:     cfg.BackupInterval > 0,
-		Interval:    "24h",
-		Keep:        cfg.BackupKeep,
-		Snapshots:   cfg.BackupSnapshots,
-		DataMode:    backup.DataSnapshot,
+		Enabled:   cfg.BackupInterval > 0,
+		Interval:  "24h",
+		Keep:      cfg.BackupKeep,
+		Snapshots: cfg.BackupSnapshots,
+		// auto: snapshot where the storage supports it, file-copy the rest. A
+		// snapshot-only default silently produced a metadata-only archive on
+		// local-path/NFS, which is exactly the beginner install.
+		DataMode:    backup.DataAuto,
 		Compression: cfg.BackupCompression,
 	}
 	if !cfg.BackupSnapshots {

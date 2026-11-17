@@ -100,8 +100,8 @@ case "$files" in
 esac
 
 echo "== backup: snapshots =="
-if [ "${snapshots:-true}" = "true" ]; then
-  snaps=$(k get volumesnapshot -A -o json 2>/dev/null | python3 -c '
+# VolumeSnapshots this platform created during the run (labelled by the console).
+snaps=$(k get volumesnapshot -A -o json 2>/dev/null | python3 -c '
 import json, sys
 try:
     items = json.load(sys.stdin).get("items", [])
@@ -112,14 +112,35 @@ for i in items:
     if labels.get("app.kubernetes.io/managed-by") == "umkim-thin":
         print(i["metadata"]["namespace"] + "/" + i["metadata"]["name"])
 ')
-  if [ -n "$snaps" ]; then
-    printf '%s\n' "$snaps" | sed 's/^/    /'
-    ok "application PVCs were snapshotted"
-  else
-    skip "no VolumeSnapshot objects (the storage class has no snapshot support)"
-  fi
-else
+mode=$(cli backup schedule 2>/dev/null | sed -n 's/^  data *//p')
+echo "    data mode: ${mode:-unknown}"
+if [ -n "$snaps" ] && printf '%s\n' "$snaps" | grep -q .; then
+  printf '%s\n' "$snaps" | sed 's/^/    /'
+  ok "application PVCs were snapshotted"
+elif [ "${snapshots:-true}" = "false" ]; then
   skip "snapshots are disabled for this target"
+else
+  skip "no VolumeSnapshot objects (the storage class has no snapshot support)"
+fi
+
+# Volume data is captured either as a VolumeSnapshot or as a sibling
+# "<archive>-data-<ns>-<pvc>.tar.gz" file copy next to the archive (see
+# docs/backup.md). A metadata-only archive is not a backup of the data, so
+# "backup passed" must mean one of the two actually happened; otherwise on a
+# storage class without snapshots (local-path, plain NFS) this check would
+# bless a schedule that cannot restore anything.
+snapshot_ok=0
+[ -n "$(printf '%s' "$snaps" | tr -d '[:space:]')" ] && snapshot_ok=1
+base=${name%.tar.gz}
+copies=$(podsh "ls /data/backups/${base}-data-*.tar.gz 2>/dev/null | wc -l" | tr -cd '0-9')
+copies=${copies:-0}
+echo "== backup: application data =="
+if [ "$snapshot_ok" -eq 1 ]; then
+  ok "the volumes are captured by snapshot"
+elif [ "$copies" -gt 0 ]; then
+  ok "$copies volume(s) captured as file copies"
+else
+  bad "the backup has no application data (no snapshot, no file copy); set the data mode to auto or copy on this storage class"
 fi
 
 echo "== backup: restore (state unchanged) =="

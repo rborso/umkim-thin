@@ -63,8 +63,8 @@ The **Data** setting is one of:
 | Mode | What it does |
 |---|---|
 | `off` | Metadata only: state, seed, app inventory. No volume data. |
-| `snapshot` | A CSI `VolumeSnapshot` per volume; a warning when the storage cannot (NFS, local-path, no class). The default. |
-| `auto` | Snapshot where the storage supports it, **full file copy** for the rest. |
+| `snapshot` | A CSI `VolumeSnapshot` per volume; a warning when the storage cannot (NFS, local-path, no class). |
+| `auto` | Snapshot where the storage supports it, **full file copy** for the rest. The default, so a schedule on local-path or plain NFS still captures the data. |
 | `copy` | Always copy the volume contents into a `.tar.gz` (slow, but works on NFS and local-path). |
 
 ## Where backups go
