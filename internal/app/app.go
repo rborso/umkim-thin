@@ -9,6 +9,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rborso/umkim-thin/internal/catalog"
@@ -243,7 +245,14 @@ func (c Config) HomeURL() string {
 }
 
 // Installer performs installs against the cluster.
-type Installer struct{ cfg Config }
+type Installer struct {
+	cfg Config
+	// stateMu serialises the read-modify-write of the app inventory and the
+	// identity contributions. The console serves concurrent requests and the
+	// job store starts one goroutine per install, so two installs could
+	// otherwise drop each other's contribution or interleave a partial write.
+	stateMu sync.Mutex
+}
 
 // New returns an installer for the given configuration.
 func New(cfg Config) *Installer { return &Installer{cfg: cfg} }
@@ -1425,6 +1434,30 @@ func (in *Installer) Uninstall(name string, e *catalog.Entry, purge bool) error 
 	return firstErr
 }
 
+// KeptData reports the PVCs that stay behind after an uninstall without purge.
+// The app charts annotate every PVC (and the generated credential Secret) with
+// helm.sh/resource-policy: keep, so `helm uninstall` leaves them in place while
+// the storage class would otherwise reclaim the bytes. Listing them lets the
+// console tell the user what is still on disk and how to remove it.
+func (in *Installer) KeptData(name string, e *catalog.Entry) []string {
+	ns := name
+	if e != nil {
+		ns = in.installedNamespace(name, e.Namespace)
+	}
+	out, err := in.run(in.cfg.Kubectl, "--kubeconfig", in.cfg.Kubeconfig, "-n", ns,
+		"get", "pvc", "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	if err != nil {
+		return nil
+	}
+	var kept []string
+	for _, line := range strings.Split(out, "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return kept
+}
+
 // Component is one workload of an installed app.
 type Component struct {
 	Kind   string `json:"kind"`
@@ -1582,7 +1615,11 @@ func frac(s string) (int, int, bool) {
 
 // runStream runs a command, forwarding each output line to log when set.
 func (in *Installer) runStream(name string, args []string, log func(string)) (string, error) {
-	cmd := exec.Command(name, args...)
+	// Helm install/upgrade runs with --timeout 15m; leave margin so Helm's own
+	// timeout wins and its rollback still happens.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+in.cfg.Kubeconfig)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1603,19 +1640,49 @@ func (in *Installer) runStream(name string, args []string, log func(string)) (st
 		}
 	}
 	if err := cmd.Wait(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return buf.String(), fmt.Errorf("%s: timed out after 20m", filepath.Base(name))
+		}
 		return buf.String(), fmt.Errorf("%s: %w", filepath.Base(name), err)
 	}
 	return buf.String(), nil
 }
 
 // renderValues applies the site templating context to the entry's values.
+//
+// It must not touch the entry's own maps: Store.Entries/Entry hand out shallow
+// copies, so the nested maps are shared with the live catalog snapshot. Callers
+// then add generated secrets (sso.clientSecret, postgres passwords) with set(),
+// which would write them back into the snapshot and serve them from
+// GET /api/catalog. Deep-copy first so an install can only mutate its own tree.
 func (in *Installer) renderValues(e catalog.Entry, ctx siteContext) map[string]any {
 	repl := in.repl(e, ctx)
 	out := map[string]any{}
 	for k, v := range e.Values {
-		out[k] = renderAny(v, repl)
+		out[k] = renderAny(deepCopyValue(v), repl)
 	}
 	return out
+}
+
+// deepCopyValue copies maps, slices and scalars so a caller can mutate the
+// result without affecting the source (which may be the catalog snapshot).
+func deepCopyValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		m := make(map[string]any, len(t))
+		for k, vv := range t {
+			m[k] = deepCopyValue(vv)
+		}
+		return m
+	case []any:
+		s := make([]any, len(t))
+		for i, vv := range t {
+			s[i] = deepCopyValue(vv)
+		}
+		return s
+	default:
+		return v
+	}
 }
 
 // preserveImmutableStorage keeps the previous install's storageClass and
@@ -1805,11 +1872,23 @@ data:
 `, ns, ca))
 }
 
+// runDefaultTimeout bounds a single kubectl/helm invocation. A hung call (a
+// dead API, a stuck exec stream) would otherwise block the request or the job
+// goroutine forever.
+const runDefaultTimeout = 10 * time.Minute
+
+// runStreamDefaultTimeout covers the long operations: helm install/upgrade
+// (--timeout 15m) and volume restores.
 func (in *Installer) run(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), runDefaultTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+in.cfg.Kubeconfig)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return string(out), fmt.Errorf("%s %s: timed out after %s", filepath.Base(name), strings.Join(args, " "), runDefaultTimeout)
+		}
 		return string(out), fmt.Errorf("%s %s: %v: %s", filepath.Base(name), strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil

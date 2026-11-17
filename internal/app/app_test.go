@@ -1,9 +1,11 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rborso/umkim-thin/internal/catalog"
@@ -162,6 +164,55 @@ func TestRenderValues(t *testing.T) {
 	}
 	if got["storage"] != "local-path/umkim-thin-nfs/ReadWriteMany" || got["cluster"] != "10.43.0.10" {
 		t.Errorf("storage/cluster = %v / %v", got["storage"], got["cluster"])
+	}
+}
+
+// An install must never mutate the entry's own values: the store hands out
+// shallow copies, so the nested maps are the live catalog snapshot. Writing a
+// generated secret there would serve it from GET /api/catalog, and a second
+// install with different options would reuse the first install's rendering.
+func TestRenderValuesDoesNotMutateTheEntry(t *testing.T) {
+	in := testInstaller()
+	e := catalog.Entry{
+		Name:      "vaultwarden",
+		Namespace: "vaultwarden",
+		Route:     &catalog.Route{Mode: "site", Host: "vault.{{ .zone }}"},
+		Values: map[string]any{
+			"externalUrl": "https://{{ .host }}",
+			"sso":         map[string]any{"enabled": true, "clientSecret": ""},
+			"extra":       []any{map[string]any{"host": "{{ .host }}"}},
+		},
+	}
+	ctx, err := in.context(e, Options{Hosts: map[string]string{"": "vault.example.com"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := in.renderValues(e, ctx)
+	set(first, "sso.clientSecret", "generated-secret")
+	set(first, "sso.enabled", false)
+
+	// The source entry keeps its template and its empty secret.
+	sso := e.Values["sso"].(map[string]any)
+	if sso["clientSecret"] != "" {
+		t.Errorf("the entry's sso.clientSecret was mutated: %v", sso["clientSecret"])
+	}
+	if sso["enabled"] != true {
+		t.Errorf("the entry's sso.enabled was mutated: %v", sso["enabled"])
+	}
+	// The nested list element is independent too.
+	nested := e.Values["extra"].([]any)[0].(map[string]any)
+	if nested["host"] != "{{ .host }}" {
+		t.Errorf("the entry's nested list was mutated: %v", nested["host"])
+	}
+
+	// A second render starts from the template, not from the first render.
+	second := in.renderValues(e, ctx)
+	if second["externalUrl"] != "https://vault.example.com" {
+		t.Errorf("second render externalUrl = %v", second["externalUrl"])
+	}
+	if got := second["sso"].(map[string]any)["clientSecret"]; got != "" {
+		t.Errorf("second render leaked the first render's secret: %v", got)
 	}
 }
 
@@ -567,6 +618,72 @@ func TestVPNDNSPairs(t *testing.T) {
 	want := "app.example.com,other.vpn.example.com"
 	if strings.Join(got, ",") != want {
 		t.Fatalf("vpnDNSPairs = %q, want %q", got, want)
+	}
+}
+
+// Two concurrent installs must not drop each other's contribution, and a
+// crash mid-write must not leave a truncated apps-state.json behind (every
+// later identity sync reads it).
+func TestContributionsConcurrentUpdatesAreNotLost(t *testing.T) {
+	in := testInstaller()
+	in.cfg.AppsState = filepath.Join(t.TempDir(), "apps-state.json")
+
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			name := fmt.Sprintf("app-%02d", i)
+			if err := in.saveInstalledNamespace(name, "ns-"+name); err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	c := in.loadContributions()
+	if len(c) != n {
+		t.Fatalf("kept %d contributions, want %d (a concurrent update was lost)", len(c), n)
+	}
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("app-%02d", i)
+		if c[name].Namespace != "ns-"+name {
+			t.Errorf("%s namespace = %q", name, c[name].Namespace)
+		}
+	}
+}
+
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := writeFileAtomic(path, []byte(`{"a":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(path, []byte(`{"a":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"a":2}` {
+		t.Fatalf("content = %s", raw)
+	}
+	// No temp files left behind.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("left %d files in the directory, want 1", len(entries))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
 	}
 }
 
