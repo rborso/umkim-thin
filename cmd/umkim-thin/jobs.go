@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,11 +36,18 @@ func newJobStore() *jobStore { return &jobStore{m: map[string]*job{}} }
 
 // start runs fn in the background. The progress callback appends to the job's
 // log (bounded) so a long install or build can be followed from the console.
+// maxFinishedJobs bounds the job history. Each finished job keeps up to 500 log
+// lines; a console that runs for months would otherwise grow without limit.
+const maxFinishedJobs = 100
+
 func (s *jobStore) start(kind, name string, fn func(progress func(string)) (any, error)) job {
 	j := &job{ID: randomID(), Kind: kind, Name: name, Status: "running", Started: time.Now(), Log: []string{}}
 	s.mu.Lock()
 	s.m[j.ID] = j
 	s.order = append(s.order, j.ID)
+	// Snapshot while the lock is held: a fast fn can finish (and mutate j)
+	// before start returns.
+	snap := j.snapshot()
 	s.mu.Unlock()
 	if kind == "install" {
 		s.installs.Add(1)
@@ -55,20 +63,46 @@ func (s *jobStore) start(kind, name string, fn func(progress func(string)) (any,
 
 	go func() {
 		result, err := fn(progress)
+		now := time.Now()
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		now := time.Now()
 		j.Finished = &now
 		j.Result = result
 		if err != nil {
 			j.Status = "error"
 			j.Error = err.Error()
 			s.errors.Add(1)
-			return
+		} else {
+			j.Status = "done"
 		}
-		j.Status = "done"
+		s.evictFinishedLocked()
 	}()
-	return j.snapshot()
+	return snap
+}
+
+// evictFinishedLocked drops the oldest finished jobs once the history grows
+// past maxFinishedJobs. Caller holds the lock.
+func (s *jobStore) evictFinishedLocked() {
+	finished := 0
+	for _, id := range s.order {
+		if s.m[id].Finished != nil {
+			finished++
+		}
+	}
+	if finished <= maxFinishedJobs {
+		return
+	}
+	drop := finished - maxFinishedJobs
+	kept := s.order[:0]
+	for _, id := range s.order {
+		if drop > 0 && s.m[id].Finished != nil {
+			delete(s.m, id)
+			drop--
+			continue
+		}
+		kept = append(kept, id)
+	}
+	s.order = kept
 }
 
 func (s *jobStore) get(id string) (job, bool) {
@@ -99,6 +133,10 @@ func (j *job) snapshot() job {
 
 func randomID() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	// A failed rand.Read is catastrophic (predictable job/session ids); fail
+	// closed rather than hand out a zero id.
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("generating a random id: %v", err)
+	}
 	return hex.EncodeToString(b)
 }
