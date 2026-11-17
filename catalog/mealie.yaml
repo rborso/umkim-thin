@@ -18,16 +18,10 @@ chart:
     - version: 0.1.6
       appVersion: 3.31.0
       channel: stable
-    - version: 0.1.5
-      appVersion: 3.31.0
-      channel: stable
     - version: 0.1.4
       appVersion: 3.30.0
       channel: stable
     - version: 0.1.3
-      appVersion: 3.22.0
-      channel: stable
-    - version: 0.1.2
       appVersion: 3.22.0
       channel: stable
     - version: 0.1.1
