@@ -112,15 +112,29 @@ tearing down in place. It is not part of the normal uninstall path.
 
 ## Remove one app, not the platform
 
-In the console, open **Installed** and use **Uninstall**. The console asks
-whether to purge; read the prompt. Purging usually deletes the app's PVCs. If you
-only want to stop the app, scale it down instead:
+In the console, open **Installed** and use **Uninstall**. There are two choices:
+
+- **Uninstall** keeps the app's data. The volumes and the generated passwords
+  stay on disk, so you can reinstall the same app later and it picks up where it
+  left off; the app stops and its route disappears. The console tells you which
+  volumes were kept.
+- **Uninstall and delete its data** (purge) also removes the namespace, its
+  PVCs and the generated Secret. This is the destructive choice and cannot be
+  undone without a backup.
+
+The CLI is the same: `umkim-thin app uninstall <name>` keeps the data,
+`umkim-thin app uninstall <name> --purge` deletes it. If you only want to pause
+an app, scale it down instead:
 
 ```bash
 sudo kubectl -n <app> scale deploy --all --replicas=0
 ```
 
 (That is an advanced operation; the console's uninstall is the supported path.)
+
+`ci/uninstall-check.sh single|ha` proves the keep path end to end on a target:
+it writes a marker, uninstalls without purge, checks the volume, the marker and
+the Secret survived, reinstalls and reads the marker again.
 
 ## After uninstalling
 

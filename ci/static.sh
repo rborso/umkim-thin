@@ -313,6 +313,66 @@ for f in catalog/*.yaml; do
 done
 echo "   ok"
 
+echo ">> uninstall without purge keeps app data"
+# Uninstall (no purge) runs a plain `helm uninstall`, which deletes every
+# chart-rendered PVC and the generated credential Secret; the storage class
+# then reclaims the bytes and a reinstall would mint a password that no longer
+# matches the data. Every app PVC and every generated Secret must carry
+# helm.sh/resource-policy: keep. `purge` deletes the namespace, so it still works.
+for d in charts/apps/*/; do
+  app=$(basename "$d")
+  if ! render=$(helm template keepcheck "$d" 2>&1); then
+    echo "$app: does not render" >&2; exit 1
+  fi
+  missing=$(printf '%s\n' "$render" | python3 -c '
+import re, sys
+bad = []
+for doc in sys.stdin.read().split("\n---\n"):
+    kind = re.search(r"^kind:\s*(\S+)", doc, re.M)
+    if not kind or kind.group(1) not in ("PersistentVolumeClaim", "Secret"):
+        continue
+    name = re.search(r"^  name:\s*(\S+)", doc, re.M)
+    if "helm.sh/resource-policy: keep" not in doc:
+        bad.append(kind.group(1) + "/" + (name.group(1) if name else "?"))
+print(" ".join(bad))
+')
+  [ -n "$missing" ] || continue
+  echo "$app: these would be deleted by an uninstall without purge: $missing" >&2
+  echo "add helm.sh/resource-policy: keep to their metadata.annotations" >&2
+  exit 1
+done
+echo "   ok"
+
+echo ">> catalog versions exist in the chart history"
+# A catalogued version that was never committed (only ever packaged from a dirty
+# tree) is a promise the mirror cannot keep on a fresh install: chartRef misses
+# the tgz and hands Helm a GitHub tree URL. Fail instead of offering it.
+if [ -e charts/apps/.git ]; then
+  for f in catalog/*.yaml; do
+    # The chart directory comes from the ref, not the catalog name: the
+    # wireguard entry ships the wireguard-gateway chart.
+    ref=$(awk '/^chart:/{c=1} c && /^  ref:/{print $2; exit}' "$f")
+    app=${ref%/}; app=${app##*/}
+    [ -n "$app" ] || app=$(basename "$f" .yaml)
+    if [ -d "charts/apps/$app" ]; then
+      hist=$(git -C charts/apps log --all -p -- "$app/Chart.yaml" 2>/dev/null \
+        | sed -n 's/^+version: *//p' | sort -u)
+    elif [ -d "charts/$app" ]; then
+      hist=$(git log --all -p -- "charts/$app/Chart.yaml" 2>/dev/null \
+        | sed -n 's/^+version: *//p' | sort -u)
+    else
+      continue
+    fi
+    for v in $(awk '/^  versions:/{c=1;next} c && /^    - version:/{print $3;next} c && /^[a-z]/{c=0}' "$f"); do
+      case "$hist" in
+        *"$v"*) ;;
+        *) echo "$f: version $v is not in $app/Chart.yaml history (never committed)" >&2; exit 1 ;;
+      esac
+    done
+  done
+fi
+echo "   ok"
+
 echo ">> catalog loads and validates"
 if ! go run ./cmd/umkim-thin --catalog catalog catalog list >/dev/null; then
   echo "the catalog does not load; fix the YAML before shipping it" >&2
@@ -360,6 +420,43 @@ if command -v gitleaks >/dev/null 2>&1; then
 else
   echo "   skipped (gitleaks not installed)"
 fi
+
+echo ">> k3s api request-timeout is unconditional"
+# Large volume restores stream through the API and need the long timeout. It
+# must not be nested under an optional setting (it once was: HA runs with
+# secrets-encryption off and silently lost request-timeout=1h).
+if ! grep -q 'request-timeout=1h' deploy/ansible/roles/k3s/templates/config.yaml.j2; then
+  echo "the k3s config template has no request-timeout=1h" >&2; exit 1
+fi
+python3 - deploy/ansible/roles/k3s/templates/config.yaml.j2 <<'PY' || exit 1
+import re, sys
+src = open(sys.argv[1]).read().splitlines()
+depth = 0
+for line in src:
+    stripped = line.strip()
+    if re.match(r"^\{%-?\s*if\b", stripped):
+        depth += 1
+    elif re.match(r"^\{%-?\s*endif\b", stripped):
+        depth -= 1
+    elif "request-timeout=1h" in stripped and depth != 0:
+        sys.exit("request-timeout=1h is inside a conditional; it must always render")
+PY
+echo "   ok"
+
+echo ">> kubelet reclaims images and evicts before it wedges"
+# The kubelet defaults (image GC at ~85% of the disk, no eviction) let upgrades
+# pile up every replaced image layer and let a memory-tight node wedge. Both
+# install paths must set the thresholds; a template edit must not drop them.
+if ! grep -q 'image-gc-high-threshold=70' deploy/ansible/roles/k3s/templates/config.yaml.j2; then
+  echo "the k3s config template has no image GC thresholds" >&2; exit 1
+fi
+if ! grep -q 'image-gc-high-threshold=70' install.sh; then
+  echo "install.sh does not set the kubelet image GC thresholds on a fresh install" >&2; exit 1
+fi
+if ! grep -q 'eviction-hard=' install.sh || ! grep -q 'eviction-hard=' deploy/ansible/roles/k3s/templates/config.yaml.j2; then
+  echo "the kubelet eviction thresholds are missing from an install path" >&2; exit 1
+fi
+echo "   ok"
 
 echo ">> ansible syntax-check"
 if command -v ansible-playbook >/dev/null 2>&1; then

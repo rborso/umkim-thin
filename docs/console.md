@@ -497,7 +497,7 @@ to poll; a long install or upgrade blocks the terminal instead.
 | POST | `/api/apps/{name}/validate` | preflight storage/resource fit for the same install options |
 | GET | `/api/apps/{name}/versions` | installed + available chart/app versions |
 | POST | `/api/apps/{name}/upgrade` | `{version, confirmBackup}`; atomic upgrade job |
-| DELETE | `/api/apps/{name}?purge=` | uninstall (purge deletes data) |
+| DELETE | `/api/apps/{name}?purge=` | uninstall; without `purge` the PVCs and the generated Secret are kept (`helm.sh/resource-policy: keep`) and the response names them under `kept`, so a reinstall reuses the data; `purge` deletes the namespace and everything in it |
 | GET | `/api/status` | Applications aggregate (45 s cache) |
 | GET | `/api/wg/clients` | WireGuard peers |
 | GET | `/api/wg/status` | the endpoint clients dial, the tunnel subnet, the peer count and whether the gateway DaemonSet exists |
