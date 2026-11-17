@@ -652,7 +652,7 @@ install_k3s() {
     if [ "$DRY_RUN" -eq 0 ]; then
       curl -sfL https://get.k3s.io |
         INSTALL_K3S_CHANNEL="$K3S_CHANNEL" \
-        INSTALL_K3S_EXEC="server --cluster-init --write-kubeconfig-mode 600 --kube-apiserver-arg=request-timeout=1h --tls-san auth.$ZONE --tls-san console.$ZONE" \
+        INSTALL_K3S_EXEC="server --cluster-init --write-kubeconfig-mode 600 --kube-apiserver-arg=request-timeout=1h --tls-san auth.$ZONE --tls-san console.$ZONE --kubelet-arg=image-gc-high-threshold=70 --kubelet-arg=image-gc-low-threshold=60 --kubelet-arg=eviction-hard=memory.available<200Mi,nodefs.available<10%,imagefs.available<15% --kubelet-arg=eviction-soft=memory.available<400Mi,nodefs.available<15% --kubelet-arg=eviction-soft-grace-period=memory.available=2m,nodefs.available=2m --kubelet-arg=eviction-max-pod-grace-period=60 --kubelet-arg=system-reserved=cpu=100m,memory=256Mi --kubelet-arg=kube-reserved=cpu=100m,memory=256Mi" \
         sh -
     else
       info "+ install k3s (channel $K3S_CHANNEL, embedded etcd, TLS SANs auth.$ZONE and console.$ZONE)"

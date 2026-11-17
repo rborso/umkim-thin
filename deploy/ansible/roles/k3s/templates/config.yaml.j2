@@ -6,11 +6,26 @@ write-kubeconfig-mode: "0600"
 # distribution is automated (the current CI profile does this on HA).
 {% if secrets_encryption | default(true) | bool %}
 secrets-encryption: true
-# Large volume restores stream through the API; the default 60s request
-# timeout kills the exec stream mid-extract. The client sets its own timeout.
+{% endif %}
+# Large volume restores stream through the API; the default 60s request timeout
+# kills the exec stream mid-extract. The client sets its own timeout. This is
+# independent of secrets-encryption (HA runs with encryption off until the key
+# distribution is automated, and must still keep the long request timeout).
 kube-apiserver-arg:
   - "request-timeout=1h"
-{% endif %}
+# Reclaim replaced image layers and protect the node before it wedges. The
+# kubelet defaults (image GC at ~85% of the disk, no eviction) let a run of app
+# upgrades keep every layer of every replaced tag: dev-single reached 51 GB of
+# containerd images and ~400 MB of free RAM with no eviction policy.
+kubelet-arg:
+  - "image-gc-high-threshold=70"
+  - "image-gc-low-threshold=60"
+  - "eviction-hard=memory.available<200Mi,nodefs.available<10%,imagefs.available<15%"
+  - "eviction-soft=memory.available<400Mi,nodefs.available<15%"
+  - "eviction-soft-grace-period=memory.available=2m,nodefs.available=2m"
+  - "eviction-max-pod-grace-period=60"
+  - "system-reserved=cpu=100m,memory=256Mi"
+  - "kube-reserved=cpu=100m,memory=256Mi"
 node-name: {{ ansible_hostname }}
 node-ip: {{ ansible_default_ipv4.address }}
 advertise-address: {{ ansible_default_ipv4.address }}

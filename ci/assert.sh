@@ -48,6 +48,22 @@ else
   bad "sudo kubectl is not on sudo's secure PATH (/usr/bin/kubectl shim missing)"
 fi
 
+echo "== api request timeout (large volume restores) =="
+# The console streams volume restores through the API; the default 60s request
+# timeout kills them mid-extract. k3s logs the arguments it launches the
+# apiserver with, which is the reliable place to read this (the process list
+# shows only the k3s binary).
+rt=$(node_root <<'EOS'
+journalctl -u k3s --since "-30 days" --no-pager 2>/dev/null \
+  | grep -o -- '--request-timeout=[^ ]*' | tail -1 || true
+EOS
+)
+case "$rt" in
+  --request-timeout=1h|--request-timeout=3600s) ok "the API keeps long requests ($rt)" ;;
+  "") bad "the kube-apiserver has no --request-timeout; a volume restore will be cut at 60s" ;;
+  *)  bad "request-timeout is $rt; large volume restores need 1h" ;;
+esac
+
 echo "== etcd secrets encryption =="
 if [ "${secrets_encryption:-true}" = "false" ]; then
   skip "secrets-encryption is disabled for this target (HA key distribution pending)"
