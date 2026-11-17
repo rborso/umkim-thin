@@ -151,7 +151,11 @@ func (c *Config) command(name string, args ...string) (string, error) {
 	if c.run != nil {
 		return c.run(name, args...)
 	}
-	cmd := exec.Command(name, args...)
+	// A storage operation can stream a large copy or wait on a mount; bound it
+	// so a wedged NFS server cannot hold the API request forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s: %w", name, err)

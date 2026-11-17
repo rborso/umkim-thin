@@ -7,6 +7,7 @@
 package wg
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
@@ -20,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is everything needed to reach and address the gateway.
@@ -304,7 +306,10 @@ func (m *Manager) Status() Status {
 		if m.cfg.Kubeconfig != "" {
 			args = append([]string{"--kubeconfig", m.cfg.Kubeconfig}, args...)
 		}
-		if out, err := exec.Command(m.cfg.Kubectl, args...).Output(); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		out, err := exec.CommandContext(ctx, m.cfg.Kubectl, args...).Output()
+		cancel()
+		if err == nil {
 			st.Installed = strings.TrimSpace(string(out)) != ""
 		}
 	}
@@ -410,14 +415,16 @@ stringData:
 `, m.cfg.Secret, m.cfg.Namespace, st.ServerPrivate, st.ServerPublic,
 		fmt.Sprintf("%s/%d", m.cfg.ServerIP, prefix.Bits()), peers.String())
 
-	cmd := exec.Command(m.cfg.Kubectl, "--kubeconfig", m.cfg.Kubeconfig, "apply", "-f", "-")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, m.cfg.Kubectl, "--kubeconfig", m.cfg.Kubeconfig, "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(doc)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("writing %s/%s: %v: %s", m.cfg.Namespace, m.cfg.Secret, err, strings.TrimSpace(string(out)))
 	}
 	// A mounted Secret can take a minute to propagate; nudge the gateway so a
 	// new peer is usable immediately. Best effort: it may not be installed yet.
-	restart := exec.Command(m.cfg.Kubectl, "--kubeconfig", m.cfg.Kubeconfig,
+	restart := exec.CommandContext(ctx, m.cfg.Kubectl, "--kubeconfig", m.cfg.Kubeconfig,
 		"-n", m.cfg.Namespace, "rollout", "restart", "daemonset/wireguard-gateway")
 	_ = restart.Run()
 	return nil

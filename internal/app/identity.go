@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rborso/umkim-thin/internal/catalog"
@@ -83,7 +84,62 @@ func (in *Installer) saveContributions(c contributions) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(in.cfg.AppsState, raw, 0o600)
+	// Write-then-rename: a crash or a full disk during the write must not leave
+	// a truncated apps-state.json behind (every later identity sync would fail).
+	return writeFileAtomic(in.cfg.AppsState, raw, 0o600)
+}
+
+// updateContributions applies a mutation while holding the state lock, then
+// saves atomically. Use it for every read-modify-write of the app inventory;
+// two concurrent installs must not drop each other's contribution.
+func (in *Installer) updateContributions(mutate func(contributions) bool) (contributions, bool, error) {
+	in.stateMu.Lock()
+	defer in.stateMu.Unlock()
+	c := in.loadContributions()
+	if !mutate(c) {
+		return c, false, nil
+	}
+	if err := in.saveContributions(c); err != nil {
+		return c, false, err
+	}
+	return c, true, nil
+}
+
+// writeFileAtomic writes to a sibling temp file, syncs it and renames it over
+// the target. The rename is atomic on the same filesystem, so a reader sees
+// either the old file or the complete new one.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() {
+		if tmp != "" {
+			os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	tmp = ""
+	return nil
 }
 
 // clientFor builds the OIDC client for an entry, reusing the secret already on
@@ -193,13 +249,18 @@ func (in *Installer) syncIdentity(c contributions) error {
 
 // dropContribution forgets an app's identity additions, syncing the release.
 func (in *Installer) dropContribution(name string) error {
-	c := in.loadContributions()
-	if _, ok := c[name]; !ok {
-		return nil
-	}
-	delete(c, name)
-	if err := in.saveContributions(c); err != nil {
+	c, changed, err := in.updateContributions(func(c contributions) bool {
+		if _, ok := c[name]; !ok {
+			return false
+		}
+		delete(c, name)
+		return true
+	})
+	if err != nil {
 		return err
+	}
+	if !changed {
+		return nil
 	}
 	return in.syncIdentity(c)
 }
@@ -208,61 +269,75 @@ func (in *Installer) dropContribution(name string) error {
 // the release, so a later route failure cannot make status/uninstall look in
 // the catalog namespace again.
 func (in *Installer) saveInstalledNamespace(name, namespace string) error {
-	c := in.loadContributions()
-	contrib := c[name]
-	contrib.Namespace = namespace
-	c[name] = contrib
-	return in.saveContributions(c)
+	_, _, err := in.updateContributions(func(c contributions) bool {
+		contrib := c[name]
+		contrib.Namespace = namespace
+		c[name] = contrib
+		return true
+	})
+	return err
 }
 
 // saveRoutes records the effective exposure/certificate choices after a
 // successful install. A failed install must not overwrite the previous state.
 func (in *Installer) saveRoutes(e catalog.Entry, ctx siteContext) error {
-	c := in.loadContributions()
-	contrib := c[e.Name]
-	contrib.Namespace = e.Namespace
-	contrib.Routes = map[string]routeSelection{}
-	for _, r := range e.EffectiveRoutes() {
-		contrib.Routes[r.Key] = routeSelection{
-			Exposure:    ctx.exposure[r.Key],
-			AllowLocal:  ctx.allowLocal[r.Key],
-			Certificate: ctx.certificate[r.Key],
-			Host:        ctx.hosts[r.Key],
-			VPNHost:     ctx.vpnHosts[r.Key],
-			TrustedVPN:  ctx.trustedVPN[r.Key],
-			SameHost:    ctx.trustedSameHost[r.Key],
+	_, _, err := in.updateContributions(func(c contributions) bool {
+		contrib := c[e.Name]
+		contrib.Namespace = e.Namespace
+		contrib.Routes = map[string]routeSelection{}
+		for _, r := range e.EffectiveRoutes() {
+			contrib.Routes[r.Key] = routeSelection{
+				Exposure:    ctx.exposure[r.Key],
+				AllowLocal:  ctx.allowLocal[r.Key],
+				Certificate: ctx.certificate[r.Key],
+				Host:        ctx.hosts[r.Key],
+				VPNHost:     ctx.vpnHosts[r.Key],
+				TrustedVPN:  ctx.trustedVPN[r.Key],
+				SameHost:    ctx.trustedSameHost[r.Key],
+			}
 		}
-	}
-	c[e.Name] = contrib
-	return in.saveContributions(c)
+		c[e.Name] = contrib
+		return true
+	})
+	return err
 }
 
 // prepare builds the app's contribution (OIDC client, bypass rules) and applies
 // the OIDC wiring to the chart values.
 func (in *Installer) prepare(e catalog.Entry, values map[string]any, ctx siteContext) (*autheliaClient, error) {
-	c := in.loadContributions()
-
+	// The client is derived from the stored contribution (an existing secret is
+	// reused), so the read and the write must happen under one lock; otherwise
+	// two concurrent installs could each mint a secret for the same app. The
+	// Helm call happens after the lock is released.
 	var client *autheliaClient
-	if e.Auth.Kind == "oidc" {
-		var err error
-		client, err = in.clientFor(e, c, in.repl(e, ctx))
-		if err != nil {
-			return nil, err
+	var buildErr error
+	c, changed, err := in.updateContributions(func(c contributions) bool {
+		if e.Auth.Kind == "oidc" {
+			client, buildErr = in.clientFor(e, c, in.repl(e, ctx))
+			if buildErr != nil {
+				return false
+			}
+			in.applyOIDCValues(e, values, client)
 		}
-		in.applyOIDCValues(e, values, client)
-	}
-
-	prev := c[e.Name]
-	contrib := contribution{
-		OIDC:        client,
-		PublicPaths: in.publicPathsFor(e, ctx),
-		Routes:      prev.Routes,
-	}
-	if contrib.OIDC != nil || len(contrib.PublicPaths) > 0 {
+		prev := c[e.Name]
+		contrib := contribution{
+			OIDC:        client,
+			PublicPaths: in.publicPathsFor(e, ctx),
+			Routes:      prev.Routes,
+		}
+		if contrib.OIDC == nil && len(contrib.PublicPaths) == 0 {
+			return false
+		}
 		c[e.Name] = contrib
-		if err := in.saveContributions(c); err != nil {
-			return nil, err
-		}
+		return true
+	})
+	if buildErr != nil {
+		return nil, buildErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	if changed {
 		if err := in.syncIdentity(c); err != nil {
 			return nil, err
 		}

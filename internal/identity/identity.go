@@ -7,6 +7,7 @@ package identity
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -522,11 +523,20 @@ func (d *Directory) gql(base, token, query string, vars map[string]any, out any)
 	return nil
 }
 
+// kubectlTimeout bounds one directory call. The console login handler runs
+// through here, so a wedged API or LLDAP must not hold the request forever.
+const kubectlTimeout = 60 * time.Second
+
 func (d *Directory) kubectl(args ...string) (string, error) {
-	cmd := exec.Command(d.cfg.Kubectl, append([]string{"--kubeconfig", d.cfg.Kubeconfig, "-n", d.cfg.Namespace}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), kubectlTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, d.cfg.Kubectl, append([]string{"--kubeconfig", d.cfg.Kubeconfig, "-n", d.cfg.Namespace}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Never format the whole argv: it can contain a password or token.
+		if ctx.Err() == context.DeadlineExceeded {
+			return string(out), fmt.Errorf("kubectl %s: timed out after %s", args[0], kubectlTimeout)
+		}
 		return string(out), fmt.Errorf("kubectl %s: %w", args[0], err)
 	}
 	return string(out), nil
@@ -534,10 +544,15 @@ func (d *Directory) kubectl(args ...string) (string, error) {
 
 // kubectlInput is kubectl with stdin for values that must not be arguments.
 func (d *Directory) kubectlInput(stdin string, args ...string) (string, error) {
-	cmd := exec.Command(d.cfg.Kubectl, append([]string{"--kubeconfig", d.cfg.Kubeconfig, "-n", d.cfg.Namespace}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), kubectlTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, d.cfg.Kubectl, append([]string{"--kubeconfig", d.cfg.Kubeconfig, "-n", d.cfg.Namespace}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return string(out), fmt.Errorf("kubectl %s: timed out after %s", args[0], kubectlTimeout)
+		}
 		return string(out), fmt.Errorf("kubectl %s: %w", args[0], err)
 	}
 	return string(out), nil

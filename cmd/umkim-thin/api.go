@@ -34,6 +34,41 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
+// catalogUploadMu serialises catalog uploads so two of them cannot interleave
+// the directory swap.
+var catalogUploadMu sync.Mutex
+
+// replaceDirectory swaps a staged directory into place. It renames the old
+// directory aside first (no window where the target is missing) and puts it
+// back if the install fails, so a failed upload never leaves the console
+// without a catalog. The staged directory must be on the same filesystem as
+// the target (callers stage a sibling), because a cross-mount rename fails.
+func replaceDirectory(staged, target string) error {
+	// MkdirTemp creates the directory, and rename(2) refuses to replace a
+	// non-empty one, so reserve a unique *path* instead.
+	tmp, err := os.MkdirTemp(filepath.Dir(target), ".catalog-old-")
+	if err != nil {
+		return err
+	}
+	os.Remove(tmp)
+	old := tmp
+	defer os.RemoveAll(old)
+	hadOld := true
+	if err := os.Rename(target, old); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		hadOld = false
+	}
+	if err := os.Rename(staged, target); err != nil {
+		if hadOld {
+			_ = os.Rename(old, target)
+		}
+		return err
+	}
+	return nil
+}
+
 type installRequest struct {
 	Name            string                            `json:"name"`
 	Host            string                            `json:"host"`
@@ -134,7 +169,7 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, "the external catalog directory is not safe to replace", http.StatusBadRequest)
 			return
 		}
-		tmp, err := os.MkdirTemp(cfg.StateDir, ".catalog-upload-")
+		tmp, err := os.MkdirTemp(filepath.Dir(cleanExternal), ".catalog-upload-")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -148,11 +183,14 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, "invalid catalog: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := os.RemoveAll(external); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := os.Rename(tmp, external); err != nil {
+		// Replace the live directory without a window where it is missing, and
+		// without a cross-mount rename. Two uploads must not interleave: hold a
+		// lock, move the old directory aside, install the new one, then remove
+		// the old; roll back if the swap fails.
+		catalogUploadMu.Lock()
+		err = replaceDirectory(tmp, cleanExternal)
+		catalogUploadMu.Unlock()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -214,11 +252,13 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 	// editable from the console and stored on the PVC; the installer's env
 	// values are only the initial default.
 	defSchedule := backup.Schedule{
-		Enabled:     cfg.BackupInterval > 0,
-		Interval:    "24h",
-		Keep:        cfg.BackupKeep,
-		Snapshots:   cfg.BackupSnapshots,
-		DataMode:    backup.DataSnapshot,
+		Enabled:   cfg.BackupInterval > 0,
+		Interval:  "24h",
+		Keep:      cfg.BackupKeep,
+		Snapshots: cfg.BackupSnapshots,
+		// auto: snapshot where the storage supports it, file-copy the rest.
+		// snapshot-only made a metadata-only archive on local-path/NFS.
+		DataMode:    backup.DataAuto,
 		Compression: cfg.BackupCompression,
 	}
 	if !cfg.BackupSnapshots {
@@ -1257,11 +1297,23 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 		}
 		purge := r.URL.Query().Get("purge") == "true" || r.URL.Query().Get("purge") == "1"
 		audit(r, auth, "uninstall", name, fmt.Sprintf("purge=%t", purge))
+		// Read the claims before the release goes away; after it, the kept PVCs
+		// are the ones still in the namespace.
+		kept := installer.KeptData(name, &e)
 		if err := installer.Uninstall(name, &e, purge); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		if purge {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"name":   name,
+			"purged": false,
+			"kept":   kept,
+			"note":   "data volumes are kept; reinstall reuses them, or uninstall with purge to delete",
+		})
 	})
 	// The Authelia login theme is console-owned state, separate from the
 	// installer-owned identity-values.yml (which the seed overwrites on every

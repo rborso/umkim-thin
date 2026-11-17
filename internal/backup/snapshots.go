@@ -429,7 +429,9 @@ func shortErr(err error) string {
 // runTool runs a command with the console's kubeconfig, feeding stdin when the
 // caller passes a document (kubectl apply -f -).
 func runTool(kubeconfig, name, stdin string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	if kubeconfig != "" {
 		cmd.Env = append(cmd.Environ(), "KUBECONFIG="+kubeconfig)
 	}
@@ -438,6 +440,9 @@ func runTool(kubeconfig, name, stdin string, args ...string) (string, error) {
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return string(out), fmt.Errorf("%s: timed out", name)
+		}
 		return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
