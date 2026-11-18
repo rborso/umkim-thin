@@ -1132,23 +1132,29 @@ render_all() {
 package_charts() {
   log "packaging charts into $DATA_DIR/chart-mirror"
   mkdir -p "$DATA_DIR/chart-mirror"
-  local fresh
+  local fresh before after
   fresh=$(mktemp)
+  before=$(mktemp)
+  after=$(mktemp)
+  # Snapshot what is already there, so "fresh" ends up being only what this run
+  # added. Listing the directory *after* packaging marked every existing tarball
+  # as current and nothing could ever be pruned.
+  find "$DATA_DIR/chart-mirror" -name '*.tgz' -printf '%f\n' 2>/dev/null | sort >"$before"
   # scripts/package-charts.sh packages the current version of every chart plus the
   # previous one from git history, so an upgrade can be rolled back offline
   # (docs/versioning-plan.md). install.sh used to package only the checked-out
   # version, which is why a rollback target was advertised by the catalog but had
   # no tarball.
   if ! HELM="$HELM" "$SCRIPT_DIR/scripts/package-charts.sh" "$DATA_DIR/chart-mirror" >&2; then
+    rm -f "$before" "$after"
     die "packaging the charts failed"
   fi
-  # Record what this run produced (current and N-1): those are the versions a
-  # rollback can resolve and must never be pruned. Platform charts are not in the
-  # catalog, so their names are recorded here too.
-  local f
-  for f in "$DATA_DIR"/chart-mirror/*.tgz; do
-    [ -f "$f" ] && basename "$f" >>"$fresh"
-  done
+  find "$DATA_DIR/chart-mirror" -name '*.tgz' -printf '%f\n' 2>/dev/null | sort >"$after"
+  # What this run produced: the current and N-1 versions, plus the platform charts
+  # (which the catalog never lists). Anything else is a superseded version and is
+  # pruned unless the catalog still advertises it.
+  comm -13 "$before" "$after" >"$fresh"
+  rm -f "$before" "$after"
   prune_mirror "$fresh"
   rm -f "$fresh"
   info "$(find "$DATA_DIR/chart-mirror" -name '*.tgz' | wc -l) charts packaged"
@@ -1160,6 +1166,16 @@ prune_mirror() {
   local fresh="$1" list keep
   list=$(mktemp)
   cat "$fresh" >>"$list"
+  # The platform charts are installed by the installer, not the catalog, yet the
+  # console resolves them from this mirror (UMKIM_THIN_IDENTITY_CHART etc.). They
+  # are unchanged between most releases, so they are not in "fresh" either -- keep
+  # them unconditionally.
+  for tgz in "$DATA_DIR"/chart-mirror/*.tgz; do
+    [ -f "$tgz" ] || continue
+    case "$(basename "$tgz")" in
+      identity-*|umkim-thin-*|wireguard-gateway-*) basename "$tgz" >>"$list" ;;
+    esac
+  done
   for f in catalog/*.yaml; do
     [ -f "$f" ] || continue
     python3 - "$f" >>"$list" <<'PY' || true
