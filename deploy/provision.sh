@@ -69,18 +69,6 @@ REMOTE_WORKDIR=${REMOTE_WORKDIR:-/home/linux/umkim-thin-deploy}
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
-# A chart package is a distribution artifact. Include the project license and
-# notice in the local mirror packages too, not only in the OCI releases.
-package_local_chart() {
-  local d="$1" dest="$2"
-  cp LICENSE NOTICE "$d/"
-  if ! helm package "$d" -d "$dest" >/dev/null; then
-    rm -f "$d/LICENSE" "$d/NOTICE"
-    return 1
-  fi
-  rm -f "$d/LICENSE" "$d/NOTICE"
-}
-
 cp -r deploy/ansible "$stage/ansible"
 mkdir -p "$stage/ansible/group_vars/all" "$stage/ansible/artifacts/charts"
 
@@ -94,12 +82,17 @@ cp -r charts/umkim-thin "$stage/ansible/artifacts/charts/umkim-thin"
 # The catalog's OCI refs stay the canonical location and are rewritten to the
 # mirror at install. If a chart is not vendored, `chart_repos` can clone a
 # private repo over SSH (the fallback for an out-of-tree chart).
+#
+# scripts/package-charts.sh packages each chart's current version *and* the
+# previous version from charts/apps git history, so an upgrade can be rolled back
+# offline (docs/versioning-plan.md). Layering it over the old one-chart-per-release
+# loop is what left the catalog advertising a rollback target with no tarball.
 mkdir -p "$stage/ansible/artifacts/chart-mirror"
-for d in charts/apps/*; do
-  [ -d "$d" ] || continue
-  echo ">> packaging local chart $(basename "$d")"
-  package_local_chart "$d" "$stage/ansible/artifacts/chart-mirror"
-done
+echo ">> packaging charts (current and previous version)"
+if ! ./scripts/package-charts.sh "$stage/ansible/artifacts/chart-mirror"; then
+  echo "error: packaging the charts failed" >&2
+  exit 1
+fi
 for spec in ${chart_repos:-}; do
   if [[ "$spec" == *"://"* || "$spec" == git@* ]]; then
     url="${spec%:*}"; sub="${spec##*:}"; repo="$(basename "$url" .git)"
@@ -120,12 +113,9 @@ for spec in ${chart_repos:-}; do
   helm package "$d/$sub" -d "$stage/ansible/artifacts/chart-mirror" >/dev/null
 done
 
-# In-repo charts (the WireGuard gateway has no private repo).
-echo ">> packaging wireguard-gateway (local chart)"
-package_local_chart charts/wireguard-gateway "$stage/ansible/artifacts/chart-mirror"
-# The identity chart too, so a cluster-mode console can upgrade it from the mirror.
-echo ">> packaging identity (local chart)"
-package_local_chart charts/identity "$stage/ansible/artifacts/chart-mirror"
+# The in-repo platform charts (identity, wireguard-gateway, umkim-thin) are
+# packaged by scripts/package-charts.sh above, so a cluster-mode console can
+# upgrade them from the mirror too.
 
 echo ">> rendering site variables"
 cat > "$stage/ansible/group_vars/all/99-local.yml" <<EOF

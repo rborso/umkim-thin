@@ -21,15 +21,6 @@ chart:
     - version: 0.1.14
       appVersion: 3.4.2
       channel: stable
-    - version: 0.1.13
-      appVersion: 3.4.1
-      channel: stable
-    - version: 0.1.12
-      appVersion: 3.3.0
-      channel: stable
-    - version: 0.1.11
-      appVersion: 3.3.0
-      channel: stable
 
 namespace: paperless
 

@@ -1512,7 +1512,12 @@ func (in *Installer) Versions(e catalog.Entry) (VersionInfo, error) {
 	if err != nil {
 		return VersionInfo{}, err
 	}
-	vi := VersionInfo{Name: e.Name, Installed: st.Chart, InstalledApp: st.AppVersion, Stable: e.Chart.Version}
+	vi := VersionInfo{Name: e.Name, Installed: st.Chart, InstalledApp: st.AppVersion}
+	// Only advertise the stable pointer when its package exists: the API must not
+	// report a default an install would fail on.
+	if in.mirrorHas(e, e.Chart.Version) {
+		vi.Stable = e.Chart.Version
+	}
 
 	// The catalog is the history; only a packaged version can be installed.
 	stableApp := ""

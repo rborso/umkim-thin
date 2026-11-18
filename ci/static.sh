@@ -612,38 +612,27 @@ if command -v helm >/dev/null 2>&1; then
 fi
 echo "   ok"
 
-echo ">> the catalog's default version is packaged"
-# docs/versioning-plan.md promises the static check catches an advertised version
-# with no tarball. versions[] may legitimately list history, but the *default*
-# (chart.version, what an install uses) must have a package: chartRef resolves it
-# from the mirror, and without the tarball Helm gets the chart ref (a GitHub tree
-# URL) and fails with "does not appear to be a gzipped archive". The console also
-# filters unpackageable entries out of the offered list at runtime.
-missing=$(python3 - <<'PY'
-import yaml, glob, pathlib
-for f in sorted(glob.glob("catalog/*.yaml")):
-    d = yaml.safe_load(open(f)) or {}
-    c = d.get("chart") or {}
-    ref = (c.get("ref") or "").rstrip("/")
-    chart = ref.split("/")[-1] if ref else (d.get("name") or pathlib.Path(f).stem)
-    src = pathlib.Path(f"charts/apps/{chart}")
-    if not src.is_dir():
-        src = pathlib.Path(f"charts/{chart}")
-    if not (src / "Chart.yaml").exists():
-        continue  # sourced from chart_repos, not vendored here
-    cur = ""
-    for line in (src / "Chart.yaml").read_text().splitlines():
-        if line.startswith("version:"):
-            cur = line.split()[1]
-            break
-    if c.get("version") and c["version"] != cur:
-        print(f"{f}: chart.version {c['version']} but the tree packages {cur}")
-PY
-)
-if [ -n "$missing" ]; then
-  echo "the catalog's default chart version is not the one this tree packages:" >&2
-  printf '%s\n' "$missing" | sed 's/^/  /' >&2
-  exit 1
+echo ">> every catalogued version is packaged (current or N-1)"
+# docs/versioning-plan.md: "The chart tarball for each advertised version exists
+# in the local mirror and its Chart.yaml version/appVersion match the catalog
+# entry. The static check enforces this." scripts/package-charts.sh packages the
+# current version and the previous one from charts/apps git history, so both must
+# exist; anything else in versions[] is an install a user can pick and that will
+# fail with "does not appear to be a gzipped archive".
+if command -v helm >/dev/null 2>&1; then
+  work=$(mktemp -d)
+  if ! ./scripts/package-charts.sh "$work" >/dev/null 2>&1; then
+    echo "scripts/package-charts.sh failed" >&2
+    rm -rf "$work"
+    exit 1
+  fi
+  problems=$(python3 ci/check-mirror-versions.py "$work")
+  rm -rf "$work"
+  if [ -n "$problems" ]; then
+    echo "the catalog and the chart mirror disagree:" >&2
+    printf '%s\n' "$problems" | sed 's/^/  /' >&2
+    exit 1
+  fi
 fi
 echo "   ok"
 

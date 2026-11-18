@@ -59,6 +59,31 @@ func TestVersionsOnlyAdvertisesPackagedCharts(t *testing.T) {
 	}
 }
 
+// Stable must not claim a version whose package is missing: the API would report
+// a default that an install fails on.
+func TestVersionsStableRequiresAPackage(t *testing.T) {
+	dir := t.TempDir() // empty mirror: nothing is resolvable
+	in := New(Config{ChartMirror: dir, Helm: "/nonexistent-helm"})
+	e := catalog.Entry{
+		Name:      "gitea",
+		Namespace: "gitea",
+		Chart: catalog.ChartRef{
+			Version:  "0.1.23",
+			Versions: []catalog.ChartVersion{{Version: "0.1.23", AppVersion: "28.4.0"}},
+		},
+	}
+	vi, err := in.Versions(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vi.Stable != "" {
+		t.Errorf("stable = %q with an empty mirror; it must be empty", vi.Stable)
+	}
+	if len(vi.Versions) != 0 {
+		t.Errorf("offered %d versions with an empty mirror", len(vi.Versions))
+	}
+}
+
 // With no mirror configured (a standalone/custom setup) the catalog is the
 // source and nothing is filtered.
 func TestVersionsWithoutMirrorKeepsEverything(t *testing.T) {

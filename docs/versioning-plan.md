@@ -130,7 +130,10 @@ Validation:
   `candidate`.
 - The chart tarball for each advertised version exists in the local mirror and
   its `Chart.yaml` `version`/`appVersion` match the catalog entry. The static
-  check enforces this.
+  check enforces this (`ci/check-mirror-versions.py`, run from `ci/static.sh`):
+  it packages the current version plus the previous one, then fails if the
+  catalog advertises anything else, or if an app chart has no packaged previous
+  version.
 - The chart mirror and catalog are generated together; no hand-edited mismatch.
 
 ### Where the versions live
@@ -138,8 +141,16 @@ Validation:
 - A chart version is a commit in the `umkim-charts` source tree. The platform
   vendors it as the `charts/apps` submodule and the installer packages it into
   `chart-mirror/`; there is no chart registry.
-- Keep the **previous stable** tarball in the mirror (and in the catalog
-  `versions`) so an upgrade and a rollback work offline.
+- `scripts/package-charts.sh` packages each chart's **current** version and its
+  **previous** version, the latter exported from the submodule's git history
+  (`git archive` of the commit that carried it). Both installers call it, so the
+  mirror always holds the N → N-1 pair an upgrade and a rollback need.
+- The catalog's `versions` list is kept to exactly that packaged pair: an
+  advertised version with no tarball is an install the user can select and that
+  fails, so the static check rejects it.
+- Size: one version of every chart is about 105 KiB and the pair about 210 KiB,
+  against the 1 MiB ConfigMap that seeds the mirror. Adding more history would
+  need the mirror moved off the ConfigMap.
 - The console resolves `chart-mirror/<name>-<version>.tgz`. If the exact
   package is absent, the install fails; `chart.ref` is provenance, not a fetch
   URL.

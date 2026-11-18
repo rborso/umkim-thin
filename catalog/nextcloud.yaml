@@ -21,15 +21,6 @@ chart:
     - version: 0.1.21
       appVersion: 35.0.3
       channel: stable
-    - version: 0.1.20
-      appVersion: 35.0.2
-      channel: stable
-    - version: 0.1.19
-      appVersion: 35.0.1
-      channel: stable
-    - version: 0.1.18
-      appVersion: 35.0.1
-      channel: stable
 
 namespace: nextcloud
 

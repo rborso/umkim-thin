@@ -1132,21 +1132,23 @@ render_all() {
 package_charts() {
   log "packaging charts into $DATA_DIR/chart-mirror"
   mkdir -p "$DATA_DIR/chart-mirror"
-  local d fresh
+  local fresh
   fresh=$(mktemp)
-  for d in charts/identity charts/umkim-thin charts/wireguard-gateway charts/apps/*; do
-    [ -d "$d" ] || continue
-    "$HELM" package "$d" --destination "$DATA_DIR/chart-mirror" >/dev/null
-    # Record what this run produced: those are the current versions and must
-    # never be pruned (the platform charts are not in the catalog).
-    printf '%s\n' "$(basename "$("$HELM" show chart "$d" | awk '/^name:/{print $2; exit}')")-$(awk '/^version:/{print $2; exit}' "$d/Chart.yaml").tgz" >>"$fresh"
+  # scripts/package-charts.sh packages the current version of every chart plus the
+  # previous one from git history, so an upgrade can be rolled back offline
+  # (docs/versioning-plan.md). install.sh used to package only the checked-out
+  # version, which is why a rollback target was advertised by the catalog but had
+  # no tarball.
+  if ! HELM="$HELM" "$SCRIPT_DIR/scripts/package-charts.sh" "$DATA_DIR/chart-mirror" >&2; then
+    die "packaging the charts failed"
+  fi
+  # Record what this run produced (current and N-1): those are the versions a
+  # rollback can resolve and must never be pruned. Platform charts are not in the
+  # catalog, so their names are recorded here too.
+  local f
+  for f in "$DATA_DIR"/chart-mirror/*.tgz; do
+    [ -f "$f" ] && basename "$f" >>"$fresh"
   done
-  # Drop stale app tarballs. The mirror is seeded into a ConfigMap (256 KiB
-  # annotation cap, 1 MiB object cap) and every release used to leave the
-  # previous versions behind: after a handful of chart bumps the seed fails with
-  # "metadata.annotations: Too long". Keep what this run packaged plus every
-  # version the catalog advertises for upgrade/rollback
-  # (docs/versioning-plan.md), which is also what chartRef resolves.
   prune_mirror "$fresh"
   rm -f "$fresh"
   info "$(find "$DATA_DIR/chart-mirror" -name '*.tgz' | wc -l) charts packaged"
