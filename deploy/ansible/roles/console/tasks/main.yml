@@ -5,21 +5,31 @@
 # agent is the only host-coupled piece: its socket is mounted on targets where
 # storage_agent is true.
 
-- name: copy the chart mirror to the target
-  # The mirror is seeded into a ConfigMap (256 KiB annotation / 1 MiB object
-  # cap) and every release used to leave the previous versions behind, so after a
-  # handful of chart bumps the seed failed with "metadata.annotations: Too long".
-  # Replace the directory instead of merging into it: the staged mirror already
-  # contains every packaged chart, and a stale tarball is never resolvable by a
-  # catalogued install or rollback.
-  ansible.builtin.file:
-    path: "{{ remote_dir }}/chart-mirror"
-    state: absent
+- name: install the chart mirror pruner
+  ansible.builtin.copy:
+    src: prune-chart-mirror.py
+    dest: "{{ remote_dir }}/prune-chart-mirror.py"
+    mode: "0755"
+
 - name: copy the chart mirror to the target
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/artifacts/chart-mirror"
     dest: "{{ remote_dir }}/"
     mode: preserve
+
+- name: prune chart versions the catalog does not advertise
+  # The mirror is seeded into a ConfigMap (256 KiB annotation / 1 MiB object cap),
+  # so superseded tarballs cannot accumulate -- that failed the seed with
+  # "metadata.annotations: Too long". It must not be wiped either: the catalog's
+  # versions[] is the rollback set, and a listed version with no tarball makes
+  # chartRef hand Helm a GitHub tree URL. Prune to exactly what the catalog
+  # advertises, keeping the platform charts the playbook installs.
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ remote_dir }}/prune-chart-mirror.py
+      {{ remote_dir }}/chart-mirror
+      {{ playbook_dir }}/artifacts/catalog
+  changed_when: true
 
 - name: console session key (first run only)
   ansible.builtin.shell: |

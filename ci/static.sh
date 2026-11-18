@@ -335,6 +335,74 @@ for f in catalog/*.yaml; do
 done
 echo "   ok"
 
+echo ">> the mirror keeps the catalogued rollback versions"
+# The catalog's versions[] is the upgrade/rollback set the console resolves
+# through chartRef. Pruning the mirror must not drop a version still listed there
+# (it would fall back to a GitHub tree URL), and it must not wipe the platform
+# charts the playbook installs but the catalog does not mention.
+prune_py=deploy/ansible/roles/console/files/prune-chart-mirror.py
+[ -f "$prune_py" ] || { echo "the mirror pruner is missing: $prune_py" >&2; exit 1; }
+work=$(mktemp -d)
+mkdir -p "$work/mirror"
+# Seed a current version, a catalogued N-1, a platform chart and a stale file.
+for n in $(python3 - "$work" <<'PY'
+import sys, yaml, glob, pathlib
+work = sys.argv[1]
+out = []
+for f in sorted(glob.glob("catalog/*.yaml")):
+    d = yaml.safe_load(open(f)) or {}
+    c = d.get("chart") or {}
+    ref = (c.get("ref") or "").rstrip("/")
+    chart = ref.split("/")[-1] if ref else (d.get("name") or pathlib.Path(f).stem)
+    vers = [v.get("version") for v in (c.get("versions") or []) if v.get("version")]
+    if vers:
+        out.append(f"{chart}-{vers[0]}")
+        if len(vers) > 1:
+            out.append(f"{chart}-{vers[1]}")
+    else:
+        out.append(f"{chart}-{c.get('version')}")
+print("\n".join(out))
+PY
+); do
+  : > "$work/mirror/$n.tgz"
+done
+: > "$work/mirror/identity-0.0.1.tgz"
+: > "$work/mirror/umkim-thin-0.0.1.tgz"
+: > "$work/mirror/stale-9.9.9.tgz"
+python3 "$prune_py" "$work/mirror" catalog >/dev/null 2>&1 || {
+  echo "the mirror pruner failed" >&2; exit 1;
+}
+if [ -e "$work/mirror/stale-9.9.9.tgz" ]; then
+  echo "the pruner kept a version no catalog entry advertises" >&2; exit 1
+fi
+# Every catalogued version that was seeded must survive.
+missing=$(python3 - "$work" <<'PY'
+import sys, yaml, glob, pathlib
+work = sys.argv[1]
+for f in sorted(glob.glob("catalog/*.yaml")):
+    d = yaml.safe_load(open(f)) or {}
+    c = d.get("chart") or {}
+    ref = (c.get("ref") or "").rstrip("/")
+    chart = ref.split("/")[-1] if ref else (d.get("name") or pathlib.Path(f).stem)
+    for v in (c.get("versions") or [])[:2]:
+        name = f"{chart}-{v['version']}.tgz"
+        if not pathlib.Path(work, "mirror", name).exists():
+            print(name)
+PY
+)
+rm -rf "$work"
+if [ -n "$missing" ]; then
+  echo "the pruner dropped catalogued rollback tarballs: $missing" >&2; exit 1
+fi
+# The Ansible role must not remove the mirror directory: that deleted rollback
+# versions the catalog still advertised. Scoping to the chart-mirror path keeps
+# this from matching an unrelated `state: absent` elsewhere in the role.
+if grep -B2 -A2 'path: "{{ remote_dir }}/chart-mirror"' \
+     deploy/ansible/roles/console/tasks/main.yml | grep -q "state: absent"; then
+  echo "the console role removes the chart mirror; prune it instead" >&2; exit 1
+fi
+echo "   ok"
+
 echo ">> uninstall without purge keeps app data"
 # Uninstall (no purge) runs a plain `helm uninstall`, which deletes every
 # chart-rendered PVC and the generated credential Secret; the storage class
@@ -541,6 +609,41 @@ if command -v helm >/dev/null 2>&1; then
     echo "prune superseded chart versions (see prune_mirror in install.sh)" >&2
     exit 1
   fi
+fi
+echo "   ok"
+
+echo ">> the catalog's default version is packaged"
+# docs/versioning-plan.md promises the static check catches an advertised version
+# with no tarball. versions[] may legitimately list history, but the *default*
+# (chart.version, what an install uses) must have a package: chartRef resolves it
+# from the mirror, and without the tarball Helm gets the chart ref (a GitHub tree
+# URL) and fails with "does not appear to be a gzipped archive". The console also
+# filters unpackageable entries out of the offered list at runtime.
+missing=$(python3 - <<'PY'
+import yaml, glob, pathlib
+for f in sorted(glob.glob("catalog/*.yaml")):
+    d = yaml.safe_load(open(f)) or {}
+    c = d.get("chart") or {}
+    ref = (c.get("ref") or "").rstrip("/")
+    chart = ref.split("/")[-1] if ref else (d.get("name") or pathlib.Path(f).stem)
+    src = pathlib.Path(f"charts/apps/{chart}")
+    if not src.is_dir():
+        src = pathlib.Path(f"charts/{chart}")
+    if not (src / "Chart.yaml").exists():
+        continue  # sourced from chart_repos, not vendored here
+    cur = ""
+    for line in (src / "Chart.yaml").read_text().splitlines():
+        if line.startswith("version:"):
+            cur = line.split()[1]
+            break
+    if c.get("version") and c["version"] != cur:
+        print(f"{f}: chart.version {c['version']} but the tree packages {cur}")
+PY
+)
+if [ -n "$missing" ]; then
+  echo "the catalog's default chart version is not the one this tree packages:" >&2
+  printf '%s\n' "$missing" | sed 's/^/  /' >&2
+  exit 1
 fi
 echo "   ok"
 

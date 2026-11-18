@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +56,26 @@ func TestUpgradeRejectsUncataloguedVersion(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "is not available") {
 		t.Fatalf("error = %v, want an unavailable-version refusal", err)
+	}
+}
+
+// A catalogued version with no package in the mirror must be refused here, with
+// the real reason. Otherwise Helm is handed a GitHub tree URL and fails with
+// "does not appear to be a gzipped archive", which says nothing to an operator.
+func TestUpgradeRefusesUnpackagedVersion(t *testing.T) {
+	dir := t.TempDir()
+	// Only the current version is packaged.
+	if err := os.WriteFile(filepath.Join(dir, "gitea-0.1.20.tgz"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testInstaller().cfg
+	cfg.ChartMirror = dir
+	in := New(cfg)
+	_, err := in.Install(upgradeEntry(), Options{
+		Upgrade: true, ChartVersion: "0.1.19", ConfirmBackup: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "catalogued but not packaged") {
+		t.Fatalf("error = %v, want a not-packaged refusal", err)
 	}
 }
 

@@ -752,6 +752,14 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 		if len(e.Chart.Versions) > 0 && !found {
 			return Result{}, fmt.Errorf("%s: chart version %s is not available", e.Name, opts.ChartVersion)
 		}
+		// The catalog may list a version this install has no package for. Fail with
+		// that reason here; otherwise Helm is handed the chart ref (a GitHub tree
+		// URL) and reports "does not appear to be a gzipped archive".
+		if !in.mirrorHas(e, opts.ChartVersion) {
+			return Result{}, fmt.Errorf(
+				"%s: chart version %s is catalogued but not packaged in the chart mirror; "+
+					"install it from a release whose mirror carries it", e.Name, opts.ChartVersion)
+		}
 		e.Chart.Version = opts.ChartVersion
 	}
 	if err := in.checkMinimumVersion(e); err != nil {
@@ -1494,15 +1502,39 @@ type VersionInfo struct {
 }
 
 // Versions reports the installed chart and the catalog's available versions.
+//
+// A version is only advertised when the mirror carries its exact package: the
+// catalog lists the history for rollback, but only packaged versions can be
+// installed, and offering the rest makes Helm fetch the chart ref (a GitHub tree
+// URL) and fail with an opaque "does not appear to be a gzipped archive".
 func (in *Installer) Versions(e catalog.Entry) (VersionInfo, error) {
 	st, err := in.Status(e.Name, &e)
 	if err != nil {
 		return VersionInfo{}, err
 	}
 	vi := VersionInfo{Name: e.Name, Installed: st.Chart, InstalledApp: st.AppVersion, Stable: e.Chart.Version}
-	vi.Versions = append([]catalog.ChartVersion(nil), e.Chart.Versions...)
-	if len(vi.Versions) == 0 {
+
+	// The catalog is the history; only a packaged version can be installed.
+	stableApp := ""
+	for _, v := range e.Chart.Versions {
+		if v.Version == e.Chart.Version {
+			stableApp = v.AppVersion
+		}
+		if in.mirrorHas(e, v.Version) {
+			vi.Versions = append(vi.Versions, v)
+		}
+	}
+	if len(e.Chart.Versions) == 0 {
 		vi.Versions = []catalog.ChartVersion{{Version: e.Chart.Version, Channel: "stable"}}
+	}
+	// Keep the catalog's stable pointer first when its package exists: the list is
+	// the offered set, and the default must be the version an install uses.
+	if in.mirrorHas(e, e.Chart.Version) {
+		if len(vi.Versions) == 0 || vi.Versions[0].Version != e.Chart.Version {
+			vi.Versions = append([]catalog.ChartVersion{{
+				Version: e.Chart.Version, Channel: "stable", AppVersion: stableApp,
+			}}, vi.Versions...)
+		}
 	}
 	for _, v := range vi.Versions {
 		if v.Version == e.Chart.Version {
@@ -1798,6 +1830,17 @@ func (in *Installer) checkMinimumVersion(e catalog.Entry) error {
 	return nil
 }
 
+// chartName is the chart's directory name: the last segment of the ref, which is
+// also what the mirror tarball is named after.
+func chartName(e catalog.Entry) string {
+	if ref := strings.TrimSuffix(e.Chart.Ref, "/"); ref != "" {
+		if i := strings.LastIndex(ref, "/"); i >= 0 && i+1 < len(ref) {
+			return ref[i+1:]
+		}
+	}
+	return e.Name
+}
+
 // chartRef resolves the chart from the local mirror. The catalog's ref records
 // provenance (the chart's GitHub source, or an optional OCI reference); the
 // exact-version package in chart-mirror is the delivery path. The mirror file
@@ -1805,19 +1848,24 @@ func (in *Installer) checkMinimumVersion(e catalog.Entry) error {
 // .../wireguard-gateway). A standalone/custom setup that has no mirror gets the
 // ref back unchanged.
 func (in *Installer) chartRef(e catalog.Entry) string {
-	name := e.Name
-	if ref := strings.TrimSuffix(e.Chart.Ref, "/"); ref != "" {
-		if i := strings.LastIndex(ref, "/"); i >= 0 && i+1 < len(ref) {
-			name = ref[i+1:]
-		}
-	}
 	if in.cfg.ChartMirror != "" {
-		p := filepath.Join(in.cfg.ChartMirror, fmt.Sprintf("%s-%s.tgz", name, e.Chart.Version))
+		p := filepath.Join(in.cfg.ChartMirror, fmt.Sprintf("%s-%s.tgz", chartName(e), e.Chart.Version))
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 	return e.Chart.Ref
+}
+
+// mirrorHas reports whether the mirror carries an exact chart package. With no
+// mirror configured everything is assumed resolvable (the ref is the source).
+func (in *Installer) mirrorHas(e catalog.Entry, version string) bool {
+	if in.cfg.ChartMirror == "" {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(in.cfg.ChartMirror,
+		fmt.Sprintf("%s-%s.tgz", chartName(e), version)))
+	return err == nil
 }
 
 func (in *Installer) applyBindSecret(e catalog.Entry) error {
