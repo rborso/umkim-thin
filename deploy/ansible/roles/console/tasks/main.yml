@@ -11,6 +11,14 @@
     dest: "{{ remote_dir }}/prune-chart-mirror.py"
     mode: "0755"
 
+- name: stage the catalog for the mirror pruner
+  # `copy` with a directory src places it *inside* dest, so point dest at the
+  # parent and let it create catalog/ there.
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/artifacts/catalog"
+    dest: "{{ remote_dir }}/"
+    mode: preserve
+
 - name: copy the chart mirror to the target
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/artifacts/chart-mirror"
@@ -28,7 +36,7 @@
     cmd: >-
       python3 {{ remote_dir }}/prune-chart-mirror.py
       {{ remote_dir }}/chart-mirror
-      {{ playbook_dir }}/artifacts/catalog
+      {{ remote_dir }}/catalog
   changed_when: true
 
 - name: console session key (first run only)
