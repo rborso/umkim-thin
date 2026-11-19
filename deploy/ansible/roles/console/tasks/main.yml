@@ -25,6 +25,21 @@
     dest: "{{ remote_dir }}/"
     mode: preserve
 
+- name: write the set of charts this run staged
+  # playbook_dir is a controller path and does not exist on the target, so the
+  # pruner cannot be handed the artifacts directory: it would read nothing and
+  # treat the platform charts as unwanted. Materialise the names on the target
+  # instead. Written before the prune so the file always describes this run.
+  ansible.builtin.copy:
+    dest: "{{ remote_dir }}/chart-mirror-staged.txt"
+    mode: "0644"
+    content: |
+      {% for f in lookup('ansible.builtin.fileglob',
+                          playbook_dir + '/artifacts/chart-mirror/*.tgz',
+                          wantlist=True) %}
+      {{ f | basename }}
+      {% endfor %}
+
 - name: prune chart versions the catalog does not advertise
   # The mirror is seeded into a ConfigMap (256 KiB annotation / 1 MiB object cap),
   # so superseded tarballs cannot accumulate -- that failed the seed with
@@ -32,15 +47,15 @@
   # versions[] is the rollback set, and a listed version with no tarball makes
   # chartRef hand Helm a GitHub tree URL. Prune to exactly what the catalog
   # advertises, plus what this run staged (the platform charts, whose versions
-  # the catalog does not list). Passing the staged directory is what lets a
-  # bumped platform chart retire its predecessor; keeping by name prefix kept
-  # every version for ever.
+  # the catalog does not list). Passing the staged set is what lets a bumped
+  # platform chart retire its predecessor; keeping by name prefix kept every
+  # version for ever.
   ansible.builtin.command:
     cmd: >-
       python3 {{ remote_dir }}/prune-chart-mirror.py
       {{ remote_dir }}/chart-mirror
       {{ remote_dir }}/catalog
-      {{ playbook_dir }}/artifacts/chart-mirror
+      {{ remote_dir }}/chart-mirror-staged.txt
   changed_when: true
 
 - name: console session key (first run only)

@@ -635,8 +635,11 @@ if command -v helm >/dev/null 2>&1; then
   cp "$pr"/staged/*.tgz "$pr/mirror/"
   : >"$pr/mirror/identity-0.0.1.tgz"
   : >"$pr/mirror/gitea-0.0.1.tgz"
+  # The pruner takes a file of staged names, not a directory: the playbook cannot
+  # pass a controller path that does not exist on the target.
+  cp "$pr/fresh" "$pr/staged-list.txt"
   if ! python3 deploy/ansible/roles/console/files/prune-chart-mirror.py \
-      "$pr/mirror" "$pr/catalog" "$pr/staged" >/dev/null 2>&1; then
+      "$pr/mirror" "$pr/catalog" "$pr/staged-list.txt" >/dev/null 2>&1; then
     echo "prune-chart-mirror.py failed" >&2; rm -rf "$pr"; exit 1
   fi
   stale=$(find "$pr/mirror" -name '*-0.0.1.tgz' | wc -l)
@@ -645,6 +648,20 @@ if command -v helm >/dev/null 2>&1; then
   if [ "$stale" -ne 0 ] || [ "$left" -ne "$want" ]; then
     echo "prune-chart-mirror.py did not retire the superseded versions" >&2
     echo "  stale=$stale left=$left (expected 0 and $want)" >&2
+    rm -rf "$pr"; exit 1
+  fi
+
+  # An unreadable keep-set must not be read as "the platform charts are not
+  # wanted": that silently dropped identity and umkim-thin from a live mirror.
+  mkdir -p "$pr/m2"; cp "$pr"/staged/*.tgz "$pr/m2/"
+  : >"$pr/m2/identity-0.0.1.tgz"
+  if python3 deploy/ansible/roles/console/files/prune-chart-mirror.py \
+      "$pr/m2" "$pr/catalog" "$pr/does-not-exist.txt" >/dev/null 2>&1; then
+    echo "prune-chart-mirror.py pruned with an unreadable staged list" >&2
+    rm -rf "$pr"; exit 1
+  fi
+  if [ "$(find "$pr/m2" -name '*.tgz' | wc -l)" -ne $((want + 1)) ]; then
+    echo "prune-chart-mirror.py changed the mirror despite an unreadable staged list" >&2
     rm -rf "$pr"; exit 1
   fi
 

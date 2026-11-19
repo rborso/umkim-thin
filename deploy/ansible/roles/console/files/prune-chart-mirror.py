@@ -6,17 +6,23 @@ superseded tarballs cannot accumulate. It must not be wiped either: the catalog'
 versions[] is the upgrade/rollback set the console resolves through chartRef, and
 a version listed there with no tarball sends Helm a GitHub tree URL instead.
 
-Usage: prune-chart-mirror.py <mirror-dir> <catalog-dir> [staged-dir]
+Usage: prune-chart-mirror.py <mirror-dir> <catalog-dir> [staged-list]
 
 Keeps a tarball when <chart>-<version>.tgz is named by a catalog entry's
-chart.version or chart.versions[].version, plus every tarball in <staged-dir> -
-the platform charts (identity, umkim-thin, wireguard-gateway) the playbook
-installs, which the catalog does not list. Everything else is removed.
+chart.version or chart.versions[].version, plus every name listed in
+<staged-list> - the platform charts (identity, umkim-thin, wireguard-gateway) the
+playbook installs, which the catalog does not list. Everything else is removed.
 
-<staged-dir> is the artifacts directory this run produced. Keeping it, rather
-than "any file whose name starts with a platform chart", is what lets a bumped
-platform chart actually retire its predecessor instead of accumulating one
-tarball per release.
+<staged-list> is a file of tarball names, one per line, written by the playbook
+from the artifacts directory *on the controller* (playbook_dir does not exist on
+the target, so it cannot be passed as a path). Keeping this run's staged set,
+rather than "any file whose name starts with a platform chart", is what lets a
+bumped platform chart retire its predecessor instead of accumulating one tarball
+per release.
+
+If <staged-list> is given but missing or empty, nothing is pruned: an unreadable
+keep-set must not be mistaken for "the platform charts are not wanted" - that
+dropped identity and umkim-thin from a live mirror once.
 
 Parsing uses PyYAML, which the provisioning image guarantees; a regex fallback is
 deliberately not used, because a partial parse would prune the rollback set.
@@ -73,17 +79,20 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    # The platform charts are installed by the playbook, not the catalog, yet the
-    # console resolves them from this mirror (UMKIM_THIN_IDENTITY_CHART etc.).
-    #
-    # Keep the versions this run staged, not every tarball whose name starts with
-    # a platform chart: the old startswith(PLATFORM) rule kept identity-0.1.12 for
-    # ever next to 0.1.13, so the mirror grew one file per platform-chart bump.
-    # The staged directory is exactly what the artifacts carry (current + N-1),
-    # so it is the correct keep-set and needs no version parsing here.
     if staged is not None:
-        for tgz in staged.glob("*.tgz"):
-            keep.add(tgz.name)
+        try:
+            names = [ln.strip() for ln in staged.read_text().splitlines() if ln.strip()]
+        except Exception as exc:
+            print(f"prune-chart-mirror: cannot read the staged list ({exc}); "
+                  "leaving the mirror alone", file=sys.stderr)
+            return 1
+        if not names:
+            print("prune-chart-mirror: the staged list is empty; leaving the mirror alone",
+                  file=sys.stderr)
+            return 1
+        for name in names:
+            keep.add(pathlib.PurePosixPath(name).name)
+
 
     removed = 0
     for tgz in sorted(mirror.glob("*.tgz")):
