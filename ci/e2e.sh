@@ -285,10 +285,18 @@ if [ ! -x node_modules/.bin/playwright ]; then
 fi
 [ -d "$HOME/.cache/ms-playwright" ] || ./node_modules/.bin/playwright install chromium
 
-# Acceptance gate: routes/auth challenge, the directory-login matrix, TLS and
-# the console browser flow. These gate the pipeline; the deep functional user
-# journeys stay informational.
-./node_modules/.bin/playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
+# Acceptance gate: routes/auth challenge, the directory-login matrix, TLS, the
+# console browser flow, and the tenant path.
+#
+# journeys/tenant.spec.ts is deliberately part of the gate rather than the
+# informational journey run: it is the only check that a *freshly invited*
+# regular user - no local account beforehand - can sign in and perform an
+# ordinary action in each app. auth.spec.ts proves they can authenticate and the
+# client journeys prove the apps work as the app's own admin, so a tenant-only
+# breakage (an app that authenticates but has no rights, an OIDC mapping that
+# stops short of the first write) slipped through everything. It is shallow per
+# app on purpose, so a failure is a product problem, not spec drift.
+./node_modules/.bin/playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts journeys/tenant.spec.ts
 
 if [ "${JOURNEYS_GATING:-0}" = "1" ]; then
   echo "==== $TARGET: functional user journeys (gating) ===="
