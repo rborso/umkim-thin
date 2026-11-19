@@ -110,7 +110,7 @@ EOS
 done
 for h in "immich.$ZONE" "gitea.$ZONE" "paperless.$ZONE" "nextcloud.$ZONE"; do
   for i in $(seq 1 30); do
-    c=$(curl -sk -m 10 -o /dev/null -w '%{http_code}' --resolve "$h:443:${k3s_control_plane_vip:-$VHOST}" "https://$h/" 2>/dev/null || echo 000)
+    c=$(http_code "https://$h/" --resolve "$h:443:${k3s_control_plane_vip:-$VHOST}" -m 10)
     case "$c" in 200|301|302|303|307|308|401|403) break ;; esac
     sleep 10
   done
@@ -121,7 +121,7 @@ if ./ci/markers.sh verify "$TARGET" --mark "$MARK"; then ok "all markers are bac
 
 say "verify the apps after the restore"
 for h in "immich.$ZONE" "gitea.$ZONE" "nextcloud.$ZONE"; do
-  c=$(curl -sk -m 15 -o /dev/null -w '%{http_code}' --resolve "$h:443:${k3s_control_plane_vip:-$VHOST}" "https://$h/" 2>/dev/null || echo 000)
+  c=$(http_code "https://$h/" --resolve "$h:443:${k3s_control_plane_vip:-$VHOST}" -m 15)
   case "$c" in 200|301|302|303|307|308|401|403) ok "$h ($c)" ;; *) bad "$h ($c)" ;; esac
 done
 

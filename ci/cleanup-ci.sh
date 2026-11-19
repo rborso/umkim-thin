@@ -42,9 +42,9 @@ if [ -n "$RUN" ]; then
   users+=("ci-portal-$RUN" "ci-immich-$RUN" "ci-paperless-$RUN" "ci-nextcloud-$RUN")
 fi
 for u in "${users[@]}"; do
-  code=$(curl -ksb "$jar" -o /dev/null -w '%{http_code}' -X DELETE \
-    -H "Origin: https://$CONSOLE_HOST" \
-    "https://$CONSOLE_HOST/api/directory/users/$u" 2>/dev/null || echo 000)
+  # http_code keeps the status separate from curl's exit status (see ci/lib.sh).
+  code=$(http_code "https://$CONSOLE_HOST/api/directory/users/$u" -b "$jar" -X DELETE \
+    -H "Origin: https://$CONSOLE_HOST")
   case "$code" in
     2*|400|404) ;;                 # gone, or the endpoint is not deployed yet
     *) echo "   cleanup: user $u -> $code" >&2 ;;
@@ -66,9 +66,9 @@ curl -s -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
 EOS
 )
 for u in $lusers; do
-  code=$(curl -ksb "$jar" -o /dev/null -w '%{http_code}' -X DELETE \
-    -H "Origin: https://$CONSOLE_HOST" \
-    "https://$CONSOLE_HOST/api/directory/users/$u" 2>/dev/null || echo 000)
+  # http_code keeps the status separate from curl's exit status (see ci/lib.sh).
+  code=$(http_code "https://$CONSOLE_HOST/api/directory/users/$u" -b "$jar" -X DELETE \
+    -H "Origin: https://$CONSOLE_HOST")
   case "$code" in
     2*|400|404) ;;
     *) echo "   cleanup: directory user $u -> $code" >&2 ;;

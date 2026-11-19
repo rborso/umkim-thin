@@ -146,7 +146,7 @@ for h in $hosts; do
 done
 
 for h in $hosts; do
-  c=$(curl -sk -m 15 -o /dev/null -w '%{http_code}' --resolve "$h:443:$server_ip" "https://$h/" 2>/dev/null || echo 000)
+  c=$(http_code "https://$h/" --resolve "$h:443:$server_ip" -m 15)
   case "$c" in
     200|301|302|303|307|308|401|403) ok "app via tunnel $h ($c)" ;;
     *) bad "app via tunnel $h ($c)" ;;

@@ -131,7 +131,8 @@ graceful_reboot() { # graceful_reboot <vm> <hv>
 
 app_http() { # app_http <host>
   local h="$1" addr="${k3s_control_plane_vip:-$VHOST}"
-  curl -sk -m 10 -o /dev/null -w '%{http_code}' --resolve "$h:443:$addr" "https://$h/" 2>/dev/null || echo 000
+  # http_code keeps curl's status separate from its exit status (see ci/lib.sh).
+  http_code "https://$h/" --resolve "$h:443:$addr" -m 10
 }
 
 wait_pods() { # wait_pods [timeout] - every workload pod is Running and ready

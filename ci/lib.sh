@@ -108,7 +108,30 @@ sync_clock() {
 }
 
 # http() { ... } : fetch the status code of a URL (000 on failure)
-http() { curl -ksS -o /dev/null -m 20 -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
+http() { http_code "$1"; }
+
+# http_code <url> [curl args...] : the status code, or 000 when no request
+# completed.
+#
+# Do not write this as `code=$(curl -w '%{http_code}' ... || echo 000)`. curl can
+# print the code *and* still exit non-zero - decoding/EOF noise, or (exit 23)
+# failing to write the -o body - so `||` appends and the value becomes "200000".
+# That compares unequal to every expected code, and ci/portal-user.sh used to
+# abort a whole run on it. Keep curl's output and decide from the exit status and
+# the shape instead: a value that is not three digits is "no answer".
+http_code() {
+  local url="$1"; shift
+  local out rc
+  out=$(curl -ksS -o /dev/null -m 20 -w '%{http_code}' "$@" "$url" 2>/dev/null)
+  rc=$?
+  # The status line is written even when the body write failed; only a value curl
+  # did not produce, or a transport failure with no code, is a miss.
+  case "$out" in
+    [0-9][0-9][0-9]) printf '%s' "$out"; return 0 ;;
+  esac
+  printf '000'
+  return "$rc"
+}
 
 # The directory admin password (used to log into the console and Authelia).
 admin_password() {

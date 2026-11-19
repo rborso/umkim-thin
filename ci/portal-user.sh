@@ -62,9 +62,14 @@ verify_login() {
   local body code
   body=$(printf '{"username":"%s","password":"%s","targetURL":"https://%s/"}' \
     "$name" "$password" "$CONSOLE_HOST")
-  code=$(curl -ksS -o /tmp/verify.out -m 20 -w '%{http_code}' \
-    -H 'Content-Type: application/json' -d "$body" \
-    "https://$PORTAL_HOST/api/firstfactor" 2>/dev/null || echo 000)
+  # http_code keeps curl's status separate from its exit status. The previous
+  # `curl ... || echo 000` produced "200000" whenever curl printed a code and
+  # still exited non-zero, and the caller then aborted the whole run as "could
+  # not reach the portal". No pod-internal state is needed here, so let curl
+  # write nowhere (-o /dev/null is inside http_code) rather than to a fixed
+  # /tmp path that a root-owned earlier run can leave unwritable.
+  code=$(http_code "https://$PORTAL_HOST/api/firstfactor" \
+    -H 'Content-Type: application/json' -d "$body")
   printf '%s' "$code"
 }
 
