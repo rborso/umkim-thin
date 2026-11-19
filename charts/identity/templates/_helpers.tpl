@@ -338,6 +338,13 @@ the drift CronJob so both run exactly the same script.
 */}}
 {{- define "identity.managedGroupsJobSpec" -}}
 backoffLimit: 4
+# A Job that cannot be scheduled - no node has 32Mi free, which is exactly what
+# a small single-node install looks like after every app is installed - stays
+# "active" for ever. The CronJob's concurrencyPolicy is Forbid, so that one stuck
+# Job silently blocks every later reconcile: on dev-single a 30-hour-old Pending
+# Job meant the managed groups had not been reconciled since the day before.
+# Bounding it makes a failed attempt fail and be replaced on the next tick.
+activeDeadlineSeconds: 300
 template:
   metadata:
     labels:
