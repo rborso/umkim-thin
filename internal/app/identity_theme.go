@@ -108,15 +108,23 @@ func (in *Installer) SetAutheliaTheme(theme string) error {
 
 // ReconcileIdentityOverlays reapplies console-owned identity values after an
 // installer/Ansible run. Those runs use identity-values.yml (installer-owned)
-// and cannot see the console PVC, so without this a theme or default
-// certificate would silently revert on the next platform update.
+// and cannot see the console PVC, so without this a theme, default certificate,
+// or the apps' contributed values would silently revert on the next platform
+// update.
+//
+// identity-apps.yml counts: it carries every app's OIDC client and public-path
+// bypass rule. An Ansible run re-installs the identity release from the base
+// values only, which drops all of them - Nextcloud's share links start being
+// challenged by the portal, and no OIDC app can complete a login. Only the
+// settings/certs overlays were re-applied, so that revert persisted until the
+// next console-driven install.
 func (in *Installer) ReconcileIdentityOverlays() error {
-	hasSettings := fileExists(in.cfg.IdentitySettings)
-	hasCerts := fileExists(in.cfg.IdentityCerts)
-	if !hasSettings && !hasCerts {
+	if !fileExists(in.cfg.IdentityApps) &&
+		!fileExists(in.cfg.IdentitySettings) &&
+		!fileExists(in.cfg.IdentityCerts) {
 		return nil
 	}
-	if hasSettings {
+	if fileExists(in.cfg.IdentitySettings) {
 		if _, err := in.AutheliaTheme(); err != nil {
 			return err
 		}
