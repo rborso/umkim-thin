@@ -6,12 +6,17 @@ superseded tarballs cannot accumulate. It must not be wiped either: the catalog'
 versions[] is the upgrade/rollback set the console resolves through chartRef, and
 a version listed there with no tarball sends Helm a GitHub tree URL instead.
 
-Usage: prune-chart-mirror.py <mirror-dir> <catalog-dir>
+Usage: prune-chart-mirror.py <mirror-dir> <catalog-dir> [staged-dir]
 
 Keeps a tarball when <chart>-<version>.tgz is named by a catalog entry's
-chart.version or chart.versions[].version, plus the platform charts the playbook
-installs (identity, umkim-thin, wireguard-gateway), which the catalog does not
-list. Everything else is removed.
+chart.version or chart.versions[].version, plus every tarball in <staged-dir> -
+the platform charts (identity, umkim-thin, wireguard-gateway) the playbook
+installs, which the catalog does not list. Everything else is removed.
+
+<staged-dir> is the artifacts directory this run produced. Keeping it, rather
+than "any file whose name starts with a platform chart", is what lets a bumped
+platform chart actually retire its predecessor instead of accumulating one
+tarball per release.
 
 Parsing uses PyYAML, which the provisioning image guarantees; a regex fallback is
 deliberately not used, because a partial parse would prune the rollback set.
@@ -40,14 +45,15 @@ def catalog_refs(catalog_dir: pathlib.Path):
                 yield chart, str(v["version"])
 
 
-PLATFORM = ("identity", "umkim-thin", "wireguard-gateway")
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: prune-chart-mirror.py <mirror-dir> <catalog-dir>", file=sys.stderr)
+    if len(sys.argv) not in (3, 4):
+        print("usage: prune-chart-mirror.py <mirror-dir> <catalog-dir> [staged-dir]",
+              file=sys.stderr)
         return 2
     mirror, catalog = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+    staged = pathlib.Path(sys.argv[3]) if len(sys.argv) == 4 else None
     if not mirror.is_dir():
         print(f"prune-chart-mirror: no mirror directory at {mirror}", file=sys.stderr)
         return 2
@@ -69,8 +75,14 @@ def main() -> int:
 
     # The platform charts are installed by the playbook, not the catalog, yet the
     # console resolves them from this mirror (UMKIM_THIN_IDENTITY_CHART etc.).
-    for tgz in mirror.glob("*.tgz"):
-        if tgz.name.startswith(PLATFORM):
+    #
+    # Keep the versions this run staged, not every tarball whose name starts with
+    # a platform chart: the old startswith(PLATFORM) rule kept identity-0.1.12 for
+    # ever next to 0.1.13, so the mirror grew one file per platform-chart bump.
+    # The staged directory is exactly what the artifacts carry (current + N-1),
+    # so it is the correct keep-set and needs no version parsing here.
+    if staged is not None:
+        for tgz in staged.glob("*.tgz"):
             keep.add(tgz.name)
 
     removed = 0

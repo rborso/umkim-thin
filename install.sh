@@ -1168,12 +1168,25 @@ prune_mirror() {
   cat "$fresh" >>"$list"
   # The platform charts are installed by the installer, not the catalog, yet the
   # console resolves them from this mirror (UMKIM_THIN_IDENTITY_CHART etc.). They
-  # are unchanged between most releases, so they are not in "fresh" either -- keep
-  # them unconditionally.
+  # are unchanged between most releases, so they are not in "fresh" either - keep
+  # them.
+  #
+  # Keep only the version this tree packages, not every tarball whose name starts
+  # with the chart: "identity-*" kept identity-0.1.12 for ever next to 0.1.13,
+  # so the mirror grew by one file per platform-chart bump and the seed crept
+  # toward the 1 MiB ConfigMap limit. The current version is the one the
+  # installer resolves below, so that is the one to keep.
+  for d in charts/identity charts/umkim-thin charts/wireguard-gateway; do
+    [ -f "$d/Chart.yaml" ] || continue
+    printf '%s-%s.tgz\n' "$(basename "$d")" \
+      "$(sed -n 's/^version:[[:space:]]*//p' "$d/Chart.yaml" | head -1)" >>"$list"
+  done
+  # Never drop a platform tarball this run actually produced, even if the name is
+  # unexpected (e.g. a rename): dropping it would break the install.
   for tgz in "$DATA_DIR"/chart-mirror/*.tgz; do
     [ -f "$tgz" ] || continue
     case "$(basename "$tgz")" in
-      identity-*|umkim-thin-*|wireguard-gateway-*) basename "$tgz" >>"$list" ;;
+      identity-*|umkim-thin-*|wireguard-gateway-*) grep -qxF "$(basename "$tgz")" "$fresh" && basename "$tgz" >>"$list" ;;
     esac
   done
   for f in catalog/*.yaml; do

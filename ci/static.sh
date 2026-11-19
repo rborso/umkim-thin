@@ -612,6 +612,75 @@ if command -v helm >/dev/null 2>&1; then
 fi
 echo "   ok"
 
+echo ">> the mirror pruners retire a superseded platform chart"
+# Both installers prune the chart mirror before seeding it into a ConfigMap, and
+# both used to keep a *platform* chart by name prefix ("identity-*"). That kept
+# identity-0.1.12 for ever next to 0.1.13, so the mirror grew by one file per
+# platform-chart bump and crept toward the 1 MiB object cap. The budget check
+# above cannot see it: it packages one version per chart.
+#
+# Exercise both pruners on a mirror that holds a superseded platform version.
+if command -v helm >/dev/null 2>&1; then
+  pr=$(mktemp -d)
+  mkdir -p "$pr/staged" "$pr/catalog"
+  cp catalog/*.yaml "$pr/catalog/" 2>/dev/null || true
+  if ! ./scripts/package-charts.sh "$pr/staged" >/dev/null 2>&1; then
+    echo "scripts/package-charts.sh failed while checking the pruners" >&2
+    rm -rf "$pr"; exit 1
+  fi
+  find "$pr/staged" -name '*.tgz' -printf '%f\n' >"$pr/fresh"
+
+  # --- Ansible pruner: keep catalog ∪ staged ---
+  mkdir -p "$pr/mirror"
+  cp "$pr"/staged/*.tgz "$pr/mirror/"
+  : >"$pr/mirror/identity-0.0.1.tgz"
+  : >"$pr/mirror/gitea-0.0.1.tgz"
+  if ! python3 deploy/ansible/roles/console/files/prune-chart-mirror.py \
+      "$pr/mirror" "$pr/catalog" "$pr/staged" >/dev/null 2>&1; then
+    echo "prune-chart-mirror.py failed" >&2; rm -rf "$pr"; exit 1
+  fi
+  stale=$(find "$pr/mirror" -name '*-0.0.1.tgz' | wc -l)
+  left=$(find "$pr/mirror" -name '*.tgz' | wc -l)
+  want=$(wc -l <"$pr/fresh")
+  if [ "$stale" -ne 0 ] || [ "$left" -ne "$want" ]; then
+    echo "prune-chart-mirror.py did not retire the superseded versions" >&2
+    echo "  stale=$stale left=$left (expected 0 and $want)" >&2
+    rm -rf "$pr"; exit 1
+  fi
+
+  # --- install.sh prune_mirror: keep fresh ∪ current platform charts ---
+  # It resolves the platform chart versions from the repo's own Chart.yaml files,
+  # so run it from the repo root with the staged set as the work dir.
+  rm -rf "$pr/run"; mkdir -p "$pr/run/staged" "$pr/run/chart-mirror"
+  cp "$pr"/staged/*.tgz "$pr/run/staged/"
+  cp "$pr"/staged/*.tgz "$pr/run/chart-mirror/"
+  : >"$pr/run/chart-mirror/identity-0.0.1.tgz"
+  : >"$pr/run/chart-mirror/umkim-thin-0.0.1.tgz"
+  : >"$pr/run/chart-mirror/wireguard-gateway-0.0.1.tgz"
+  find "$pr/run/staged" -name '*.tgz' -printf '%f\n' >"$pr/run/fresh"
+  bash -c '
+    set -uo pipefail
+    cd "$1"
+    DATA_DIR="$2"
+    info() { :; }
+    die() { echo "die: $*" >&2; exit 1; }
+    '"$(sed -n '/^prune_mirror()/,/^}/p' install.sh)"'
+    prune_mirror "$DATA_DIR/fresh"
+  ' _ "$PWD" "$pr/run" >/dev/null 2>&1 || {
+    echo "install.sh prune_mirror failed" >&2; rm -rf "$pr"; exit 1; }
+
+  stale=$(find "$pr/run/chart-mirror" -name '*-0.0.1.tgz' 2>/dev/null | wc -l)
+  plat=$(find "$pr/run/chart-mirror" \( -name 'identity-*.tgz' -o -name 'umkim-thin-*.tgz' \
+    -o -name 'wireguard-gateway-*.tgz' \) 2>/dev/null | wc -l)
+  if [ "$stale" -ne 0 ] || [ "$plat" -ne 3 ]; then
+    echo "install.sh prune_mirror left a superseded platform version or dropped a current one" >&2
+    echo "  stale=$stale platform=$plat (expected 0 and 3)" >&2
+    rm -rf "$pr"; exit 1
+  fi
+  rm -rf "$pr"
+fi
+echo "   ok"
+
 echo ">> every catalogued version is packaged (current or N-1)"
 # docs/versioning-plan.md: "The chart tarball for each advertised version exists
 # in the local mirror and its Chart.yaml version/appVersion match the catalog

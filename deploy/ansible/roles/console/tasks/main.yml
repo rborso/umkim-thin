@@ -31,12 +31,16 @@
   # "metadata.annotations: Too long". It must not be wiped either: the catalog's
   # versions[] is the rollback set, and a listed version with no tarball makes
   # chartRef hand Helm a GitHub tree URL. Prune to exactly what the catalog
-  # advertises, keeping the platform charts the playbook installs.
+  # advertises, plus what this run staged (the platform charts, whose versions
+  # the catalog does not list). Passing the staged directory is what lets a
+  # bumped platform chart retire its predecessor; keeping by name prefix kept
+  # every version for ever.
   ansible.builtin.command:
     cmd: >-
       python3 {{ remote_dir }}/prune-chart-mirror.py
       {{ remote_dir }}/chart-mirror
       {{ remote_dir }}/catalog
+      {{ playbook_dir }}/artifacts/chart-mirror
   changed_when: true
 
 - name: console session key (first run only)
