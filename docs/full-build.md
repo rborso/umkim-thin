@@ -62,9 +62,9 @@ The wildcard default certificate is the reason ACME never ran before: a default
 certificate that matches the hostname makes Traefik treat the router as already
 covered. A full run leaves it out, and every route gets its own certificate.
 
-The Playwright gate (`apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts`)
-signs in as a regular invited tenant (`ci-portal`) and requires **every
-installed app** to accept a directory login: Gitea, Jellyfin and Nextcloud over
+The Playwright gate (`apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts
+home.spec.ts journeys/tenant.spec.ts`) signs in as a regular invited tenant
+(`ci-portal`) and requires **every installed app** to accept a directory login: Gitea, Jellyfin and Nextcloud over
 LDAP, Immich and Paperless over the real OIDC flow, and Gitea's SSH clone/push
 on the dedicated port 2222. See `docs/auth.md` for the OIDC status (Gitea's
 source is configured but its new-user auto-registration is not gated;

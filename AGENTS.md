@@ -39,10 +39,12 @@ still the authority for a real install.
   `base` snapshot, `deploy/provision.sh`, `ci/assert.sh` (platform), then install
   the apps in `ci_apps` and run the acceptance gate in `tests/playwright`
   (driven by `ci/apps.json`). The gate is
-  `apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts`: it uses a regular
-  invited tenant (`ci/portal-user.sh`), and `auth.spec.ts` requires every
-  installed app to accept a directory login (Gitea/Jellyfin/Nextcloud LDAP,
-  Immich/Paperless OIDC) and Gitea's SSH clone/push over port 2222. The
+  `apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
+  journeys/tenant.spec.ts`: it uses a regular invited tenant (`ci/portal-user.sh`),
+  `auth.spec.ts` requires every installed app to accept a directory login
+  (Gitea/Jellyfin/Nextcloud LDAP, Immich/Paperless OIDC) and Gitea's SSH
+  clone/push over port 2222, and `journeys/tenant.spec.ts` requires that same
+  tenant to *do* something in each app, not only authenticate. The
   functional user journeys under `tests/playwright/journeys/` are
   informational. See `docs/testing.md` for the taxonomy and `docs/auth.md` for
   the OIDC limits (Gitea's OAuth2 auto-registration and Nextcloud's

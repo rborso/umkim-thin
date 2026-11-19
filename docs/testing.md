@@ -41,7 +41,14 @@ gating contract check, a platform health check, and an informational workflow.
 | `home.spec.ts` | acceptance | authenticated read-only home page and `/api/home`; no admin fields |
 
 The gate is run by `ci/e2e.sh` with `npx playwright test apps.spec.ts auth.spec.ts
-tls.spec.ts console.spec.ts home.spec.ts`.
+tls.spec.ts console.spec.ts home.spec.ts journeys/tenant.spec.ts`.
+
+`journeys/tenant.spec.ts` is in the gate rather than the informational journey
+run. `auth.spec.ts` only proves a directory user can *authenticate*, and the
+client journeys run as each app's own admin, which exists whatever the directory
+mapping does; neither catches "signs in but can do nothing". The tenant spec is
+the one place a **freshly invited regular user** is required to perform an
+ordinary action in each app.
 
 ## Functional user journeys
 
@@ -183,7 +190,8 @@ What it does:
    the WireGuard app-install fallback is disabled. The remaining checks are
    read-only or create/remove only `ci-*` test resources.
 3. Creates one temporary `ci-portal-<run-id>` tenant, runs the acceptance gate
-   (`apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts`), and
+   (`apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts
+   journeys/tenant.spec.ts`), and
    runs the optional journeys serially. `--integrations` also enables the
    cross-app journey (Mealie → SparkyFitness). Temporary directory test accounts,
    Gitea test users, SSH keys and repositories are removed by
