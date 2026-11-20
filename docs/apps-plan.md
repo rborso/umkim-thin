@@ -518,17 +518,157 @@ the user will notice. Name them `qwen3-8b` and `qwen3-8b-hq` if the quants diffe
 - **C — optional**: a large model split across nodes (vLLM/Ray) *only* if a model
   must be served that no single node can hold, and the interconnect is fast.
 
+### GPU discovery and driver install: what is actually possible
+
+Short answer: **yes, and there are two distinct designs.** The platform already has
+the machinery for the harder one — a root systemd agent on the host, driven over a
+Unix socket, plus a conditional reboot with post-reboot verification in the Ansible
+`common` role. So this is a variation on an existing pattern, not new invention.
+
+First, the two things that must not be conflated:
+
+- **Driver + container runtime** — kernel modules, `libnvidia-container`, containerd
+  configured to use `nvidia` as a runtime. This is *host state*.
+- **Device advertisement** — the API server learning the node has N GPUs, so
+  `resources.limits."nvidia.com/gpu"` is satisfiable. This is *cluster state*.
+
+A pod cannot install a kernel driver it then runs on (chicken-and-egg), which is why
+every solution splits these.
+
+#### Option A — NVIDIA GPU Operator (recommended if the host is otherwise standard)
+
+`nvidia/gpu-operator` deploys, as DaemonSets: Node Feature Discovery, the driver (in
+a container), the container toolkit, the device plugin, DCGM exporter. It is the
+industry path and it **supports Rocky 9** — NVIDIA explicitly added RHEL/Rocky 9
+driver images after a request for it.
+
+What it does *not* solve, and the reasons to think twice here:
+
+- **It wants to own the driver.** That means it needs a matching **driver container
+  per kernel version** (`driver.enabled=true`), which is why the docs require all GPU
+  nodes to run the same OS — or precompiled driver containers, which need one
+  DaemonSet **per kernel version**. `uname -r` changes with every kernel update, so
+  this is a moving target.
+- **Rocky 10 driver availability lagged.** Rocky 9 drivers do **not** work on 10;
+  they are built per major. The platform supports **both Rocky 9 and 10**, so the
+  "just use the operator" answer is version-dependent and must be checked against the
+  specific target, not assumed.
+- **Pre-installed drivers are supported, with a catch:** with `driver.enabled=true`
+  the operator's init container detects a host driver, labels the node
+  `nvidia.com/gpu.deploy.driver=pre-installed`, and skips the driver install. So it
+  degrades gracefully — but then you are back to installing the driver on the host
+  (Option B) while also running the operator for NFD/plugin/toolkit.
+- SELinux must be permissive **or** enforcing (not disabled) on RHEL-family hosts,
+  and there is no AutoNFS for offline/air-gapped installs — the driver image and the
+  operator charts must be mirrored.
+
+#### Option B — a host `gpu-agent`, mirroring the storage agent (recommended here)
+
+This fits the platform's existing shape better, and is the one to build:
+
+```
+console  --(Unix socket, /run/umkim-thin/gpu.sock)-->  gpu-agent (root systemd)
+                                                          |
+                                                          +-- install driver (dnf module / NVIDIA .run)
+                                                          +-- install nvidia-container-toolkit
+                                                          +-- configure containerd -> nvidia runtime
+                                                          +-- verify: nvidia-smi reports N GPUs
+```
+
+Why this is the right shape *for this project*:
+
+- **The console already does exactly this** for storage: a fixed operation set over a
+  host-only Unix socket (`GET /disks`, `GET /state`, `POST /plan`, `POST /apply`,
+  `POST /remove`), socket not exposed off the node. A `gpu-agent` with
+  `GET /gpus`, `GET /driver`, `POST /plan`, `POST /apply` is the same contract, and
+  the safety framing (fixed ops, no arbitrary command execution) carries over.
+- **The Ansible role already reboots and verifies.** `common/tasks/main.yml` installs
+  a stock kernel, detects the running kernel lacks `xt_*` modules, reboots with
+  `ansible.builtin.reboot` (900 s timeout), re-gathers facts, and asserts the modules
+  are now present. A GPU role is that same block with `nvidia-smi` as the assertion.
+- **It is distro-aware in one place.** Rocky 9 vs 10 driver availability, the
+  `cuda-rhel9` vs `cuda-rhel10` repo, and the `nvidia-driver:latest-dkms` packaging
+  choice all live in one role instead of being smeared across chart values.
+
+Concretely, the role's steps map onto what already exists:
+
+| Step | How |
+|---|---|
+| detect a GPU | `lspci -d 10de:` — the same PCI vendor id NFD keys on |
+| enable the repo | `dnf config-manager --add-repo` for `cuda-rhel<N>` |
+| install driver | `dnf module install nvidia-driver:<branch>/latest-dkms` (DKMS survives kernel updates) |
+| install toolkit | `nvidia-container-toolkit` + `nvidia-ctk runtime configure --runtime=containerd` |
+| reboot | only if a new kernel landed — the `common` role already has this pattern |
+| verify | `nvidia-smi -L` lists GPUs; `nvidia-ctk` config present; containerd has the runtime |
+| advertise | **still needed**: only the **device plugin** publishes `nvidia.com/gpu` |
+
+That last row is the part people miss: **installing the driver and toolkit does not
+make `nvidia.com/gpu` schedulable.** A device plugin DaemonSet (NVIDIA's, or the
+operator with `driver.enabled=false toolkit.enabled=false`) must run for the resource
+to appear. Plan for **NVIDIA's device plugin DaemonSet, not the full operator**, when
+the driver comes from the host.
+
+#### The hybrid, which is what I would actually do
+
+- **Host role / `gpu-agent`**: driver + toolkit + containerd runtime + `nvidia-smi`
+  verification. Kernel-specific, reboot-tolerant, distro-aware. This is the part the
+  operator is worst at on a mixed Rocky 9/10 fleet.
+- **Cluster-side**: the **NVIDIA device plugin** (DaemonSet, small) to advertise
+  `nvidia.com/gpu`, optionally **NFD** for `feature.node.kubernetes.io/pci-10de.present`
+  labels so GPU workloads can `nodeSelector` onto GPU nodes.
+- **Optionally** the GPU Operator later with `driver.enabled=false
+  toolkit.enabled=false` if you want its DCGM exporter/validator — but it is not
+  required, and adding it before the host side works only adds failure modes.
+
+Then the chart does the simple thing:
+
+```yaml
+resources:
+  limits:
+    nvidia.com/gpu: 1
+```
+
+and, **only if** the cluster uses a RuntimeClass instead of the device plugin
+resource, `runtimeClassName: nvidia`. Pick one mechanism per cluster and document it —
+mixing them yields pods that schedule fine and then cannot see a GPU.
+
+#### Discovery, concretely
+
+`gpu-agent`'s `GET /gpus` should report, per node:
+
+```json
+{ "node": "thin-ha-0",
+  "pci": ["10de:2684"],
+  "driver": "570.133.20",
+  "cuda": "12.8",
+  "devices": [{"index": 0, "name": "NVIDIA GeForce RTX 4090", "memory": "24564 MiB"}],
+  "runtime": "nvidia",
+  "devicePlugin": false }
+```
+
+That single payload answers the three questions that otherwise require SSH:
+*is there a GPU, does the driver match the kernel, and is the resource advertised?*
+The console can then refuse to install an AI app on a node where `devicePlugin` is
+false, with a message naming the missing step — instead of a pod that schedules and
+wedges.
+
+#### Order of work
+
+1. `gpu-agent` with **read-only** discovery first (`GET /gpus`): no installation, no
+   reboot, no risk. That alone makes GPU nodes visible and lets the console gate AI
+   installs.
+2. Ansible `gpu` role for driver + toolkit, reusing the existing reboot/verify block.
+3. NVIDIA device plugin DaemonSet (plus NFD if node labelling is wanted).
+4. Only then chart values, and only then the AI stack.
+
+Steps 1–3 are prerequisites for *any* GPU workload in this plan; none of the AI
+phases work without them.
+
 ### Platform prerequisites this exposes
 
-1. **No GPU support exists in the platform today** — no `nvidia.com/gpu` resource,
-   no NVIDIA device plugin, no runtimeClass. Phase B needs, in order: the NVIDIA
-   **device plugin** (DaemonSet) so nodes advertise `nvidia.com/gpu`, the
-   **container toolkit** on each node, and then either
-   `resources.limits."nvidia.com/gpu": 1` in the chart **or** a
-   `runtimeClassName: nvidia` set up on the RuntimeClass. Which of the two you use
-   depends on whether the plugin advertises the resource; pick one per cluster and
-   document it, because mixing them produces pods that schedule and then cannot see
-   a GPU. This is a platform change, not a chart change.
+1. **No GPU support exists in the platform today.** The driver, toolkit, device
+   plugin and node labelling are all missing; see the previous section for the
+   design and the order to build it in. Everything below assumes it exists.
 2. **Cross-node traffic**: LiteLLM → llama.cpp is plain HTTP on the pod/service
    network, which the existing NetworkPolicies handle. (vLLM/Ray in Phase C is the
    exception — NCCL needs its own ports and the policies assume a single node.)
@@ -536,7 +676,6 @@ the user will notice. Name them `qwen3-8b` and `qwen3-8b-hq` if the quants diffe
    node, tens of GB. On Longhorn that is replicated, so budget accordingly. Shares
    nothing with the split-model case, which needs the *same* weights everywhere.
 4. **Memory**: not on dev-single. It needs its own target with GPUs attached.
-
 5. **Registry**: the CUDA image is large (several GB) and the model weights are
    larger. Neither belongs in the chart mirror, which is seeded into a ConfigMap;
    the API already refuses anything over that budget. Weights come from a PVC the
@@ -568,6 +707,12 @@ handful of short completions) and both are deterministic — no text assertion.
 
 Time-box all of it; CPU inference must not make the gate flaky. If it exceeds the
 budget, mark the AI checks informational.
+
+There is also a **pre-flight** check that belongs before any of that, because it
+turns a wedge into a message: `assert.sh` should verify that a GPU node advertises
+`nvidia.com/gpu` and that `nvidia-smi` inside a trivial pod lists at least one
+device. Without it, "the AI app will not start" is indistinguishable from a broken
+image, a bad model path, or a missing driver.
 
 ## 5. Considered and declined
 
@@ -663,6 +808,10 @@ so a reader can tell which is which.
 | vLLM multi-node = TP within a node, PP across nodes, via Ray | vLLM docs (parallelism and scaling) |
 | Multi-node over plain Ethernet measured ~33 tok/s (PP) / single-digit RPM (TP); **one model per box was ~10x faster** | published two-node vLLM benchmark |
 | Cloudron memory minimums quoted (384/256/1024 Mi) | Cloudron app API manifests |
+| NVIDIA GPU Operator supports **Rocky 9** (driver images added on request); RHEL/Rocky **9 drivers do not work on 10** — they are built per major | NVIDIA gpu-operator docs + issue tracker |
+| GPU Operator with `driver.enabled=true` on a node that already has a driver: the init container detects it, labels the node `nvidia.com/gpu.deploy.driver=pre-installed`, and skips the install | NVIDIA gpu-operator docs, "Pre-installed NVIDIA GPU drivers" |
+| Requiring one driver DaemonSet **per kernel version** (precompiled) or one per OS (compiled) — `driver.enabled=true` is why all GPU nodes must match | NVIDIA gpu-operator docs / NVIDIA Driver CRD |
+| Installing a driver + toolkit does **not** make `nvidia.com/gpu` schedulable; a device plugin (or NFD + plugin) must run | NVIDIA device-plugin and gpu-operator architecture docs |
 
 Assumptions **not** yet verified, and flagged as such:
 
@@ -680,9 +829,11 @@ Assumptions **not** yet verified, and flagged as such:
 
 1. **Token hook design** — per-app adapters (recommended, honest) vs one generic
    implementation (will not fit both).
-2. **AI target sizing** — Phase B needs at least one GPU node, and the platform has
-   no NVIDIA device plugin yet. Decide whether a GPU node is available before
-   designing the charts.
+2. **AI target and GPU prerequisite** — Phase B needs at least one GPU node, and the
+   platform has neither a driver-install path nor a device plugin (see "GPU discovery
+   and driver install"). Decide which of the two designs to build — host `gpu-agent`
+   + device plugin, or GPU Operator — before designing any chart, because the chart's
+   GPU stanza depends on which one advertises the resource.
 3. **Calibre-Web fork** — upstream `janeczku/calibre-web` moves slowly;
    `Calibre-Web-Automated` is the active fork. Pick one deliberately and pin it.
 4. **Where does the AI stack live** — a normal catalog app with big PVCs, or a
