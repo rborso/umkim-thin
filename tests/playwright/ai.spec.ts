@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installed, hostOf, portalSession, anon } from './lib/session';
+import { installed, hostOf, createUser, oidcLogin } from './lib/session';
 
 // Gating checks for the AI stack.
 //
@@ -27,17 +27,32 @@ test.describe('ai stack', () => {
   test('the gateway lists a model @check:llm_models_listed', async ({ browser }) => {
     test.setTimeout(180_000);
     const host = hostOf('ai');
-    const ctx = await portalSession();
-    // Open WebUI exposes the gateway's model list through its own API, using the
-    // key configured on the pod. This exercises the same path a chat request
-    // takes, rather than reaching into the cluster.
-    const r = await ctx.get(`https://${host}/openai/models`);
-    expect(r.status(), 'Open WebUI can reach the gateway').toBe(200);
-    const body = await r.json().catch(() => null);
-    const ids: string[] = (body?.data ?? body ?? []).map((m: any) => m.id ?? m.name ?? '');
-    expect(Array.isArray(ids), 'the model list is an array').toBe(true);
+
+    // Through a real user session, not a bare portal cookie: /api/models is an
+    // Open WebUI endpoint, so an Authelia session alone answers 401.
+    const user = `ci-aim-${Date.now()}`;
+    const pass = `Pw${Math.random().toString(36).slice(2, 18)}`;
+    await createUser(user, pass, { displayName: user });
+
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username: user, password: pass },
+      ready: async (p) =>
+        p
+          .evaluate(async () => (await fetch('/api/models', { credentials: 'same-origin' })).status)
+          .then((s) => s === 200)
+          .catch(() => false),
+    });
+
+    const models = await page.evaluate(async () => {
+      const r = await fetch('/api/models', { credentials: 'same-origin' });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    });
+    expect(models.status, 'Open WebUI serves the model list').toBe(200);
+    const ids: string[] = (Array.isArray(models.body) ? models.body : models.body?.data ?? []).map(
+      (m: any) => m.id ?? m.name ?? '',
+    );
     expect(ids.length, `at least one model is published: ${JSON.stringify(ids)}`).toBeGreaterThan(0);
-    await ctx.dispose();
+    await context.close();
   });
 
   test('a completion returns content @check:llm_completion_answers', async ({ browser }) => {
@@ -46,31 +61,28 @@ test.describe('ai stack', () => {
 
     // Drive it as a user does: sign in, then ask the app to complete. CPU
     // inference is slow, so the budget is generous - but bounded.
-    const { oidcLogin } = await import('./lib/session');
-    const { createUser } = await import('./lib/session');
     const user = `ci-ai-${Date.now()}`;
     const pass = `Pw${Math.random().toString(36).slice(2, 18)}`;
     await createUser(user, pass, { displayName: user });
 
     const { context, page } = await oidcLogin(browser, host, {
       credentials: { username: user, password: pass },
-      ready: async (p) => {
-        let u: URL;
-        try {
-          u = new URL(p.url());
-        } catch {
-          return false;
-        }
-        return u.hostname === host && !u.pathname.startsWith('/oauth') && u.pathname !== '/auth';
-      },
+      // Readiness is a real session, not a URL: the OIDC redirect chain passes
+      // through the app's own "/" on its way to "/auth", so a pathname test
+      // declares success before the login has happened.
+      ready: async (p) =>
+        p
+          .evaluate(async () => (await fetch('/api/models', { credentials: 'same-origin' })).status)
+          .then((s) => s === 200)
+          .catch(() => false),
     });
 
     const result = await page.evaluate(async () => {
-      const models = await (await fetch('/openai/models', { credentials: 'same-origin' })).json().catch(() => null);
-      const list: any[] = models?.data ?? [];
+      const models = await (await fetch('/api/models', { credentials: 'same-origin' })).json().catch(() => null);
+      const list: any[] = Array.isArray(models) ? models : models?.data ?? [];
       if (!list.length) return { model: '', status: 0, content: '', total: 0 };
       const model = list[0].id;
-      const r = await fetch('/openai/chat/completions', {
+      const r = await fetch('/api/chat/completions', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -106,28 +118,26 @@ test.describe('tenant can use the ai stack', () => {
     test.skip(!user || !pass, 'portal user not set');
     test.setTimeout(240_000);
     const host = hostOf('ai');
-    const { oidcLogin } = await import('./lib/session');
 
     const { context, page } = await oidcLogin(browser, host, {
       credentials: { username: user, password: pass },
-      ready: async (p) => {
-        let u: URL;
-        try {
-          u = new URL(p.url());
-        } catch {
-          return false;
-        }
-        return u.hostname === host && !u.pathname.startsWith('/oauth') && u.pathname !== '/auth';
-      },
+      // Readiness is a real session, not a URL: the OIDC redirect chain passes
+      // through the app's own "/" on its way to "/auth", so a pathname test
+      // declares success before the login has happened.
+      ready: async (p) =>
+        p
+          .evaluate(async () => (await fetch('/api/models', { credentials: 'same-origin' })).status)
+          .then((s) => s === 200)
+          .catch(() => false),
     });
 
     // The tenant's own session must be able to reach a model and get content
     // back. Shallow on purpose: one completion, shape only.
     const result = await page.evaluate(async () => {
-      const models = await (await fetch('/openai/models', { credentials: 'same-origin' })).json().catch(() => null);
-      const list: any[] = models?.data ?? [];
+      const models = await (await fetch('/api/models', { credentials: 'same-origin' })).json().catch(() => null);
+      const list: any[] = Array.isArray(models) ? models : models?.data ?? [];
       if (!list.length) return { status: 0, content: '' };
-      const r = await fetch('/openai/chat/completions', {
+      const r = await fetch('/api/chat/completions', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },

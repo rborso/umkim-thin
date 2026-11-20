@@ -474,6 +474,16 @@ export async function oidcLogin(
         'button:has-text("Continue with"), a:has-text("Continue with"), button:has-text("SSO"), a:has-text("SSO"), button:has-text("OpenID"), a:has-text("OpenID"), button:has-text("Sign in with"):not(:has-text("Passkey")), a:has-text("Sign in with")',
       );
     }
+    if ((await sso.count()) === 0) {
+      // The app's sign-in page is a single-page app: the SSO control appears
+      // after React mounts, which can be several seconds after the redirect that
+      // landed here. Poll for it rather than falling through on the first look -
+      // that is why an Open WebUI login sat on /auth and never started a flow.
+      await sso
+        .first()
+        .waitFor({ state: 'visible', timeout: 6000 })
+        .catch(() => {});
+    }
     if (await sso.count()) {
       await sso.first().click();
       await page.waitForTimeout(2000);

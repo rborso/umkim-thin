@@ -21,25 +21,24 @@ test.describe('ai stack', () => {
 
     const { page, context } = await oidcLogin(browser, host, {
       credentials: { username: user, password: pass },
-      ready: async (p) => {
-        let u: URL;
-        try {
-          u = new URL(p.url());
-        } catch {
-          return false;
-        }
-        return u.hostname === host && !u.pathname.startsWith('/oauth') && u.pathname !== '/auth';
-      },
+      // Readiness is a real session, not a URL: the OIDC redirect chain passes
+      // through the app's own "/" on its way to "/auth", so a pathname test
+      // declares success before the login has happened.
+      ready: async (p) =>
+        p
+          .evaluate(async () => (await fetch('/api/models', { credentials: 'same-origin' })).status)
+          .then((s) => s === 200)
+          .catch(() => false),
     });
 
     // Ask one question and confirm an answer comes back with usage, which is the
     // evidence a real model ran rather than a stub.
     const result = await page.evaluate(async () => {
-      const models = await (await fetch('/openai/models', { credentials: 'same-origin' })).json().catch(() => null);
-      const list: any[] = models?.data ?? [];
+      const models = await (await fetch('/api/models', { credentials: 'same-origin' })).json().catch(() => null);
+      const list: any[] = Array.isArray(models) ? models : models?.data ?? [];
       if (!list.length) return { status: 0, text: '', model: '' };
       const model = list[0].id;
-      const r = await fetch('/openai/chat/completions', {
+      const r = await fetch('/api/chat/completions', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
