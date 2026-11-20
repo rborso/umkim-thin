@@ -3,7 +3,8 @@
 Status: **proposal — nothing implemented.** Last reviewed 2026-11-20.
 Companions: [`catalog.md`](catalog.md) (entry format), [`testing.md`](testing.md)
 (gate taxonomy), [`versioning-plan.md`](versioning-plan.md) (chart packaging),
-[`apps/testing.md`](apps/testing.md) (generated per-app status).
+[`apps/testing.md`](apps/testing.md) (generated per-app status), and
+[`gpu-agent.md`](gpu-agent.md) — the Option B design chosen in §4.
 
 This document plans three apps and one self-hosted AI stack. For each app it
 records what has to exist before it can be added, how it is bootstrapped, how it
@@ -562,7 +563,8 @@ What it does *not* solve, and the reasons to think twice here:
   and there is no AutoNFS for offline/air-gapped installs — the driver image and the
   operator charts must be mirrored.
 
-#### Option B — a host `gpu-agent`, mirroring the storage agent (recommended here)
+#### Option B — a host `gpu-agent`, mirroring the storage agent (**chosen**; full
+design in [`gpu-agent.md`](gpu-agent.md))
 
 This fits the platform's existing shape better, and is the one to build:
 
