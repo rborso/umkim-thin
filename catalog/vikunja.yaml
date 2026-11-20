@@ -46,6 +46,15 @@ auth:
 
 oidc:
   clientId: vikunja
+  # Vikunja implements no PKCE: it has no code_verifier/code_challenge anywhere in
+  # its OpenID module. Authelia's client default is require_pkce: true, and with
+  # it the authorize request is rejected outright:
+  #   "Clients must include a 'code_challenge' when performing the authorize code
+  #    flow, but it is missing"
+  # Gitea and Paperless are in the same position and set the same flag. The flow
+  # still uses a confidential client (public: false, client_secret_basic), so the
+  # code cannot be redeemed without the secret.
+  requirePkce: false
   redirectUris:
     # NOT /api/v1/auth/openid/<key>/callback. Verified against the deployed app:
     # the frontend sends redirect_uri=https://<host>/auth/openid/authelia, and
