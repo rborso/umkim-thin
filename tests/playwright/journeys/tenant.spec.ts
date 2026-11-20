@@ -373,9 +373,13 @@ test.describe('tenant can work in bookstack', () => {
       return { created: post.status, found: listing.includes(title), reason: post.headers.get('location') ?? '' };
     }, `tenant-book-${suffix}`);
 
-    // 302 is the normal success path (redirect to the new book).
-    expect([200, 302, 303], `the tenant creates a book -> ${result.created} ${result.reason}`).toContain(result.created);
-    expect(result.found, 'the book the tenant created is listed').toBe(true);
+    // Assert on the outcome rather than the status code: BookStack redirects to
+    // the new book, and with `redirect: 'manual'` a cross-origin redirect makes
+    // fetch reject, which shows up as status 0 even though the write succeeded.
+    // The books index is the honest signal - it only lists what was stored.
+    expect(result.found, `the book the tenant created is listed (post=${result.created} ${result.reason})`).toBe(
+      true,
+    );
     await context.close();
   });
 });

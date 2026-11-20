@@ -41,11 +41,13 @@ test.describe('bookstack', () => {
         const html = await (await fetch(url, { credentials: 'same-origin' })).text();
         return (html.match(/name="_token"\s+value="([^"]+)"/) ?? [])[1];
       };
-      const submit = async (url: string, fields: Record<string, string>) => {
-        const token = await csrf(url);
+      // GET the form at formUrl, POST it to postUrl. They differ in BookStack:
+      // the create form is /create-book, but the POST goes to /books/.
+      const submit = async (formUrl: string, postUrl: string, fields: Record<string, string>) => {
+        const token = await csrf(formUrl);
         if (!token) return 0;
         const body = new URLSearchParams({ _token: token, ...fields });
-        const r = await fetch(url, {
+        const r = await fetch(postUrl, {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -55,16 +57,17 @@ test.describe('bookstack', () => {
         return r.status;
       };
 
-      // A book first: BookStack's POST for a book is /books/.
-      const book = await submit('/create-book', { name: title, description: 'ci journey' });
+      // A book first: the form is /create-book, the POST is /books/.
+      const book = await submit('/create-book', '/books/', { name: title, description: 'ci journey' });
       // Then the books index tells us the slug the app assigned.
       const listing = await (await fetch('/books/', { credentials: 'same-origin' })).text();
       const found = listing.includes(title);
       return { book, found };
     }, name);
 
-    expect([200, 302, 303], `the book is created -> ${result.book}`).toContain(result.book);
-    expect(result.found, 'the new book appears in the books index').toBe(true);
+    // The books index is the signal, not the POST status: BookStack redirects to
+    // the new book and a manual-mode cross-origin redirect surfaces as status 0.
+    expect(result.found, `the new book appears in the books index (post=${result.book})`).toBe(true);
     await context.close();
   });
 });

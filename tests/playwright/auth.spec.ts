@@ -12,6 +12,7 @@ import {
   createUser,
   oidcLogin,
   waitFor,
+  anon,
   appAdmin,
   appToken,
   tokenInStorage,
@@ -549,44 +550,81 @@ test.describe('bookstack api token', () => {
         name: `ci-${Date.now()}`,
         expires_at: '2030-01-01',
       });
+      // Follow the redirect instead of asking for it, and read the secret from the
+      // response body. BookStack flashes the secret to the session and renders it
+      // ONCE on the redirect target, so fetching that URL again would consume the
+      // flash and return a page with the secret already gone.
       const created = await fetch(`/api-tokens/${userId}/create`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
-        redirect: 'manual',
       });
-      const loc = created.headers.get('location') ?? '';
-      if (!loc) return { step: 'create', why: `create returned ${created.status()} with no redirect` };
-
-      const html = await (await fetch(loc, { credentials: 'same-origin' })).text();
+      const html = await created.text();
+      if (created.status >= 400) {
+        return { step: 'create', why: `create returned ${created.status} ${html.slice(0, 120)}` };
+      }
       const id = (html.match(/name="token_id"[^>]*value="([^"]+)"/) ?? [])[1];
       // The secret input carries NO name attribute, so exclude named inputs.
       const secret = (html.match(/<input(?![^>]*\bname=)[^>]*\breadonly[^>]*\bvalue="([^"]+)"/) ?? [])[1];
       if (!id || !secret) return { step: 'reveal', why: 'token page did not show both halves' };
 
-      const auth = { Authorization: `Token ${id}:${secret}`, 'Content-Type': 'application/json' };
-      const name = `api-page-${Date.now()}`;
-      const write = await fetch('/api/pages', {
-        method: 'POST',
-        headers: auth,
-        body: JSON.stringify({ name, html: '<p>written by the umkim-thin gate</p>' }),
-      });
-      const writeText = await write.text();
-      if (write.status >= 300) return { step: 'write', why: `${write.status} ${writeText.slice(0, 150)}` };
-      const pageId = JSON.parse(writeText).id;
-
-      const read = await fetch(`/api/pages/${pageId}`, { headers: auth });
-      const stored = await read.json();
-      await fetch(`/api/pages/${pageId}`, { method: 'DELETE', headers: auth });
-
+      // Return the token to the test: the write CANNOT happen in this context.
+      // BookStack's ApiAuthenticate allows only GET when a session cookie is
+      // present ("Only GET requests are allowed when using the API with cookie-
+      // based authentication"), and this page always has one. The write has to
+      // go out from a request context that carries the token and no cookie.
+      return { step: 'minted', token: `${id}:${secret}` };
       return { step: 'done', wrote: write.status, read: read.status, name: stored.name, expected: name };
     });
 
-    expect(result.step, `bookstack token flow stopped at "${result.step}": ${result.why ?? ''}`).toBe('done');
-    expect([200, 201], `created the page -> ${result.wrote}`).toContain(result.wrote);
-    expect(result.read, 'the page is readable back through the API').toBe(200);
-    expect(result.name, 'the stored page is the one created').toBe(result.expected);
+    expect(result.step, `bookstack token flow stopped at "${result.step}": ${result.why ?? ''}`).toBe('minted');
+    expect(result.token, 'the token carries both halves').toContain(':');
+
+    // The request needs the portal cookie (the route is behind Authelia) but must
+    // NOT carry the app's own session: BookStack refuses non-GET requests that
+    // arrive with a session cookie ("Only GET requests are allowed when using the
+    // API with cookie-based authentication"). A portal session alone satisfies the
+    // ingress without starting a BookStack session, which is exactly the shape an
+    // integration has - one cookie for the edge, one bearer token for the app.
+    const api = await portalSession();
+    const auth = { Authorization: `Token ${result.token}`, 'Content-Type': 'application/json' };
+    const name = `api-page-${Date.now()}`;
+    let pageId = 0;
+    let bookId = 0;
+    try {
+      // A page has to live in a book or a chapter, so create the book first.
+      const book = await api.post(`https://${host}/api/books`, {
+        headers: auth,
+        data: { name: `${name}-book`, description: 'ci' },
+      });
+      const bookText = await book.text();
+      expect([200, 201], `create book -> ${book.status()} ${bookText.slice(0, 200)}`).toContain(book.status());
+      bookId = JSON.parse(bookText).id;
+
+      const write = await api.post(`https://${host}/api/pages`, {
+        headers: auth,
+        data: { name, book_id: bookId, html: '<p>written by the umkim-thin gate</p>' },
+      });
+      const writeText = await write.text();
+      expect(writeText, `create page -> ${write.status()}`).not.toMatch(/^<!DOCTYPE/i);
+      expect([200, 201], `create page -> ${write.status()} ${writeText.slice(0, 200)}`).toContain(write.status());
+      pageId = JSON.parse(writeText).id;
+
+      const read = await api.get(`https://${host}/api/pages/${pageId}`, { headers: auth });
+      expect(read.status(), 'the page is readable back through the API').toBe(200);
+      const stored = await read.json();
+      expect(stored.name, 'the stored page is the one created').toBe(name);
+      expect(stored.html, 'the body survived the round trip').toContain('umkim-thin gate');
+    } finally {
+      if (pageId) {
+        await api.delete(`https://${host}/api/pages/${pageId}`, { headers: auth }).catch(() => undefined);
+      }
+      if (bookId) {
+        await api.delete(`https://${host}/api/books/${bookId}`, { headers: auth }).catch(() => undefined);
+      }
+      await api.dispose();
+    }
     await context.close();
   });
 });
