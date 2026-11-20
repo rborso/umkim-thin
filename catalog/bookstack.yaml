@@ -12,9 +12,9 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/bookstack
-  version: 0.1.0
+  version: 0.1.1
   versions:
-    - version: 0.1.0
+    - version: 0.1.1
       appVersion: 26.09.3
       channel: stable
 
@@ -72,7 +72,8 @@ verify:
     - authenticated_request_reaches_app
     - oidc_sso_completes
     - tenant_api_bookstack
-    # Uses the per-user token hook: creates an API token as the bootstrap admin
-    # (via the app's own form), then writes a page through /api/pages and reads
-    # it back. Proves the wiki actually stores content, not just that SSO works.
+    # Mints an API token in a real SSO session (BookStack has no JSON endpoint for
+    # it, and its password login is disabled under AUTH_METHOD=oidc), then writes
+    # a page through /api/pages and reads it back. Proves the wiki stores content,
+    # not just that SSO works.
     - bookstack_api_token_writes_page

@@ -12,7 +12,6 @@ import {
   createUser,
   oidcLogin,
   waitFor,
-  anon,
   appAdmin,
   appToken,
   tokenInStorage,
@@ -479,9 +478,19 @@ test.describe('bookstack directory login', () => {
           if (r.url().includes('/oidc/callback')) callbackStatus = r.status();
         }),
       // BookStack sets a session and redirects to the shelf/home page.
+      //
+      // Checking `url.includes(host)` is not enough: the Authelia portal's own
+      // URL carries the target in its ?rd= parameter, so that test passes on the
+      // portal page itself and the helper stops before signing in. Compare the
+      // parsed hostname instead.
       ready: async (p) => {
-        const url = p.url();
-        return url.includes(host) && !url.includes('/oidc') && !url.includes('/login');
+        let u: URL;
+        try {
+          u = new URL(p.url());
+        } catch {
+          return false;
+        }
+        return u.hostname === host && !u.pathname.startsWith('/oidc') && u.pathname !== '/login';
       },
     });
     expect(callbackStatus, 'BookStack exchanged the code').toBeGreaterThanOrEqual(200);
@@ -493,46 +502,91 @@ test.describe('bookstack directory login', () => {
 
 test.describe('bookstack api token', () => {
   test.skip(!installed('bookstack'), 'bookstack is not installed');
-  const admin = appAdmin('bookstack');
-  test.skip(!admin.user || !admin.pass, 'BOOKSTACK admin credentials not set');
 
-  test('an API token writes a page and reads it back @check:bookstack_api_token_writes_page', async () => {
-    test.setTimeout(120_000);
+  test('an API token writes a page and reads it back @check:bookstack_api_token_writes_page', async ({ browser }) => {
+    test.setTimeout(180_000);
     const host = hostOf('bookstack');
-    const base = `https://${host}`;
-    // The hook drives BookStack's own token form; there is no JSON way to mint
-    // one. It returns "id:secret", which is the format the API expects.
-    const token = await appToken('bookstack', admin);
-    expect(token, 'the token hook returned a token').toContain(':');
 
-    // The app host is behind Authelia, so the session rides along with the API
-    // token - the same as the other catalog apps.
-    const ctx = await portalSession();
-    const auth = { Authorization: `Token ${token}`, 'Content-Type': 'application/json' };
-    const name = `ci-page-${ciUser('bs')}-${Date.now()}`;
-    let pageId = 0;
-    try {
-      const created = await ctx.post(`${base}/api/pages`, {
-        headers: auth,
-        data: { name, html: '<p>written by the umkim-thin gate</p>' },
+    // BookStack's breakglass admin CANNOT mint this token: AUTH_METHOD=oidc makes
+    // the default guard the external-session driver, so password login is
+    // impossible (auth()->attempt() returns false even with the right password).
+    // The token must come from a real SSO session.
+    //
+    // An invited tenant is the more honest subject anyway: it proves an ordinary
+    // directory user can do API work, not just that an admin can.
+    const user = ciUser('ci-bsapi');
+    const pass = ciPassword();
+    await createUser(user, pass, { displayName: user });
+
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username: user, password: pass },
+      ready: async (p) => {
+        let u: URL;
+        try {
+          u = new URL(p.url());
+        } catch {
+          return false;
+        }
+        return u.hostname === host && !u.pathname.startsWith('/oidc') && u.pathname !== '/login';
+      },
+    });
+
+    // Everything runs in the app's own origin: mint a token through the account
+    // form (there is no JSON endpoint), then use it against /api/pages. Doing it
+    // here also means the portal cookie is present automatically.
+    const result = await page.evaluate(async () => {
+      const csrfOf = (h: string) => (h.match(/name="_token"\s+value="([^"]+)"/) ?? [])[1];
+
+      const accountHtml = await (await fetch('/my-account/auth', { credentials: 'same-origin' })).text();
+      const userId = (accountHtml.match(/\/api-tokens\/(\d+)\/create/) ?? [])[1];
+      if (!userId) return { step: 'account', why: 'no token form on /my-account/auth' };
+
+      const formCsrf = csrfOf(await (await fetch(`/api-tokens/${userId}/create`, { credentials: 'same-origin' })).text());
+      if (!formCsrf) return { step: 'form', why: 'token form had no CSRF token' };
+
+      const body = new URLSearchParams({
+        _token: formCsrf,
+        name: `ci-${Date.now()}`,
+        expires_at: '2030-01-01',
       });
-      const body = await created.text();
-      expect(body, `create page -> ${created.status()}`).not.toMatch(/^<!DOCTYPE/i);
-      expect([200, 201], `create page -> ${created.status()} ${body.slice(0, 200)}`).toContain(created.status());
-      pageId = JSON.parse(body).id;
+      const created = await fetch(`/api-tokens/${userId}/create`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+        redirect: 'manual',
+      });
+      const loc = created.headers.get('location') ?? '';
+      if (!loc) return { step: 'create', why: `create returned ${created.status()} with no redirect` };
 
-      // Read it back through a separate request: proves it was stored rather
-      // than echoed from the create payload.
-      const read = await ctx.get(`${base}/api/pages/${pageId}`, { headers: auth });
-      expect(read.status(), 'the page is readable back').toBe(200);
+      const html = await (await fetch(loc, { credentials: 'same-origin' })).text();
+      const id = (html.match(/name="token_id"[^>]*value="([^"]+)"/) ?? [])[1];
+      // The secret input carries NO name attribute, so exclude named inputs.
+      const secret = (html.match(/<input(?![^>]*\bname=)[^>]*\breadonly[^>]*\bvalue="([^"]+)"/) ?? [])[1];
+      if (!id || !secret) return { step: 'reveal', why: 'token page did not show both halves' };
+
+      const auth = { Authorization: `Token ${id}:${secret}`, 'Content-Type': 'application/json' };
+      const name = `api-page-${Date.now()}`;
+      const write = await fetch('/api/pages', {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({ name, html: '<p>written by the umkim-thin gate</p>' }),
+      });
+      const writeText = await write.text();
+      if (write.status >= 300) return { step: 'write', why: `${write.status} ${writeText.slice(0, 150)}` };
+      const pageId = JSON.parse(writeText).id;
+
+      const read = await fetch(`/api/pages/${pageId}`, { headers: auth });
       const stored = await read.json();
-      expect(stored.name, 'the stored page is the one created').toBe(name);
-      expect(stored.html, 'the body survived the round trip').toContain('umkim-thin gate');
-    } finally {
-      if (pageId) {
-        await ctx.delete(`${base}/api/pages/${pageId}`, { headers: auth }).catch(() => undefined);
-      }
-      await ctx.dispose();
-    }
+      await fetch(`/api/pages/${pageId}`, { method: 'DELETE', headers: auth });
+
+      return { step: 'done', wrote: write.status, read: read.status, name: stored.name, expected: name };
+    });
+
+    expect(result.step, `bookstack token flow stopped at "${result.step}": ${result.why ?? ''}`).toBe('done');
+    expect([200, 201], `created the page -> ${result.wrote}`).toContain(result.wrote);
+    expect(result.read, 'the page is readable back through the API').toBe(200);
+    expect(result.name, 'the stored page is the one created').toBe(result.expected);
+    await context.close();
   });
 });

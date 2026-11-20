@@ -329,47 +329,53 @@ test.describe('tenant can work in bookstack', () => {
   test.skip(!installed('bookstack'), 'bookstack is not installed');
   test.skip(!user || !pass, 'portal user not set');
 
-  test('a regular user signs in by SSO and creates a page @check:tenant_api_bookstack', async ({ browser }) => {
+  test('a regular user signs in by SSO and creates a book @check:tenant_api_bookstack', async ({ browser }) => {
     test.setTimeout(180_000);
     const host = hostOf('bookstack');
-    // BookStack auto-registers OIDC users with the default role, so the tenant
-    // should be able to create a page without an admin touching anything.
+    // BookStack auto-registers OIDC users, so this is a real first-use path.
+    //
+    // The action is "create a book", not "create a page": a page has to live in
+    // a book, so POST /books/ is the first thing a new user can actually do.
+    // That also proves the registration role was attached - before the chart
+    // set registration-role, an OIDC user got NO role and every write was
+    // refused, which is exactly what this check caught.
     const { context, page } = await oidcLogin(browser, host, {
       credentials: { username: user, password: pass },
+      // Compare the parsed hostname: the portal URL carries the target in ?rd=,
+      // so a substring test matches the portal page and returns too early.
       ready: async (p) => {
-        const url = p.url();
-        return url.includes(host) && !url.includes('/oidc') && !url.includes('/login');
+        let u: URL;
+        try {
+          u = new URL(p.url());
+        } catch {
+          return false;
+        }
+        return u.hostname === host && !u.pathname.startsWith('/oidc') && u.pathname !== '/login';
       },
     });
 
-    // Create a page through the same session, then confirm the app lists it.
-    // Forms carry a CSRF token, so scrape it from the create form.
     const result = await page.evaluate(async (title: string) => {
-      const createForm = await fetch('/create-page', { credentials: 'same-origin' });
-      const html = await createForm.text();
+      const form = await fetch('/create-book', { credentials: 'same-origin' });
+      const html = await form.text();
       const token = (html.match(/name="_token"\s+value="([^"]+)"/) ?? [])[1];
-      if (!token) return { created: 0, found: false };
-      const form = new URLSearchParams();
-      form.set('_token', token);
-      form.set('name', title);
-      form.set('html', '<p>written by a regular tenant</p>');
-      const post = await fetch('/create-page', {
+      if (!token) return { created: 0, found: false, reason: 'no csrf token on /create-book' };
+      const body = new URLSearchParams({ _token: token, name: title, description: 'written by a tenant' });
+      const post = await fetch('/books/', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: form.toString(),
+        body: body.toString(),
         redirect: 'manual',
       });
-      const after = await fetch('/search?term=' + encodeURIComponent(title), {
-        credentials: 'same-origin',
-      });
-      const text = await after.text();
-      return { created: post.status, found: text.includes(title) };
-    }, `tenant-page-${suffix}`);
+      // The books index lists what the user can see.
+      const index = await fetch('/books/', { credentials: 'same-origin' });
+      const listing = await index.text();
+      return { created: post.status, found: listing.includes(title), reason: post.headers.get('location') ?? '' };
+    }, `tenant-book-${suffix}`);
 
-    // 302 is the normal success path (redirect to the new page).
-    expect([200, 302, 303], `the tenant creates a page -> ${result.created}`).toContain(result.created);
-    expect(result.found, 'the page the tenant created is searchable').toBe(true);
+    // 302 is the normal success path (redirect to the new book).
+    expect([200, 302, 303], `the tenant creates a book -> ${result.created} ${result.reason}`).toContain(result.created);
+    expect(result.found, 'the book the tenant created is listed').toBe(true);
     await context.close();
   });
 });

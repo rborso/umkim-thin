@@ -418,12 +418,19 @@ export async function oidcLogin(
   // already holds a session just gets redirected, so an absent form is fine.
   const portalLogin = async () => {
     if (!onAuth()) return;
+    // Authelia renders its form after the SPA mounts. Typing before that loses
+    // the keystrokes, so wait for the field to be attached *and* visible before
+    // clicking into it - the visible check alone passes on a hidden duplicate.
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
     const u = page.locator('#username-textfield, input[autocomplete="username"]').first();
     try {
-      await u.waitFor({ state: 'visible', timeout: 8_000 });
+      await u.waitFor({ state: 'visible', timeout: 20_000 });
     } catch {
       return;
     }
+    // A brief settle: the form can be visible while React is still attaching
+    // its handlers, and a submit in that window is silently dropped.
+    await page.waitForTimeout(1500);
     await u.click();
     await u.fill('');
     await u.pressSequentially(user, { delay: 20 });
@@ -453,7 +460,14 @@ export async function oidcLogin(
     // Provider-specific labels first: SparkyFitness also has a "Sign in with
     // Passkey" button, which a generic "Sign in with" selector would click
     // instead of the OIDC provider.
-    let sso = page.locator('button:has-text("Authelia"), a:has-text("Authelia")');
+    //
+    // BookStack's SSO control is a bare <button id="oidc-login"> with an icon
+    // and no text at all, so it has to be matched by id - but ONLY on the app's
+    // own page. Matching it on the portal would click the portal's own form
+    // instead of completing the password step.
+    let sso = onAuth()
+      ? page.locator('button:has-text("Authelia"), a:has-text("Authelia")')
+      : page.locator('#oidc-login, button:has-text("Authelia"), a:has-text("Authelia")');
     if ((await sso.count()) === 0) {
       sso = page.locator(
         'button:has-text("SSO"), a:has-text("SSO"), button:has-text("OpenID"), a:has-text("OpenID"), button:has-text("Sign in with"):not(:has-text("Passkey")), a:has-text("Sign in with")',
