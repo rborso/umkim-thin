@@ -155,7 +155,7 @@ const (
 // GatingSuites are the Playwright files whose failures fail CI. A check tag found
 // only outside these is informational (see CategoryAutoChecked).
 var GatingSuites = []string{
-	"apps.spec.ts", "auth.spec.ts", "tls.spec.ts", "console.spec.ts",
+	"apps.spec.ts", "ai.spec.ts", "auth.spec.ts", "tls.spec.ts", "console.spec.ts",
 	"home.spec.ts", "lib.spec.ts", "journeys/tenant.spec.ts",
 }
 

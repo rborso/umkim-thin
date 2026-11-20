@@ -22,6 +22,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | App | Auto | Chart | Human |
 |---|---|---|---|
 | actualbudget | auto-tested | 0.1.3 | - |
+| ai | auto-tested | 0.1.0 | - |
 | bookstack | auto-tested | 0.1.4 | 2026-11-20 (agent) |
 | gitea | auto-tested | 0.1.23 | 2026-11-19 (agent) |
 | homebox | auto-tested | 0.1.2 | 2026-11-19 (agent) |
@@ -42,6 +43,20 @@ resolves; an entry that names a check nothing carries fails the static gate.
 - `route_reachable` - apps.spec.ts
 - `authenticated_request_reaches_app` - apps.spec.ts
 - `oidc_sso_completes` - auth.spec.ts
+
+No human pass is recorded for this app.
+
+### ai
+
+- `route_reachable` - apps.spec.ts
+- `auth_challenge` - apps.spec.ts
+- `authenticated_request_reaches_app` - apps.spec.ts
+- `oidc_sso_completes` - auth.spec.ts
+- `llm_models_listed` - ai.spec.ts
+- `llm_completion_answers` - ai.spec.ts
+- `llm_cpu_mode_requests_no_gpu` - ci/ai-check.sh
+- `llm_backends_are_separate` - ci/ai-check.sh
+- `tenant_api_ai` - ai.spec.ts
 
 No human pass is recorded for this app.
 

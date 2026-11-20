@@ -305,7 +305,7 @@ set +e
 # journeys/tenant.spec.ts is in the gate: it proves an invited regular user can
 # sign in and do something in each app, which neither the login matrix nor the
 # app-admin journeys cover (see ci/e2e.sh).
-./node_modules/.bin/playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts \
+./node_modules/.bin/playwright test apps.spec.ts ai.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts \
   lib.spec.ts journeys/tenant.spec.ts --output "$REPORT_DIR/artifacts" >"$REPORT_DIR/gate.log" 2>&1
 gate_rc=$?
 set -e

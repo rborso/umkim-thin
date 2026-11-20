@@ -1,0 +1,89 @@
+name: ai
+displayName: Local AI
+description: Chat front end, one gateway URL, and pooled local inference backends.
+
+license:
+  chart: Apache-2.0
+  application: "Mixed: MIT (Open WebUI), MIT (LiteLLM), MIT (llama.cpp)"
+  url: "https://github.com/ggml-org/llama.cpp/blob/master/LICENSE"
+
+links:
+  homepage: "https://openwebui.com/"
+  source: "https://github.com/rborso/umkim-thin"
+
+chart:
+  ref: https://github.com/rborso/umkim-charts/tree/main/ai
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 1.83.7
+      channel: stable
+
+namespace: ai
+
+route:
+  mode: site
+  host: "chat.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: ai-webui
+  servicePort: 8080
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC; the local admin stays as breakglass."
+
+auth:
+  kind: oidc
+
+oidc:
+  clientId: openwebui
+  requirePkce: false
+  redirectUris:
+    - "https://{{ .host }}/oauth/callback"
+
+values:
+  webui:
+    externalUrl: "https://{{ .host }}"
+    persistence:
+      size: 2Gi
+      storageClass: "{{ .storage.configClass }}"
+    oidc:
+      enabled: true
+  backends:
+    - name: llama-a
+      # CPU-only by default: no driver, no device plugin, no GPU resource. The
+      # image is the CPU build, which is why gpu.enabled stays false here.
+      image: ghcr.io/ggml-org/llama.cpp:server
+      modelsMax: 1
+      ctxSize: 2048
+      parallel: 1
+      persistence:
+        size: 3Gi
+        storageClass: "{{ .storage.configClass }}"
+      resources:
+        requests: { cpu: 250m, memory: 512Mi }
+        limits: { memory: 1536Mi }
+
+verify:
+  # Two surfaces: the browser gate proves the stack answers, and a harness script
+  # proves the pod-spec properties a browser cannot see (no GPU request, one
+  # replica per backend).
+  playwright: tests/playwright/ai.spec.ts
+  harness: ci/ai-check.sh
+  checks:
+    - route_reachable
+    - auth_challenge
+    - authenticated_request_reaches_app
+    - oidc_sso_completes
+    - llm_models_listed
+    - llm_completion_answers
+    # Tagged in ci/ai-check.sh, not the browser gate: a pod spec is not visible
+    # to Playwright.
+    - llm_cpu_mode_requests_no_gpu
+    - llm_backends_are_separate
+    - tenant_api_ai
