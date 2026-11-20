@@ -127,11 +127,17 @@ export async function createUser(
       });
       if (redeemed.ok()) return;
       const text = await redeemed.text();
-      // An invitation never takes over an existing account. That is fine (and
-      // expected when several journeys share a user, or when a run is repeated
-      // against a live cluster), so treat it as success.
-      if (/already exists|never takes over/i.test(text)) return;
-      if (redeemed.ok()) return;
+      // An invitation never takes over an existing account, which is expected when
+      // a journey is retried or two tests share a user. Returning quietly is wrong
+      // though: the caller then holds a password that was never set, and every
+      // later login fails with what looks like a bad credential.
+      if (/already exists|never takes over/i.test(text)) {
+        // The account predates this run with an unknown password. Delete it and
+        // invite again, so the credentials returned here are the ones that work.
+        // (ci/portal-user.sh does the same for its own tenant.)
+        if (await deleteDirectoryUser(ctx, username)) continue;
+        return;
+      }
       lastError = `invite redeem failed: ${redeemed.status()} ${text}`;
       await new Promise((r) => setTimeout(r, 5000));
     } finally {
@@ -141,32 +147,13 @@ export async function createUser(
   throw new Error(lastError || `could not invite ${username}`);
 }
 
-// awaitDirectoryLogin waits until a freshly invited user can actually
-// authenticate. Redeeming an invite reports success as soon as the account is
-// written, but Authelia's LDAP bind can fail for a moment afterwards
-// ("LDAP Result Code 49 Invalid Credentials" for a user that has just been
-// created). Tests that reuse a warm portal session never noticed; a fresh
-// browser that must log in as the new user does, and the failure looks like a
-// bad password rather than a race.
-export async function awaitDirectoryLogin(
-  username: string,
-  password: string,
-  timeoutMs = 60_000,
-): Promise<void> {
-  const ctx = await anon();
-  try {
-    await waitFor(
-      async () => {
-        const r = await ctx.post(`https://${AUTH_HOST}/api/firstfactor`, {
-          data: { username, password, targetURL: `https://${AUTH_HOST}/` },
-        });
-        return r.status() === 200;
-      },
-      { what: `${username} to be able to sign in`, timeoutMs, intervalMs: 3000 },
-    );
-  } finally {
-    await ctx.dispose().catch(() => {});
-  }
+
+// deleteDirectoryUser removes a directory account through the console API. It is
+// only used for the ci-* test accounts this suite creates.
+async function deleteDirectoryUser(ctx: APIRequestContext, username: string): Promise<boolean> {
+  if (!/^ci-/.test(username)) return false;
+  const r = await ctx.delete(`https://${CONSOLE_HOST}/api/directory/users/${username}`);
+  return r.ok() || r.status() === 404;
 }
 
 // oidcLogin drives the real browser SSO flow of an OIDC app: open the app, get

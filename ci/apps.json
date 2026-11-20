@@ -150,12 +150,5 @@
       "host": "vaultwarden.{zone}",
       "auth": "oidc"
     }
-  ],
-  "miniflux": [
-    {
-      "name": "miniflux",
-      "host": "miniflux.{zone}",
-      "auth": "oidc"
-    }
   ]
 }

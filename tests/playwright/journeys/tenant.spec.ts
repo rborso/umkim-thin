@@ -251,7 +251,6 @@ test.describe('tenant can work in homebox and sparkyfitness', () => {
   const probes: { app: string; path: string }[] = [
     { app: 'homebox', path: '/api/v1/users/self' },
     { app: 'sparkyfitness', path: '/api/auth/get-session' },
-    { app: 'miniflux', path: '/v1/me' },
   ];
   for (const p of probes) {
     // The tag is per app: the check names in the catalog are
