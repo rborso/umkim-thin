@@ -1,0 +1,74 @@
+name: miniflux
+displayName: Miniflux
+description: RSS/Atom feed reader with a keyboard-driven UI, per-feed rules and a REST API.
+
+license:
+  chart: Apache-2.0
+  application: "Apache-2.0"
+  url: "https://github.com/miniflux/v2/blob/main/LICENSE"
+
+links:
+  homepage: "https://miniflux.app/"
+  source: "https://github.com/miniflux/v2"
+
+chart:
+  ref: https://github.com/rborso/umkim-charts/tree/main/miniflux
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 2.3.5
+      channel: stable
+
+namespace: miniflux
+
+route:
+  mode: site
+  host: "miniflux.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: miniflux
+  servicePort: 8080
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC; the app's own API also accepts an API key for clients."
+
+auth:
+  # OIDC so feeds and read state belong to directory users. Miniflux maps the
+  # admin role from a group claim, so the directory group decides who is admin.
+  kind: oidc
+
+oidc:
+  clientId: miniflux
+  redirectUris:
+    # Miniflux's own callback path, as documented upstream.
+    - "https://{{ .host }}/oauth2/oidc/callback"
+
+values:
+  externalUrl: "https://{{ .host }}"
+  persistence:
+    storageClass: "{{ .storage.configClass }}"
+  postgres:
+    persistence:
+      size: 2Gi
+      storageClass: "{{ .storage.configClass }}"
+  oidc:
+    enabled: true
+    clientId: miniflux
+    redirectUrl: "https://{{ .host }}/oauth2/oidc/callback"
+    providerName: "Directory"
+    # An invited tenant gets an account on first SSO login, the same as the other
+    # OIDC apps here; without this they would have to be created by an admin.
+    userCreation: true
+
+verify:
+  playwright: tests/playwright/journeys/miniflux.spec.ts
+  checks:
+    - route_reachable
+    - authenticated_request_reaches_app
+    - oidc_sso_completes
+    - tenant_api_miniflux

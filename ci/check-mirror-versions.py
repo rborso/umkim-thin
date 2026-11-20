@@ -67,12 +67,26 @@ def main() -> int:
             if f"{chart}-{v}.tgz" not in packaged:
                 problems.append(f"{name}: {chart} {v} is catalogued but not packaged")
 
-    # Offline rollback needs a second packaged version for every app chart.
+    # Offline rollback needs a second packaged version for every app chart - except
+    # a chart that has only ever published one version, where N-1 does not exist
+    # yet. The catalog is the authority on that: a single chart.versions entry
+    # means the chart is new, so there is nothing to roll back to.
+    first_release = set()
+    for path in sorted(pathlib.Path("catalog").glob("*.yaml")):
+        d = yaml.safe_load(path.read_text()) or {}
+        c = d.get("chart") or {}
+        if len(c.get("versions") or []) <= 1 and c.get("version"):
+            ref = str(c.get("ref") or "").rstrip("/")
+            chart = ref.split("/")[-1] if ref else (d.get("name") or path.stem)
+            first_release.add(chart)
+
     apps = pathlib.Path("charts/apps")
     if apps.is_dir():
         for d in sorted(apps.iterdir()):
             if not (d / "Chart.yaml").exists():
                 continue
+            if d.name in first_release:
+                continue  # first release: no N-1 to package
             cur = current_version(d.name)
             others = [n for n in packaged
                       if n.startswith(f"{d.name}-") and n != f"{d.name}-{cur}.tgz"]

@@ -26,6 +26,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | homebox | auto-tested | 0.1.2 | 2026-11-19 (agent) |
 | immich | auto-tested | 0.1.13 | 2026-11-19 (agent) |
 | mealie | auto-tested | 0.1.7 | 2026-11-19 (agent) |
+| miniflux | auto-tested | 0.1.0 | - |
 | nextcloud | auto-tested | 0.1.22 | 2026-11-19 (agent) |
 | paperless | auto-tested | 0.1.15 | 2026-11-19 (agent) |
 | servarr | auto-tested | 0.3.7 | 2026-11-19 (agent) |
@@ -94,6 +95,15 @@ Human pass 2026-11-19 by agent on chart 0.1.7 (single, ha):
 
 - completed the SSO round trip as the invited tenant and read /api/users/self
 - created a recipe as the app admin and searched for it by name
+
+### miniflux
+
+- `route_reachable` - apps.spec.ts
+- `authenticated_request_reaches_app` - apps.spec.ts
+- `oidc_sso_completes` - auth.spec.ts
+- `tenant_api_miniflux` - journeys/tenant.spec.ts
+
+No human pass is recorded for this app.
 
 ### nextcloud
 

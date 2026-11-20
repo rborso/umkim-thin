@@ -370,3 +370,41 @@ test.describe('homebox directory login', () => {
     await context.close();
   });
 });
+
+test.describe('miniflux directory login', () => {
+  test.skip(!installed('miniflux'), 'miniflux is not installed');
+
+  test('a directory user completes the Miniflux OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
+    test.setTimeout(120_000);
+    const host = hostOf('miniflux');
+    const username = ciUser('ci-miniflux');
+    const password = ciPassword();
+    await createUser(username, password, { displayName: username });
+
+    let callbackStatus = 0;
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username, password },
+      onPage: (p) =>
+        p.on('response', (r) => {
+          if (r.url().includes('/oauth2/oidc/callback')) callbackStatus = r.status();
+        }),
+      // Miniflux lands on /unread once the session exists; the OIDC login button
+      // is only on /login, so being off it is the signal that SSO completed.
+      ready: async (p) =>
+        p
+          .evaluate(async () => {
+            const r = await fetch('/v1/me', {
+              credentials: 'same-origin',
+              headers: { Accept: 'application/json' },
+            });
+            return r.status;
+          })
+          .then((s) => s === 200)
+          .catch(() => false),
+    });
+    expect(callbackStatus, 'Miniflux exchanged the code').toBeGreaterThanOrEqual(200);
+    expect(callbackStatus, 'Miniflux callback succeeded').toBeLessThan(400);
+    expect(page.url(), 'still on the app').toContain(host);
+    await context.close();
+  });
+});
