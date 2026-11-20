@@ -89,3 +89,14 @@ verify:
     # admin, then creates and reads back a project and a task. This is the check
     # that proves the REST surface works, not just that a login page loads.
     - vikunja_api_token_creates_task
+  human:
+    date: "2026-11-20"
+    version: "0.1.3"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "installed from the console on a clean dev-single and ha-dev; the post-install job created the vikunja-admin account and the app came up with 0 restarts"
+      - "signed in at the portal as a freshly invited tenant and completed the OIDC round trip; the app auto-registered the account and showed its project overview"
+      - "as that tenant, created a project through the UI's API and saw it in the tenant's own project list, then deleted it"
+      - "minted a scoped API token as vikunja-admin, created a project and a task, completed the task, read it back, and confirmed the due date survived"
+      - "confirmed the free-tier limitation is real: the login JWT carries is_admin:false and `user set-admin` refuses without a Pro licence"

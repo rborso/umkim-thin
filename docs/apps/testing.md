@@ -31,7 +31,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | servarr | auto-tested | 0.3.7 | 2026-11-19 (agent) |
 | sparkyfitness | auto-tested | 0.1.4 | 2026-11-19 (agent) |
 | vaultwarden | auto-tested | 0.1.3 | - |
-| vikunja | auto-tested | 0.1.0 | - |
+| vikunja | auto-tested | 0.1.3 | 2026-11-20 (agent) |
 | wireguard | auto-tested | 0.1.8 | - |
 
 ## What each check exercises
@@ -165,7 +165,13 @@ No human pass is recorded for this app.
 - `tenant_api_vikunja` - journeys/tenant.spec.ts
 - `vikunja_api_token_creates_task` - auth.spec.ts
 
-No human pass is recorded for this app.
+Human pass 2026-11-20 by agent on chart 0.1.3 (single, ha):
+
+- installed from the console on a clean dev-single and ha-dev; the post-install job created the vikunja-admin account and the app came up with 0 restarts
+- signed in at the portal as a freshly invited tenant and completed the OIDC round trip; the app auto-registered the account and showed its project overview
+- as that tenant, created a project through the UI's API and saw it in the tenant's own project list, then deleted it
+- minted a scoped API token as vikunja-admin, created a project and a task, completed the task, read it back, and confirmed the due date survived
+- confirmed the free-tier limitation is real: the login JWT carries is_admin:false and `user set-admin` refuses without a Pro licence
 
 ### wireguard
 
