@@ -26,7 +26,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | homebox | auto-tested | 0.1.2 | 2026-11-19 (agent) |
 | immich | auto-tested | 0.1.13 | 2026-11-19 (agent) |
 | mealie | auto-tested | 0.1.7 | 2026-11-19 (agent) |
-| miniflux | auto-tested | 0.1.0 | - |
+| miniflux | auto-tested | 0.1.0 | 2026-11-20 (agent) |
 | nextcloud | auto-tested | 0.1.22 | 2026-11-19 (agent) |
 | paperless | auto-tested | 0.1.15 | 2026-11-19 (agent) |
 | servarr | auto-tested | 0.3.7 | 2026-11-19 (agent) |
@@ -103,7 +103,12 @@ Human pass 2026-11-19 by agent on chart 0.1.7 (single, ha):
 - `oidc_sso_completes` - auth.spec.ts
 - `tenant_api_miniflux` - journeys/tenant.spec.ts
 
-No human pass is recorded for this app.
+Human pass 2026-11-20 by agent on chart 0.1.0 (ha):
+
+- installed through the console on the HA target; both pods Running on the first attempt
+- healthcheck returned OK and the log showed migrations applied to version 135
+- the console registered the OIDC client: the login page serves the Directory SSO link and /oauth2/oidc/callback answers
+- the route challenges with a redirect to the portal when unauthenticated
 
 ### nextcloud
 

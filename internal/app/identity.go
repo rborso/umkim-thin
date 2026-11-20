@@ -401,12 +401,21 @@ func (in *Installer) applyOIDCValues(e catalog.Entry, values map[string]any, cli
 		set(values, "sso.clientSecret", client.ClientSecret)
 		set(values, "sso.scopes", strings.Join(client.Scopes, " "))
 	default:
-		set(values, "oidc", map[string]any{
-			"enabled":      true,
-			"clientId":     client.ClientID,
-			"clientSecret": client.ClientSecret,
-			"issuerUrl":    issuer,
-		})
+		// Merge into whatever the catalog placed under oidc.* instead of replacing
+		// the map. Replacing dropped chart-specific fields - Miniflux's
+		// oidc.redirectUrl among them - so OAUTH2_REDIRECT_URL came out empty and
+		// Authelia rejected the authorize request with "The 'redirect_uri'
+		// parameter is required when using OpenID Connect 1.0".
+		existing, _ := values["oidc"].(map[string]any)
+		merged := map[string]any{}
+		for k, v := range existing {
+			merged[k] = v
+		}
+		merged["enabled"] = true
+		merged["clientId"] = client.ClientID
+		merged["clientSecret"] = client.ClientSecret
+		merged["issuerUrl"] = issuer
+		set(values, "oidc", merged)
 	}
 }
 
