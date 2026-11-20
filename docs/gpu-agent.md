@@ -439,8 +439,9 @@ runtime is post-cluster, and the two never race.
 - **Drop the EL9/EL10 branching** — one install path, direct packages.
 - **Drop "DKMS vs precompiled"** — DKMS against `kernel-devel-$(uname -r)` is the
   answer; precompiled-per-kernel is the thing to avoid.
-- **Drop "who reboots"** — the driver install reboots (it must, to load the module)
-  and the role owns it; the agent's `apply` reports `rebootRequired`.
+- **Drop "who reboots"** — the driver install reboots (it must; NVIDIA says so and
+  `dnf needs-restarting -r` confirms). The agent reports `rebootRequired` and the
+  console cordons/drains around it.
 - **Secure Boot** is a *known manual step* with an automated MOK import attempt.
 - **Runtime**: `nvidia` as the containerd **default**, not `runtimeClassName`.
 - **Add** `grubby` boot-kernel pinning, `nouveau` blacklisting, `nvidia-driver-selinux`,
@@ -457,20 +458,240 @@ runtime is post-cluster, and the two never race.
 | SELinux | Enforcing stays. `nvidia-driver-selinux` is part of the install set, not an afterthought. |
 | Container runtime | `nvidia` as containerd's default (`--nvidia-set-as-default`), persisted in `/etc/rancher/k3s/config.yaml`. `runtimeClassName` stays unset everywhere. |
 | Device plugin | Pinned DaemonSet, `deviceDiscoveryStrategy: nvml`, `failOnInitError: false`, tolerating `nvidia.com/gpu:NoSchedule`. NFD not required. |
-| Driver install timing | **Before** the cluster is bootstrapped, matching the umkim order — or `--force` on a ready node, which the design must make safe (see below). |
+| Driver install timing | **Before any app is installed on that node**, with cordon + drain around the reboot. Reboot is required, not conditional. |
+| Multi-GPU | Supported. `GET /gpus` returns every card; llama.cpp splits with `--split-mode layer` (default) or `tensor`, sized by `--tensor-split`. |
+| CPU-only | **First-class.** `:server` image, `-ngl 0`, no GPU resource. The AI stack must install and work on a cluster with zero GPUs. |
+
+## Does it really need a reboot?
+
+**Yes — and this is not a superstition, it is stated by NVIDIA and checkable.**
+
+From the NVIDIA driver installation guide (§ Reboot Notification): *"The kernel
+modules and the user space components of the driver must always be of the same
+version. After a driver installation or upgrade, the system must be rebooted to load
+the new kernel modules."*
+
+The driver packages register themselves with DNF as reboot-requiring, the same way
+the kernel does. So the requirement is machine-checkable rather than inferred:
+
+```sh
+dnf needs-restarting -r          # exit 1 = reboot required, exit 0 = not
+```
+
+That command comes from `dnf-plugins-core`, which **is installed** on the lab hosts
+(verified: `dnf-plugins-core-4.7.0-10.el10`), though the binary itself is not on
+`dev-single` today. `nvidia-driver` and `nvidia-driver-cuda` drop
+`nvidia-driver.conf` / `nvidia-driver-cuda.conf` into
+`/etc/dnf/plugins/needs-restarting.d/`, which is what makes the check meaningful.
+
+Could it be avoided? Technically sometimes — `modprobe nvidia` works if nothing has
+claimed the card, and you can unbind the console, `rmmod nouveau`, drop and re-scan
+the PCI bus. That is what the "install without rebooting" recipes do, and they are
+fragile: they require no nouveau claim, no X/Wayland, and no in-flight CUDA process,
+and they do not update the user-space/kernel-space version pairing the docs insist
+on. **On a node running k3s, do not do this.** The supportable path is reboot.
+
+So the design treats reboot as **required**, not conditional on a kernel change:
+
+| Situation | Action |
+|---|---|
+| Fresh driver install | reboot required, always |
+| Driver version change | reboot required (user/kernel-space mismatch otherwise) |
+| Nothing changed (idempotent run) | `dnf needs-restarting -r` decides; usually no reboot |
+| Kernel updated, driver rebuilt by DKMS | reboot **and** verify the new kernel is the one booted |
+
+The `plan` therefore reports `rebootRequired` from `dnf needs-restarting -r` rather
+than guessing, and the agent's `apply` refuses to close out with `rebootRequired`
+still true.
+
+## Ordering: drain, then reboot, and only before app install
+
+The decision: **cordon + drain → reboot → uncordon**, and the docs and console
+should insist it happens **before any app is installed on that node**.
+
+```sh
+kubectl cordon <node>
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data --timeout=600s
+# install driver, reboot
+kubectl uncordon <node>
+```
+
+Why before app install, and why the warning is not optional:
+
+- Draining guarantees nothing important is running, but it cannot guarantee nothing
+  *will be* — if an app schedules onto the node mid-reboot it lands on a node whose
+  kubelet is about to disappear, and the pod enters a confusing CrashLoop or
+  `NodeLost` rather than a clean reschedule.
+- A reboot on a single-node install is a **full platform outage**, not a rolling one.
+  On `dev-single` there is nowhere for the workloads to go, so "drain" is a courtesy
+  and the reboot is an outage. The console must say that plainly instead of implying
+  a graceful migration.
+- On HA the drain is real: two other nodes absorb the pods.
+
+So the warning has three distinct texts, and the agent should pick by cluster shape:
+
+| Cluster | Warning |
+|---|---|
+| single node | "Reboot will stop **every** workload on this node. There is no other node to move them to. Do this before installing apps." |
+| multi-node, other nodes healthy | "Workloads will move to other nodes. GPU workloads will stop until the reboot finishes." |
+| any node with GPU apps installed | "A GPU app is installed. Prepare the driver **before** installing it, or expect an outage." |
+
+The console should refuse to start a driver install while any app is installed on
+that node unless the operator explicitly acknowledges — a second confirmation, not
+just the `INSTALL` token.
+
+## Multi-GPU per host
+
+Supported, and it needs almost nothing from the platform — it is a chart-value
+problem, which is the good kind.
+
+**llama.cpp does the work.** Verified from upstream `docs/multi-gpu.md`:
+
+| Mode (`--split-mode`) | Behaviour | Use |
+|---|---|---|
+| `layer` (**default**) | pipeline parallel: each GPU holds a contiguous slice of layers, KV lives with its layer | default; tolerant of slow interconnect |
+| `tensor` (experimental) | splits weights **and** KV across GPUs; multiple cross-GPU reductions per layer | fastest token generation, but bottlenecked by interconnect |
+| `none` | one GPU only, chosen by `--main-gpu` | pin a model to one card |
+
+Relevant flags: `--tensor-split N0,N1,...` (proportions, e.g. `3,1` = 75/25, ordered
+by `--device`), `--main-gpu`, `--n-gpu-layers` (`all`/`999` to offload everything),
+`--list-devices` to enumerate.
+
+So the chart's contract is:
+
+```yaml
+resources:
+  limits:
+    nvidia.com/gpu: 2          # as many as the node has
+gpu:
+  splitMode: layer             # or tensor
+  tensorSplit: "1,1"           # optional; default splits by memory
+  nGpuLayers: all
+```
+
+and the device plugin advertises `nvidia.com/gpu: 2` from the node, which it does
+automatically once both cards are visible — that is a node-level property, not a
+per-app one.
+
+**What the agent must do for this:** report **all** cards from `lspci`, not the first
+match. The prior art takes `gpu_host_pci_matches | unique | first`, which is fine for
+validating one card but loses the second. `GET /gpus` returns an array with an index
+per device, plus a `count`, and the catalog lookup runs **per card** — a mixed
+node (e.g. one Turing + one Pascal) is legal, and each card gets its own
+`kmod_flavor`/version.
+
+Mixed flavours on one host are the one genuinely awkward case: you cannot load both
+the open and proprietary modules for different cards on the same kernel in the usual
+setup. The rule: **if any card requires proprietary, the whole node uses
+proprietary**, and the plan says so with a warning naming the cards that forced it.
+
+## CPU-only inference (no GPU at all)
+
+Explicitly supported and required. llama.cpp's plain `server` image is the CPU
+build; `server-cuda` is the GPU one. Verified from upstream's own docker example:
+
+```sh
+# CPU
+ghcr.io/ggml-org/llama.cpp:server
+# GPU
+ghcr.io/ggml-org/llama.cpp:server-cuda --n-gpu-layers 99
+```
+
+So the platform has **one app with two modes**, not two apps:
+
+| Node | Image | `-ngl` | Resource request | Notes |
+|---|---|---|---|---|
+| no GPU | `:server` | `0` (or omit) | none | works today, no device plugin, no driver |
+| GPU | `:server-cuda` | `all` | `nvidia.com/gpu: N` | needs everything in this document |
+
+Consequences worth building in:
+
+- **The AI stack must install on a cluster with zero GPU work.** Phase A/B of
+  `apps-plan.md` should not be blocked on the driver work at all — the same LiteLLM
+  + Open WebUI deployment points at a CPU llama.cpp when no GPU exists.
+- **The console must not refuse the install** just because `GET /gpus` returns
+  nothing; it should offer CPU mode and say what that means for speed.
+- **The pre-flight assert must not require a GPU** — it should assert "either a
+  device plugin advertises `nvidia.com/gpu`, or the deployment is CPU-only", and
+  fail only on the contradictory case (GPU resource requested, none advertised).
+- CPU throughput is a few tokens/second for anything above ~3B; the readiness and
+  gate timeouts must account for that, or the AI checks become flaky exactly where
+  the hardware is weakest.
+
+This also means the driver work is an **enhancement**, not a prerequisite, which is
+a much better place for it in the roadmap: ship CPU-only inference first, add GPU
+support without changing the app contract.
+
+## Tests for the hardware paths
+
+You asked for tests including pre-checks. The split:
+
+**Pre-check (always, cheap, no privileges):**
+
+```sh
+lspci -nn -d 10de:            # is there an NVIDIA card at all
+nvidia-smi -L                 # is a driver loaded For the running kernel
+dnf needs-restarting -r       # is a reboot outstanding
+mokutil --sb-state            # Secure Boot on?
+```
+
+Each maps to a named failure rather than a stack trace. `lspci` is the gate: no
+`10de:` device means the node is CPU-only and the agent must not install a driver.
+
+**Unit tests (fixtures, run in `ci/static.sh` via `go test`)** — the bulk:
+
+| Case | Fixture | Expectation |
+|---|---|---|
+| no GPU | empty `lspci` | `plan` refuses driver install; CPU mode offered |
+| one Turing card | `lspci` + `nvidia-smi` | open kmod, latest branch, no proprietary pin |
+| one Pascal card | same, `10de:1c8c` | proprietary, version pinned from catalog |
+| **two cards, both Turing** | two `10de:` lines | one plan, both cards listed, `count: 2` |
+| **two cards, Turing + Pascal** | mixed | proprietary for the node, **warning naming the forcing card** |
+| two cards, one already driven | partial `nvidia-smi` | plan reports the mismatch, does not reinstall blindly |
+| EL9 host | `osMajor: 9` | refused with "EL10 only" |
+| reboot outstanding | `needs-restarting -r` → 1 | `rebootRequired: true`, `apply` refuses to close |
+| Secure Boot + module not loaded | `mokutil` enabled | MOK import planned, manual step reported |
+| idempotent re-run | fully installed | "nothing to do", no reboot planned |
+
+**Multi-GPU integration test (needs hardware, or a faked device plugin):** assert the
+node advertises `nvidia.com/gpu: 2`, a pod requesting 2 schedules, and `--list-devices`
+inside it shows both. Without 2 cards, a fake device plugin advertising 2 is enough to
+prove the *scheduling* half; the llama.cpp split itself needs real cards.
+
+**CPU-only test (no hardware needed, runs everywhere):** deploy the AI stack with
+`:server`, assert `/v1/models` and a completion, and assert the app installed with
+**no** `nvidia.com/gpu` in its pod spec. This is the one that keeps CPU mode honest.
 
 ## Open questions that remain
 
-1. **Driver install on a *running* node.** The supported order is driver → reboot →
-   bootstrap. This platform installs the cluster first, so the agent will have to do
-   it afterwards. That means: pin the boot kernel, reboot with workloads running, and
-   accept that GPU nodes are drained first. Decide whether the agent drains
-   (`kubectl cordon` + `drain`) or simply documents "do this before installing apps".
-2. **Pascal-era cards.** Proprietary DKMS is capped at 610.57.04 while open reaches
-   620.70.06. If any target card is pre-Turing, it is stuck on an older branch and
-   that must be visible in the catalog and the console, not discovered at install.
-3. **Catalog schema.** Adopt the umkim `data/gpu/catalog.yaml` shape (PCI id →
-   flavour/version) or reshape it for the console's node model. The shape is small;
-   reusing it means the same file answers both products.
-4. **Multi-GPU per host.** The catalog is per PCI id; nothing assumes one card, but
-   nothing exercises more either. Confirm the target fleet before claiming it.
+Most of what this document listed originally is now decided; these are what is left.
+
+1. **Single-node reboot is an outage.** `dev-single` has one node and no GPU, so it is
+   not affected today — but if a GPU were ever added there, the drain is meaningless
+   and the reboot stops everything. Decide whether the console should refuse a driver
+   install on a single-node cluster, or allow it with the loud warning at
+   "Ordering: drain, then reboot" above.
+2. **Catalog schema** — adopt the umkim `data/gpu/catalog.yaml` shape (PCI id →
+   `kmod_flavor` + optional pinned `driver_version`, plus the CUDA repo URL) or
+   reshape it for the console's node model. Reusing it means one file answers both
+   products, and it is a small schema. Recommended: reuse, extended with a `count`
+   and per-index array so multi-GPU works.
+3. **Mixed-flavour nodes** — one Turing + one Pascal card forces the whole node to
+   proprietary. Is that acceptable, or should the agent refuse a mixed node outright
+   so the operator fixes the hardware? (Current design: allow, with a warning naming
+   the card that forced it.)
+4. **GPU node with apps already installed** — the console should require a second
+   acknowledgement beyond `INSTALL`. Confirm the wording/UX rather than inventing it.
+
+Resolved since the first draft, recorded so they are not reopened:
+
+| Was | Now |
+|---|---|
+| EL9 vs EL10 branching | EL10 only, direct packages (all four hosts verified 10.2) |
+| DKMS vs precompiled | DKMS against `kernel-devel-$(uname -r)` |
+| Does it need a reboot | Yes — NVIDIA's requirement, `dnf needs-restarting -r` checks it |
+| Who reboots | The agent reports, the console cordons/drains, the reboot follows |
+| Secure Boot | Automated MOK import + one documented manual step |
+| Runtime: default vs RuntimeClass | `nvidia` as the containerd default; `runtimeClassName` never set |
+| Multi-GPU | Supported via llama.cpp split modes; agent reports all cards |
+| CPU-only inference | First-class, `:server` image, no GPU resource |

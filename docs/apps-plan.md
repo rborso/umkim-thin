@@ -511,175 +511,66 @@ the user will notice. Name them `qwen3-8b` and `qwen3-8b-hq` if the quants diffe
 
 ### Phases
 
-- **A — LiteLLM + Open WebUI against one backend.** Proves the entrypoint, OIDC,
-  the model list and the gateway. Works on the current cluster today (with an
-  external or single local backend).
-- **B — second and third llama.cpp backends** joining the same model pool. This is
-  where the multi-node goal is actually met, and it needs no exotic networking.
-- **C — optional**: a large model split across nodes (vLLM/Ray) *only* if a model
+- **A — LiteLLM + Open WebUI + one CPU-only llama.cpp.** Ships on the current
+  cluster with no GPU, no driver and no device plugin. Proves the entrypoint, OIDC,
+  the model list and the gateway. This is the phase that unblocks everything else.
+- **B — second and third llama.cpp backends** joining the same model pool — CPU or
+  GPU, either works; the pool does not care. This is where the multi-node goal is
+  actually met, and it needs no exotic networking.
+- **C — GPU nodes, optional and independent.** The driver work in
+  [`gpu-agent.md`](gpu-agent.md). Improves speed; changes no app contract.
+- **D — optional**: a large model split across nodes (vLLM/Ray) *only* if a model
   must be served that no single node can hold, and the interconnect is fast.
 
-### GPU discovery and driver install: what is actually possible
+### GPU: not a prerequisite for this plan
 
-Short answer: **yes, and there are two distinct designs.** The platform already has
-the machinery for the harder one — a root systemd agent on the host, driven over a
-Unix socket, plus a conditional reboot with post-reboot verification in the Ansible
-`common` role. So this is a variation on an existing pattern, not new invention.
+**CPU-only inference is first-class.** llama.cpp's plain `server` image runs on CPU
+with `-ngl 0` and no GPU resource at all, so the whole AI stack in this document
+works on today's GPU-less cluster:
 
-First, the two things that must not be conflated:
+| Node | Image | `-ngl` | Resource |
+|---|---|---|---|
+| no GPU | `llama.cpp:server` | `0` | none |
+| GPU | `llama.cpp:server-cuda` | `all` | `nvidia.com/gpu: N` |
 
-- **Driver + container runtime** — kernel modules, `libnvidia-container`, containerd
-  configured to use `nvidia` as a runtime. This is *host state*.
-- **Device advertisement** — the API server learning the node has N GPUs, so
-  `resources.limits."nvidia.com/gpu"` is satisfiable. This is *cluster state*.
+That means the phases below ship **before** any driver work. GPU support is an
+enhancement to the same app contract, not a gate on it — which is a much better
+place for it in the roadmap, and it means the AI track and the driver track can
+proceed independently.
 
-A pod cannot install a kernel driver it then runs on (chicken-and-egg), which is why
-every solution splits these.
+The chosen design for adding GPU support is Option B — a root host `gpu-agent`
+mirroring the storage agent — and it is specified in full in
+[`gpu-agent.md`](gpu-agent.md): Rocky 10 only, DKMS, cordon/drain before the
+required reboot, multi-GPU per host, and fixture-based tests. It is deliberately not
+repeated here.
 
-#### Option A — NVIDIA GPU Operator (recommended if the host is otherwise standard)
+Two facts from that document worth knowing while reading this one:
 
-`nvidia/gpu-operator` deploys, as DaemonSets: Node Feature Discovery, the driver (in
-a container), the container toolkit, the device plugin, DCGM exporter. It is the
-industry path.
-
-The platform runs **Rocky Linux 10 only** (all four lab hosts are 10.2 — verified),
-which removes the mixed-OS problem the operator is usually brought in to solve. What
-remains is a different objection:
-
-- **It wants to own the driver.** `driver.enabled=true` needs a matching **driver
-  container per kernel version** (precompiled) or per OS (compiled). `uname -r`
-  changes with every kernel update, so that is a moving artifact to track — on a
-  single-OS fleet, for no benefit over `dnf`.
-- **Pre-installed drivers are supported, with a catch:** with `driver.enabled=true`
-  the operator's init container detects a host driver, labels the node
-  `nvidia.com/gpu.deploy.driver=pre-installed`, and skips the driver install. So it
-  degrades gracefully — but then you are back to installing the driver on the host
-  (Option B) while also running the operator for NFD/plugin/toolkit.
-- SELinux must be permissive **or** enforcing (not disabled) on RHEL-family hosts,
-  and there is no AutoNFS for offline/air-gapped installs — the driver image and the
-  operator charts must be mirrored.
-
-#### Option B — a host `gpu-agent`, mirroring the storage agent (**chosen**; full
-design in [`gpu-agent.md`](gpu-agent.md))
-
-This fits the platform's existing shape better, and is the one to build:
-
-```
-console  --(Unix socket, /run/umkim-thin/gpu.sock)-->  gpu-agent (root systemd)
-                                                          |
-                                                          +-- install driver (dnf module / NVIDIA .run)
-                                                          +-- install nvidia-container-toolkit
-                                                          +-- configure containerd -> nvidia runtime
-                                                          +-- verify: nvidia-smi reports N GPUs
-```
-
-Why this is the right shape *for this project*:
-
-- **The console already does exactly this** for storage: a fixed operation set over a
-  host-only Unix socket (`GET /disks`, `GET /state`, `POST /plan`, `POST /apply`,
-  `POST /remove`), socket not exposed off the node. A `gpu-agent` with
-  `GET /gpus`, `GET /driver`, `POST /plan`, `POST /apply` is the same contract, and
-  the safety framing (fixed ops, no arbitrary command execution) carries over.
-- **The Ansible role already reboots and verifies.** `common/tasks/main.yml` installs
-  a stock kernel, detects the running kernel lacks `xt_*` modules, reboots with
-  `ansible.builtin.reboot` (900 s timeout), re-gathers facts, and asserts the modules
-  are now present. A GPU role is that same block with `nvidia-smi` as the assertion.
-- **It is distro-aware in one place.** The `cuda-rhel10` repo, direct packages (EL10
-  has no DNF module stream), open vs proprietary per card, and the DKMS choice all
-  live in one role instead of being smeared across chart values.
-
-Concretely, the role's steps map onto what already exists:
-
-| Step | How |
-|---|---|
-| detect a GPU | `lspci -d 10de:` — the same PCI vendor id NFD keys on |
-| enable the repo | `dnf config-manager --add-repo` for `cuda-rhel<N>` |
-| install driver | `dnf module install nvidia-driver:<branch>/latest-dkms` (DKMS survives kernel updates) |
-| install toolkit | `nvidia-container-toolkit` + `nvidia-ctk runtime configure --runtime=containerd` |
-| reboot | only if a new kernel landed — the `common` role already has this pattern |
-| verify | `nvidia-smi -L` lists GPUs; `nvidia-ctk` config present; containerd has the runtime |
-| advertise | **still needed**: only the **device plugin** publishes `nvidia.com/gpu` |
-
-That last row is the part people miss: **installing the driver and toolkit does not
-make `nvidia.com/gpu` schedulable.** A device plugin DaemonSet (NVIDIA's, or the
-operator with `driver.enabled=false toolkit.enabled=false`) must run for the resource
-to appear. Plan for **NVIDIA's device plugin DaemonSet, not the full operator**, when
-the driver comes from the host.
-
-#### The hybrid, which is what I would actually do
-
-- **Host role / `gpu-agent`**: driver + toolkit + containerd runtime + `nvidia-smi`
-  verification. Kernel-specific, reboot-tolerant, distro-aware. This is the part the
-  operator is worst at: kernel-specific builds and reboots.
-- **Cluster-side**: the **NVIDIA device plugin** (DaemonSet, small) to advertise
-  `nvidia.com/gpu`, optionally **NFD** for `feature.node.kubernetes.io/pci-10de.present`
-  labels so GPU workloads can `nodeSelector` onto GPU nodes.
-- **Optionally** the GPU Operator later with `driver.enabled=false
-  toolkit.enabled=false` if you want its DCGM exporter/validator — but it is not
-  required, and adding it before the host side works only adds failure modes.
-
-Then the chart does the simple thing:
-
-```yaml
-resources:
-  limits:
-    nvidia.com/gpu: 1
-```
-
-and, **only if** the cluster uses a RuntimeClass instead of the device plugin
-resource, `runtimeClassName: nvidia`. Pick one mechanism per cluster and document it —
-mixing them yields pods that schedule fine and then cannot see a GPU.
-
-#### Discovery, concretely
-
-`gpu-agent`'s `GET /gpus` should report, per node:
-
-```json
-{ "node": "thin-ha-0",
-  "pci": ["10de:2684"],
-  "driver": "570.133.20",
-  "cuda": "12.8",
-  "devices": [{"index": 0, "name": "NVIDIA GeForce RTX 4090", "memory": "24564 MiB"}],
-  "runtime": "nvidia",
-  "devicePlugin": false }
-```
-
-That single payload answers the three questions that otherwise require SSH:
-*is there a GPU, does the driver match the kernel, and is the resource advertised?*
-The console can then refuse to install an AI app on a node where `devicePlugin` is
-false, with a message naming the missing step — instead of a pod that schedules and
-wedges.
-
-#### Order of work
-
-1. `gpu-agent` with **read-only** discovery first (`GET /gpus`): no installation, no
-   reboot, no risk. That alone makes GPU nodes visible and lets the console gate AI
-   installs.
-2. Ansible `gpu` role for driver + toolkit, reusing the existing reboot/verify block.
-3. NVIDIA device plugin DaemonSet (plus NFD if node labelling is wanted).
-4. Only then chart values, and only then the AI stack.
-
-Steps 1–3 are prerequisites for *any* GPU workload in this plan; none of the AI
-phases work without them.
+- A reboot **is** required after a driver install (NVIDIA's requirement; DNF can
+  report it with `needs-restarting -r`), so the driver step must happen **before any
+  app is installed** on that node.
+- Installing a driver and toolkit does **not** make `nvidia.com/gpu` schedulable —
+  a device plugin must run.
 
 ### Platform prerequisites this exposes
 
-1. **No GPU support exists in the platform today.** The driver, toolkit, device
-   plugin and node labelling are all missing; see the previous section for the
-   design and the order to build it in. Everything below assumes it exists.
+1. **No GPU support exists in the platform today** — but per the previous section
+   that only affects Phase C. Phases A and B are CPU-only and need none of it.
 2. **Cross-node traffic**: LiteLLM → llama.cpp is plain HTTP on the pod/service
    network, which the existing NetworkPolicies handle. (vLLM/Ray in Phase C is the
    exception — NCCL needs its own ports and the policies assume a single node.)
 3. **Model storage**: each node serving models needs the GGUFs locally — a PVC per
    node, tens of GB. On Longhorn that is replicated, so budget accordingly. Shares
    nothing with the split-model case, which needs the *same* weights everywhere.
-4. **Memory**: not on dev-single. It needs its own target with GPUs attached.
-5. **Registry**: the CUDA image is large (several GB) and the model weights are
-   larger. Neither belongs in the chart mirror, which is seeded into a ConfigMap;
-   the API already refuses anything over that budget. Weights come from a PVC the
-   operator populates, or are downloaded by an init container with a bounded
-   timeout — decide which, and do not make an install depend on a multi-GB download
-   succeeding.
+4. **Memory**: CPU inference is viable on dev-single only for small models (~1–3B)
+   and will be slow; a node with a GPU is required for anything bigger. Do not size
+   the AI target on the assumption GPUs exist.
+5. **Registry**: the CUDA image is several GB, the CPU `server` image is far
+   smaller, and the model weights are larger than either. Neither image belongs in
+   the chart mirror (which is seeded into a ConfigMap, and whose budget the API
+   already enforces). Weights come from a PVC the operator populates, or from an
+   init container with a bounded timeout — decide which, and do not make an install
+   depend on a multi-GB download succeeding.
 
 ### Gate strategy
 
@@ -698,6 +589,10 @@ Non-deterministic output, so assert shape and plumbing, never text:
   headers.
 - `llm_failover_keeps_serving` — stop one backend and assert requests still
   succeed (cooldown/fallback), which is the reliability half of "pool the machines".
+- `llm_cpu_mode_requests_no_gpu` — the CPU-only contract: the pod spec must contain
+  **no** `nvidia.com/gpu` limit, and the deployment must reach Ready on a cluster
+  with no device plugin. This is the check that keeps CPU mode honest and stops a
+  GPU requirement creeping into the default install.
 
 The balancing and sticky checks are deliberately a pair: with only one of them you
 cannot tell whether affinity is configured or merely absent. Both are cheap (a
