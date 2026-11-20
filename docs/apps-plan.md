@@ -540,20 +540,16 @@ every solution splits these.
 
 `nvidia/gpu-operator` deploys, as DaemonSets: Node Feature Discovery, the driver (in
 a container), the container toolkit, the device plugin, DCGM exporter. It is the
-industry path and it **supports Rocky 9** — NVIDIA explicitly added RHEL/Rocky 9
-driver images after a request for it.
+industry path.
 
-What it does *not* solve, and the reasons to think twice here:
+The platform runs **Rocky Linux 10 only** (all four lab hosts are 10.2 — verified),
+which removes the mixed-OS problem the operator is usually brought in to solve. What
+remains is a different objection:
 
-- **It wants to own the driver.** That means it needs a matching **driver container
-  per kernel version** (`driver.enabled=true`), which is why the docs require all GPU
-  nodes to run the same OS — or precompiled driver containers, which need one
-  DaemonSet **per kernel version**. `uname -r` changes with every kernel update, so
-  this is a moving target.
-- **Rocky 10 driver availability lagged.** Rocky 9 drivers do **not** work on 10;
-  they are built per major. The platform supports **both Rocky 9 and 10**, so the
-  "just use the operator" answer is version-dependent and must be checked against the
-  specific target, not assumed.
+- **It wants to own the driver.** `driver.enabled=true` needs a matching **driver
+  container per kernel version** (precompiled) or per OS (compiled). `uname -r`
+  changes with every kernel update, so that is a moving artifact to track — on a
+  single-OS fleet, for no benefit over `dnf`.
 - **Pre-installed drivers are supported, with a catch:** with `driver.enabled=true`
   the operator's init container detects a host driver, labels the node
   `nvidia.com/gpu.deploy.driver=pre-installed`, and skips the driver install. So it
@@ -588,9 +584,9 @@ Why this is the right shape *for this project*:
   a stock kernel, detects the running kernel lacks `xt_*` modules, reboots with
   `ansible.builtin.reboot` (900 s timeout), re-gathers facts, and asserts the modules
   are now present. A GPU role is that same block with `nvidia-smi` as the assertion.
-- **It is distro-aware in one place.** Rocky 9 vs 10 driver availability, the
-  `cuda-rhel9` vs `cuda-rhel10` repo, and the `nvidia-driver:latest-dkms` packaging
-  choice all live in one role instead of being smeared across chart values.
+- **It is distro-aware in one place.** The `cuda-rhel10` repo, direct packages (EL10
+  has no DNF module stream), open vs proprietary per card, and the DKMS choice all
+  live in one role instead of being smeared across chart values.
 
 Concretely, the role's steps map onto what already exists:
 
@@ -614,7 +610,7 @@ the driver comes from the host.
 
 - **Host role / `gpu-agent`**: driver + toolkit + containerd runtime + `nvidia-smi`
   verification. Kernel-specific, reboot-tolerant, distro-aware. This is the part the
-  operator is worst at on a mixed Rocky 9/10 fleet.
+  operator is worst at: kernel-specific builds and reboots.
 - **Cluster-side**: the **NVIDIA device plugin** (DaemonSet, small) to advertise
   `nvidia.com/gpu`, optionally **NFD** for `feature.node.kubernetes.io/pci-10de.present`
   labels so GPU workloads can `nodeSelector` onto GPU nodes.
@@ -810,7 +806,8 @@ so a reader can tell which is which.
 | vLLM multi-node = TP within a node, PP across nodes, via Ray | vLLM docs (parallelism and scaling) |
 | Multi-node over plain Ethernet measured ~33 tok/s (PP) / single-digit RPM (TP); **one model per box was ~10x faster** | published two-node vLLM benchmark |
 | Cloudron memory minimums quoted (384/256/1024 Mi) | Cloudron app API manifests |
-| NVIDIA GPU Operator supports **Rocky 9** (driver images added on request); RHEL/Rocky **9 drivers do not work on 10** — they are built per major | NVIDIA gpu-operator docs + issue tracker |
+| `cuda-rhel10.repo` is live (200, gpgcheck on) and carries `nvidia-driver*`, `nvidia-driver-selinux`, `nvidia-container-toolkit`, `kmod-nvidia-open-dkms` and `kmod-nvidia-latest-dkms`; driver 620.70.06, open DKMS to 620.70.06, **proprietary capped at 610.57.04** | live repo listing |
+| EL10 has **no DNF `nvidia-driver` module stream** (unlike EL9); packages are installed directly from `cuda-rhel10` | live repo + NVIDIA gpu-operator docs |
 | GPU Operator with `driver.enabled=true` on a node that already has a driver: the init container detects it, labels the node `nvidia.com/gpu.deploy.driver=pre-installed`, and skips the install | NVIDIA gpu-operator docs, "Pre-installed NVIDIA GPU drivers" |
 | Requiring one driver DaemonSet **per kernel version** (precompiled) or one per OS (compiled) — `driver.enabled=true` is why all GPU nodes must match | NVIDIA gpu-operator docs / NVIDIA Driver CRD |
 | Installing a driver + toolkit does **not** make `nvidia.com/gpu` schedulable; a device plugin (or NFD + plugin) must run | NVIDIA device-plugin and gpu-operator architecture docs |

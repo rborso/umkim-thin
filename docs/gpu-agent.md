@@ -14,14 +14,19 @@ This document chooses **Option B** from `apps-plan.md` § "GPU discovery and dri
 install": a root host agent mirroring the storage agent, plus the NVIDIA device
 plugin for cluster-side advertisement.
 
+**Target is Rocky Linux 10 only.** All four lab hosts are Rocky Linux 10.2 on
+`6.12.0-211.el10_2` (verified), and the platform supports nothing else in practice.
+That removes the EL9/EL10 branching from the design: there is one install path, and
+this document specifies it. EL9 support, if ever needed, is a catalog entry — not a
+code path.
+
 ## Why not the GPU Operator
 
 Recorded so the decision is not relitigated:
 
-- It supports Rocky 9, but **RHEL/Rocky 9 drivers do not work on 10** — they are
-  built per major, and this platform supports both Rocky 9 and 10.
-- `driver.enabled=true` requires a matching driver container **per kernel version**
-  (precompiled) or per OS (compiled), so every kernel update is a new artifact.
+- Its `driver.enabled=true` path needs a matching driver container **per kernel
+  version** (precompiled) or per OS (compiled), so every kernel update is a new
+  artifact to track — for no benefit over `dnf` on a single-OS fleet.
 - It is a large, privileged, fast-moving dependency for a platform whose whole
   selling point is a small pinned surface.
 
@@ -73,8 +78,8 @@ alone fixes "why does my pod not start".
 {
   "node": "thin-ha-0",
   "os": "rocky",
-  "osMajor": 9,
-  "kernel": "5.14.0-427.el9.x86_64",
+  "osMajor": 10,
+  "kernel": "6.12.0-211.49.1.el10_2.x86_64",
   "gpus": [
     { "pci": "10de:2684", "name": "NVIDIA GeForce RTX 4090",
       "memoryMiB": 24564, "driver": "570.133.20" }
@@ -122,8 +127,8 @@ would install, whether a reboot is required, and warnings:
 
 ```json
 { "steps": [
-    "enable repo: cuda-rhel9 (from https://developer.download.nvidia.com/...)",
-    "dnf module install nvidia-driver:570-dkms",
+    "enable repo: cuda-rhel10 (from https://developer.download.nvidia.com/...)",
+    "dnf install nvidia-driver nvidia-driver-cuda kmod-nvidia-open-dkms",
     "dnf install nvidia-container-toolkit",
     "nvidia-ctk runtime configure --runtime=containerd  (writes /etc/containerd/config.toml)",
     "restart containerd",
@@ -152,8 +157,8 @@ The agent must be idempotent and must refuse to act on a machine it does not
 understand. Order of checks, each producing a clear error rather than a partial
 install:
 
-1. Is this the distro we expect (Rocky/RHEL, major 9 or 10)? If the major is one we
-   have no driver repo for, **stop** — this is exactly the Rocky-10 gap.
+1. Is this Rocky/RHEL **major 10**? If not, stop: the platform targets EL10 only,
+   and a silent EL9 install would produce a driver for the wrong kernel ABI.
 2. Is `lspci` present and does it report a `10de:` device? No GPU → refuse to
    install a driver.
 3. Is a driver already present? Then do not reinstall; report the version, and check
@@ -188,10 +193,10 @@ version arrived at on real hardware, which this role should follow almost verbat
 |---|---|
 | gather | `lspci -nn`, assert a `10de:` device; read `mokutil --sb-state` |
 | catalog | look up PCI id → driver branch + per-OS overrides (not a fixed branch) |
-| repo | `cuda-rhel9.repo` or `cuda-rhel10.repo` by OS major |
+| repo | `cuda-rhel10.repo` (EL10 has no DNF module stream) |
 | prereqs | `kernel-devel-$(uname -r)`, `kernel-headers-$(uname -r)`, `gcc`, `make`, `pciutils`, `elfutils-libelf-devel`, EPEL (for dkms) |
 | nouveau | blacklist + rebuild initramfs |
-| driver | EL9: `dnf module enable nvidia-driver:<branch>-dkms`; EL10: direct packages, plus `crb`, EGL libs, and per-GPU open-vs-proprietary |
+| driver | direct packages from `cuda-rhel10` + `nvidia-driver-selinux`, `crb`, EGL libs, and per-GPU open-vs-proprietary |
 | dkms | `dkms autoinstall` after the packages |
 | reboot | only when the install changed something |
 | verify | `nvidia-smi -L` with retries, then **pin the boot kernel** with `grubby` |
@@ -296,41 +301,77 @@ specific value.
 overrides**, keyed by `10de:XXXX`:
 
 ```yaml
-driver_branches:
-  "535":
-    min_host_driver_version: "535.104.05"
-    el10_direct_packages: true          # EL10: direct packages, no DNF module
-    cuda_repo:
-      el9:  { url: .../rhel9/x86_64/cuda-rhel9.repo,  filename: cuda-rhel9.repo }
-      el10: { url: .../rhel10/x86_64/cuda-rhel10.repo, filename: cuda-rhel10.repo }
+cuda_repo:
+  url: https://developer.download.nvidia.com/compute/cuda/repos/rhel10/x86_64/cuda-rhel10.repo
+  filename: cuda-rhel10.repo
 
 pci_devices:
+  # Turing and newer: the open module on the current branch.
+  "10de:2684":
+    marketing_name: NVIDIA GeForce RTX 4090
+    vram_gb: 24
+    kmod_flavor: open
+  # Pascal-era mobile: not supported by the open module, and the proprietary
+  # branch is capped, so the version must be pinned.
   "10de:1c8c":
     marketing_name: NVIDIA GeForce GTX 1050 Ti
-    driver_branch: "535"
     vram_gb: 4
-    el10_kmod_flavor: proprietary      # not in the EL10 open module
-    el10_driver_version: "580.178.04"  # Pascal mobile needs the 580 legacy stack
+    kmod_flavor: proprietary
+    driver_version: "580.196.07"
 ```
 
 That is the answer to "which branch": **not one number, a lookup** — per GPU and per
-OS major. A single hardcoded branch is what breaks the moment a second GPU model or
-Rocky 10 appears, which is exactly the failure mode this document was worried about.
+PCI id. A single hardcoded branch is what breaks the moment a second GPU model
+appears — or, as here, when a mode switches to the newest hardware branch.
 
-### Rocky 9 vs 10 — both are supported, differently
+### EL10: there is no DNF module stream
 
-- **EL9**: `dnf module enable nvidia-driver:<branch>-dkms`, then
-  `nvidia-driver` / `nvidia-driver-cuda`.
-- **EL10**: **no DNF module** — install the packages directly from `cuda-rhel10`.
-  It also needs `kernel-modules-$(uname -r)` and `kernel-modules-extra-$(uname -r)`,
-  EPEL/CRB enabled, and the EGL packages (`egl-gbm`, `egl-wayland2`, `egl-x11`)
-  for the driver libs.
-- **Open vs proprietary**: some GPUs (e.g. Pascal mobile) are not in the EL10 *open*
-  kernel module and need `kmod-nvidia-latest-dkms` with an explicit version pin. The
-  catalog carries that per PCI id rather than assuming open works everywhere.
+The single structural difference from the older path, and the one that trips people
+up:
 
-So Rocky 10 *is* supported — the earlier "RHEL 10 drivers do not exist" concern is
-outdated, and the answer is per-GPU rather than per-OS.
+- **EL9** used `dnf module enable nvidia-driver:<branch>-dkms`.
+- **EL10 has no modules.** You install packages directly from the `cuda-rhel10`
+  repo. Anything that runs `dnf module ... nvidia-driver` on Rocky 10 either does
+  nothing or fails, because there is no such stream.
+
+Verified against the live repo (`cuda-rhel10.repo` returns 200, gpgcheck on):
+
+| Package | Present on `rhel10/x86_64` |
+|---|---|
+| `nvidia-driver`, `nvidia-driver-cuda`, `nvidia-driver-libs`, `nvidia-driver-cuda-libs`, `nvidia-driver-common` | yes |
+| `nvidia-driver-selinux` | yes — relevant, SELinux is enforcing |
+| `nvidia-container-toolkit`, `-base` | yes |
+| `kmod-nvidia-open-dkms` (open kernel module) | yes |
+| `kmod-nvidia-latest-dkms` (proprietary kernel module) | yes |
+
+Current versions in the repo at the time of writing: driver **620.70.06**,
+open DKMS up to **620.70.06**, and the **proprietary** DKMS tops out at
+**610.57.04**. That gap is the whole reason the catalog carries a per-GPU flavour
+flag — a card needing the proprietary module cannot be on the newest branch.
+
+### Rocky 10 needs more than the driver package
+
+Beyond `nvidia-driver*`, an EL10 install needs:
+
+- `kernel-modules-$(uname -r)` and `kernel-modules-extra-$(uname -r)` — k3s and the
+  driver both want netfilter/drm modules that the minimal EL10 image omits;
+- `kernel-devel-$(uname -r)`, `kernel-headers-$(uname -r)`, `gcc`, `make`,
+  `elfutils-libelf-devel` — DKMS builds against the **running** kernel;
+- **CRB** enabled (`dnf config-manager --set-enabled crb`) and **EPEL** for `dkms`;
+- `egl-gbm`, `egl-wayland2`, `egl-x11` — the driver libs link against these on EL10;
+- `nvidia-driver-selinux` — with SELinux enforcing, this is not optional.
+
+### Open vs proprietary is per-GPU, and it is a real fork
+
+- **Open** (`kmod-nvidia-open-dkms`) tracks the newest branch (620.x) and is the
+  default. It does **not** support pre-Turing hardware.
+- **Proprietary** (`kmod-nvidia-latest-dkms`) is required for Pascal and older, and
+  is pinned to an explicit version (e.g. `580.196.07` or `610.57.04`) rather than
+  "latest", because the branch caps out.
+
+So the catalog entry per PCI id carries `kmod_flavor` and, when proprietary, an
+explicit `driver_version`. Guessing "open on latest" is what produces a driver that
+installs cleanly and then fails to find the card.
 
 ### The operational details that matter
 
@@ -392,27 +433,44 @@ runtime is post-cluster, and the two never race.
 ## What this changes in the design above
 
 - **Drop the single `driverBranch` field** from the plan request. The agent takes
-  the PCI id and the OS major and **looks them up** in a catalog shipped with the
-  platform, exactly like the storage agent resolves storage classes.
-- **Drop "DKMS vs precompiled" as an open question** — DKMS with the running-kernel
-  `kernel-devel` is the working answer; precompiled-per-kernel was the thing to
-  avoid.
-- **Drop "who reboots"** — the driver install reboots (it must, to load the module),
-  and the role is the owner. The agent's `apply` reports `rebootRequired` and lets
-  the role do it, consistent with the pre-cluster/post-cluster split.
-- **Secure Boot** is a *known manual step* with an automated import attempt, not an
-  unsupported configuration.
-- **Runtime**: default-runtime approach, not RuntimeClass.
-- **Add** `grubby` boot-kernel pinning and `nouveau` blacklisting to the plan, and
-  the EL10 EGL/CRB/kernel-modules specifics.
+  the PCI id and **looks it up** in a catalog shipped with the platform, exactly like
+  the storage agent resolves storage classes. On EL10 the OS major is a constant, so
+  the only variable is the card.
+- **Drop the EL9/EL10 branching** — one install path, direct packages.
+- **Drop "DKMS vs precompiled"** — DKMS against `kernel-devel-$(uname -r)` is the
+  answer; precompiled-per-kernel is the thing to avoid.
+- **Drop "who reboots"** — the driver install reboots (it must, to load the module)
+  and the role owns it; the agent's `apply` reports `rebootRequired`.
+- **Secure Boot** is a *known manual step* with an automated MOK import attempt.
+- **Runtime**: `nvidia` as the containerd **default**, not `runtimeClassName`.
+- **Add** `grubby` boot-kernel pinning, `nouveau` blacklisting, `nvidia-driver-selinux`,
+  CRB, EPEL, the EGL libs, and `kernel-modules-$(uname -r)`.
+
+## Decisions taken for Rocky 10
+
+| Question | Decision |
+|---|---|
+| OS support | **EL10 only.** Anything else is refused by the agent, not half-installed. |
+| Driver source | `cuda-rhel10` repo, direct `dnf install` — no DNF module stream. |
+| Kernel module | **DKMS**, built against the running kernel, with `grubby` pinning that kernel as the default boot entry. |
+| Open vs proprietary | Per-PCI-id `kmod_flavor` in the catalog. Open by default; proprietary pinned to an explicit version for pre-Turing cards. |
+| SELinux | Enforcing stays. `nvidia-driver-selinux` is part of the install set, not an afterthought. |
+| Container runtime | `nvidia` as containerd's default (`--nvidia-set-as-default`), persisted in `/etc/rancher/k3s/config.yaml`. `runtimeClassName` stays unset everywhere. |
+| Device plugin | Pinned DaemonSet, `deviceDiscoveryStrategy: nvml`, `failOnInitError: false`, tolerating `nvidia.com/gpu:NoSchedule`. NFD not required. |
+| Driver install timing | **Before** the cluster is bootstrapped, matching the umkim order — or `--force` on a ready node, which the design must make safe (see below). |
 
 ## Open questions that remain
 
-1. Does this platform want the driver install **before** the cluster is bootstrapped
-   (the umkim order) or only on an already-running node? `install.sh` has no GPU
-   concept today, so the natural fit is "on a ready node, via the agent" — but then
-   the boot-kernel pin and reboot have to be safe with workloads running.
-2. **Multi-GPU / multi-node**: the catalog is per PCI id per node; nothing here
-   assumes more than one GPU per host. Confirm the target fleet.
-3. Whether to adopt the umkim catalog format as-is (it is a small YAML schema) or
-   reshape it for the console's node model.
+1. **Driver install on a *running* node.** The supported order is driver → reboot →
+   bootstrap. This platform installs the cluster first, so the agent will have to do
+   it afterwards. That means: pin the boot kernel, reboot with workloads running, and
+   accept that GPU nodes are drained first. Decide whether the agent drains
+   (`kubectl cordon` + `drain`) or simply documents "do this before installing apps".
+2. **Pascal-era cards.** Proprietary DKMS is capped at 610.57.04 while open reaches
+   620.70.06. If any target card is pre-Turing, it is stuck on an older branch and
+   that must be visible in the catalog and the console, not discovered at install.
+3. **Catalog schema.** Adopt the umkim `data/gpu/catalog.yaml` shape (PCI id →
+   flavour/version) or reshape it for the console's node model. The shape is small;
+   reusing it means the same file answers both products.
+4. **Multi-GPU per host.** The catalog is per PCI id; nothing assumes one card, but
+   nothing exercises more either. Confirm the target fleet before claiming it.
