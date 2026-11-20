@@ -14,6 +14,7 @@ import {
   waitFor,
   anon,
   appAdmin,
+  appToken,
   PORTAL_USER,
   PORTAL_PASS,
 } from './lib/session';
@@ -368,5 +369,93 @@ test.describe('homebox directory login', () => {
     expect(callbackStatus, 'HomeBox callback succeeded').toBeLessThan(400);
     expect(page.url(), 'still on the app').toContain(host);
     await context.close();
+  });
+});
+
+test.describe('vikunja directory login', () => {
+  test.skip(!installed('vikunja'), 'vikunja is not installed');
+
+  test('a directory user completes the Vikunja OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
+    test.setTimeout(120_000);
+    const host = hostOf('vikunja');
+    const username = ciUser('ci-vikunja');
+    const password = ciPassword();
+    await createUser(username, password, { displayName: username });
+
+    // Vikunja's callback is per provider key (/api/v1/auth/openid/<key>/callback),
+    // so this watches the app's own callback rather than a /oidc/callback path.
+    let callbackStatus = 0;
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username, password },
+      onPage: (p) =>
+        p.on('response', (r) => {
+          if (r.url().includes('/api/v1/auth/openid/')) callbackStatus = r.status();
+        }),
+      ready: async (p) =>
+        p
+          .evaluate(async () => {
+            const r = await fetch('/api/v1/user', {
+              credentials: 'same-origin',
+              headers: { Accept: 'application/json' },
+            });
+            return r.status;
+          })
+          .then((s) => s === 200)
+          .catch(() => false),
+    });
+    expect(callbackStatus, 'Vikunja exchanged the code').toBeGreaterThanOrEqual(200);
+    expect(callbackStatus, 'Vikunja callback succeeded').toBeLessThan(400);
+    expect(page.url(), 'still on the app').toContain(host);
+    await context.close();
+  });
+});
+
+test.describe('vikunja api token', () => {
+  test.skip(!installed('vikunja'), 'vikunja is not installed');
+  const admin = appAdmin('vikunja');
+  test.skip(!admin.user || !admin.pass, 'VIKUNJA admin credentials not set');
+
+  test('an API token creates a project and a task @check:vikunja_api_token_creates_task', async () => {
+    test.setTimeout(120_000);
+    const host = hostOf('vikunja');
+    const base = `https://${host}`;
+    // The hook mints a scoped token as the bootstrap admin; a token that cannot
+    // write would make this pass for the wrong reason, so the check writes.
+    const token = await appToken('vikunja', admin);
+    expect(token, 'the token hook returned a token').toBeTruthy();
+
+    const ctx = await anon();
+    const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const project = `ci-${ciUser('vj')}-${Date.now()}`;
+    let projectId = 0;
+    try {
+      const created = await ctx.put(`${base}/api/v1/projects`, {
+        headers: auth,
+        data: { title: project },
+      });
+      expect([200, 201], `create project -> ${created.status()} ${await created.text()}`.slice(0, 300)).toContain(
+        created.status(),
+      );
+      projectId = (await created.json()).id;
+
+      const taskTitle = `${project}-task`;
+      const task = await ctx.put(`${base}/api/v1/projects/${projectId}/tasks`, {
+        headers: auth,
+        data: { title: taskTitle },
+      });
+      expect([200, 201], `create task -> ${task.status()}`).toContain(task.status());
+      const taskId = (await task.json()).id;
+
+      // Read back through a different request: proves it persisted, not just
+      // that the create response echoed the payload.
+      const read = await ctx.get(`${base}/api/v1/tasks/${taskId}`, { headers: auth });
+      expect(read.status(), 'the task is readable back').toBe(200);
+      expect((await read.json()).title, 'the stored task is the one created').toBe(taskTitle);
+    } finally {
+      if (projectId) {
+        await ctx.delete(`${base}/api/v1/projects/${projectId}`, { headers: auth }).catch(() => undefined);
+      }
+      await ctx.dispose();
+    }
   });
 });

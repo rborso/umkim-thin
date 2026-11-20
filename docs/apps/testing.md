@@ -31,6 +31,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | servarr | auto-tested | 0.3.7 | 2026-11-19 (agent) |
 | sparkyfitness | auto-tested | 0.1.4 | 2026-11-19 (agent) |
 | vaultwarden | auto-tested | 0.1.3 | - |
+| vikunja | auto-tested | 0.1.0 | - |
 | wireguard | auto-tested | 0.1.8 | - |
 
 ## What each check exercises
@@ -152,6 +153,17 @@ Human pass 2026-11-19 by agent on chart 0.1.4 (single, ha):
 - `route_reachable` - apps.spec.ts
 - `authenticated_request_reaches_app` - apps.spec.ts
 - `oidc_sso_completes` - auth.spec.ts
+
+No human pass is recorded for this app.
+
+### vikunja
+
+- `route_reachable` - apps.spec.ts
+- `auth_challenge` - apps.spec.ts
+- `authenticated_request_reaches_app` - apps.spec.ts
+- `oidc_sso_completes` - auth.spec.ts
+- `tenant_api_vikunja` - journeys/tenant.spec.ts
+- `vikunja_api_token_creates_task` - auth.spec.ts
 
 No human pass is recorded for this app.
 

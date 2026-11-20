@@ -1,0 +1,77 @@
+name: vikunja
+displayName: Vikunja
+description: Shared task and project list with lists, kanban, gantt and reminders.
+
+license:
+  chart: Apache-2.0
+  application: "AGPL-3.0-or-later"
+  url: "https://github.com/go-vikunja/vikunja/blob/main/LICENSE"
+  note: >-
+    Self-hosting is free for any number of users. The admin panel, audit log and
+    time tracking are paid "Pro" features, and Vikunja gates the instance-admin
+    flag behind that licence, so a free install has no instance admin.
+
+links:
+  homepage: "https://vikunja.io/"
+  source: "https://github.com/go-vikunja/vikunja"
+
+chart:
+  ref: https://github.com/rborso/umkim-charts/tree/main/vikunja
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 2.8.0
+      channel: stable
+
+namespace: vikunja
+
+route:
+  mode: site
+  host: "vikunja.{{ .zone }}"
+  requireAuth: true
+  exposure:
+    default: authelia
+    allowed: [public, authelia, vpn]
+  serviceName: vikunja
+  servicePort: 3456
+  trusted:
+    management: true
+    vpn: true
+  appAuth:
+    kind: oidc
+    note: "Authelia OIDC; the bootstrap local account stays as breakglass."
+
+auth:
+  kind: oidc
+
+oidc:
+  clientId: vikunja
+  redirectUris:
+    # Vikunja's callback is per provider key, not the host root.
+    - "https://{{ .host }}/api/v1/auth/openid/authelia/callback"
+
+values:
+  externalUrl: "https://{{ .host }}"
+  persistence:
+    data:
+      size: 1Gi
+      storageClass: "{{ .storage.configClass }}"
+  postgres:
+    persistence:
+      size: 1Gi
+      storageClass: "{{ .storage.configClass }}"
+  bootstrap:
+    adminEmail: "vikunja-admin@{{ .zone }}"
+
+verify:
+  playwright: tests/playwright/journeys/vikunja.spec.ts
+  checks:
+    - route_reachable
+    - auth_challenge
+    - authenticated_request_reaches_app
+    - oidc_sso_completes
+    - tenant_api_vikunja
+    # Uses the per-user token hook: mints a scoped API token as the bootstrap
+    # admin, then creates and reads back a project and a task. This is the check
+    # that proves the REST surface works, not just that a login page loads.
+    - vikunja_api_token_creates_task

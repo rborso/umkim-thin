@@ -278,3 +278,56 @@ test.describe('tenant can work in homebox and sparkyfitness', () => {
     });
   }
 });
+
+test.describe('tenant can work in vikunja', () => {
+  test.skip(!installed('vikunja'), 'vikunja is not installed');
+  test.skip(!user || !pass, 'portal user not set');
+
+  test('a regular user signs in by SSO and works on a project @check:tenant_api_vikunja', async ({ browser }) => {
+    test.setTimeout(180_000);
+    const host = hostOf('vikunja');
+    // Vikunja auto-registers OIDC users, so this is a real first-use path: the
+    // invited tenant has no local account, and the app has to create one and let
+    // it own a project.
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username: user, password: pass },
+      ready: async (p) =>
+        p
+          .evaluate(async () => {
+            const r = await fetch('/api/v1/user', {
+              credentials: 'same-origin',
+              headers: { Accept: 'application/json' },
+            });
+            return r.status;
+          })
+          .then((s) => s === 200)
+          .catch(() => false),
+    });
+
+    const result = await page.evaluate(async (title: string) => {
+      const create = await fetch('/api/v1/projects', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      const created = await create.json().catch(() => null);
+      if (create.status >= 300) return { create: create.status, list: 0, found: false };
+      const list = await fetch('/api/v1/projects', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      });
+      const projects = await list.json().catch(() => []);
+      const found = Array.isArray(projects) && projects.some((p: any) => p.title === title);
+      if (created?.id) {
+        await fetch(`/api/v1/projects/${created.id}`, { method: 'DELETE', credentials: 'same-origin' });
+      }
+      return { create: create.status, list: list.status, found };
+    }, `tenant-${suffix}`);
+
+    expect([200, 201], `the tenant creates a project -> ${result.create}`).toContain(result.create);
+    expect(result.list, 'the tenant can list its projects').toBe(200);
+    expect(result.found, 'the project the tenant created is in its own list').toBe(true);
+    await context.close();
+  });
+});

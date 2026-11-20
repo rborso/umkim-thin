@@ -58,9 +58,12 @@ Three defects from the Miniflux attempt (0.3.22–0.3.26) shape this plan:
 | **BookStack** | real wiki; Markdown docs for the household | new | ~256 Mi | OIDC (PKCE, auto-register) | OIDC session + API token | medium |
 | **Vikunja** | shared task list; cheap and popular | new | ~100–200 Mi | OIDC | OIDC session + API token | low |
 
-Order matters: **Calibre-Web first** (no OIDC plumbing, no token, smallest), then
-**Vikunja** (proves OIDC + token in one place), then **BookStack**. The AI stack is
-a separate track with its own target (section 4).
+Order changed during implementation, for a reason worth keeping: **Calibre-Web
+went first as planned and was dropped** on reading its source - it cannot admit a
+freshly invited directory user (section 1). **Vikunja** was next and is done: it
+proves OIDC, tenant auto-registration and the token hook in one place. **BookStack**
+is the remaining app. The AI stack is a separate track with its own target
+(section 4).
 
 **Declined, with reasons (section 5):** PDF toolkits (Stirling's 5-user cap),
 inventory (HomeBox already covers it), ticketing (nothing inbound-mail based can
@@ -97,12 +100,42 @@ first.
 
 ---
 
-## 1. Calibre-Web
+## 1. Calibre-Web — dropped, with the reason
 
-**Why:** the catalog has no reading app. Calibre-Web serves a library over the
-web and over **OPDS**, so e-readers (KOReader, Moon+ Reader) can browse and
-download without a browser. Cloudron ships `9.18.0 (calibre 8.4.0)` at a 384 Mi
-minimum — the smallest of the three.
+**Decided against after reading the source, not the marketing copy.** The plan
+above assumed it was the easy one because it "has no OIDC client, no token, no
+per-user provisioning". That last clause is false, and it is disqualifying:
+
+- **Header login never creates an account.**
+  `load_user_from_reverse_proxy_header` looks the name up in Calibre-Web's own
+  `user` table and returns `None` if it is not there. Forward-auth supplies
+  `Remote-User`, the lookup misses, and the request falls through to the login
+  form.
+- **LDAP does not either.** `login_post` resolves `user` *first* and only then
+  calls `services.ldap.bind_user`, so an unknown directory account cannot get in
+  by LDAP either. There is a bulk "import LDAP users" admin button, but it pulls
+  a whole group and is not a per-login hook.
+- **There is no generic OIDC.** `oauth_bb.py` imports exactly the GitHub and
+  Google blueprints.
+
+So an invited Authelia user - the gate this platform now requires - would reach a
+login form and stop. The app also needs a pre-existing `metadata.db` to point at,
+so a bootstrap has to seed a library before anything works.
+
+The remaining options were (a) ship it admin-only and document that a real tenant
+cannot get in, (b) add a per-user provisioning path, or (c) drop it. It was
+dropped: (a) ships a user-visible lie for a reading app whose point is that
+people read, and (b) is a new platform capability, not a cheap app.
+
+**Recorded so it is not re-proposed** without an answer to "how does a freshly
+invited directory user get an account?" If that answer appears - a provisioning
+Job, or a Calibre-Web fork with real OIDC - the rest of the original analysis
+(chart shape, OPDS, the default `admin123` password that must be changed) still
+stands:
+
+- Serves a library over the web and over **OPDS**, so e-readers (KOReader,
+  Moon+ Reader) work without a browser. Cloudron ships `9.18.0 (calibre 8.4.0)`
+  at a 384 Mi minimum.
 
 **Chart:** `charts/apps/calibre-web` 0.1.0. Single Deployment, SQLite, one PVC for
 `/config` and one for the library (or a subPath of the same claim). No Redis, no
@@ -219,30 +252,59 @@ a household.
 **Chart:** `charts/apps/vikunja` 0.1.0. Single container + Postgres. Vikunja
 migrates on start.
 
-**Bootstrap:** verified — Vikunja ships a CLI with a non-interactive user
-command:
+**Bootstrap — corrected against 2.8.0, which is the version actually shipped.**
+
+Vikunja does ship a non-interactive user command, and the chart runs it directly
+(the image is `FROM scratch`, so there is no shell for a script):
 
 ```
-vikunja user create --username <u> --email <e> --password <p>   # --make-admin
+vikunja user create --username <u> --email <e> --password <p>
 ```
 
-(`--username` and `--email` are required; `--password` prompts if omitted, so a
-Job must pass it. `--make-admin` promotes the account.) A bootstrap Job creates
-the admin from a generated password in `vikunja-secrets`, matching BookStack.
+`--username` and `--email` are required and `--password` prompts if omitted.
+This part was right.
 
-**Auth:** `auth.openid.enabled=true`, with `VIKUNJA_AUTH_LOCAL_ENABLED` left on
-for breakglass. Registration must be **disabled**
-(`service.enableregistration=false`) or anyone can self-serve an account — worth
-a gating check of its own if you want it enforced.
+**`--make-admin` does not exist, and no free install can have an instance admin.**
+Two separate facts, both verified in a container:
+
+- `user create` never sets `is_admin` (there is no first-user-becomes-admin
+  logic anywhere in `CreateUser`).
+- The command that *would* set it, `user set-admin <u> --admin`, refuses on a
+  free instance: `IsFeatureEnabled(FeatureAdminPanel)` is false without a licence,
+  so it calls `log.Fatalf("The admin-panel license feature is not active")`.
+  **It also exits 0 while refusing**, so a chart that checked only the exit
+  status would silently ship a non-admin.
+
+That is a product decision, not a bug to work around: the vendor's pricing page
+lists the admin panel, audit log and time tracking as paid "Pro" features, and
+self-hosting is otherwise free for any number of users. So the chart creates the
+breakglass *account* and documents that there is no instance admin. A self-hosted
+Vikunja is fully usable that way — projects, tasks, sharing and OIDC all work,
+because `Project.CanCreate` returns true for an ordinary user. What is missing is
+the admin panel itself.
+
+**Auth:** `auth.openid.enabled=true` with `auth.local.enabled=true` for
+breakglass. The provider entry is a nested map, so the chart renders `config.yml`
+rather than env vars (both work; the file keeps the secret out of the
+environment). The secret itself goes in through upstream's `.file` indirection —
+`VIKUNJA_AUTH_OPENID_PROVIDERS_<KEY>_CLIENTSECRET_FILE` — verified both ways: with
+it the provider loads and `/api/v1/info` advertises it, without it the app logs
+`required key 'clientsecret' is missing` and drops the provider. Registration must
+be **disabled** (`service.enableregistration=false`) or anyone can self-serve an
+account.
 
 **Gating checks:**
 
 - standard trio
 - `oidc_sso_completes`
-- `vikunja_api_token_creates_task` — **needs the token hook**: `PUT
-  /api/v1/user/token` (or the UI's API-token page), then `PUT /api/v1/projects`
-  + `PUT /api/v1/projects/{id}/tasks`, and read the task back. Clean REST
-  surface, so this is the best first exercise of the token hook.
+- `tenant_api_vikunja` — an invited tenant's first use: OIDC auto-registration,
+  then create a project and see it in their own list.
+- `vikunja_api_token_creates_task` — the token hook's first real exercise. The
+  endpoint in the first draft of this document was **wrong**: it is
+  `PUT /api/v1/tokens` (with a title, an expiry and explicit permissions, and the
+  cleartext returned once), not `PUT /api/v1/user/token`, which only refreshes a
+  JWT. Then `PUT /api/v1/projects` + `PUT /api/v1/projects/{id}/tasks`, and read
+  the task back.
 
 ---
 
@@ -687,7 +749,12 @@ so a reader can tell which is which.
 | Calibre-Web ships `admin` / `admin123` | `cps/constants.py`: `DEFAULT_PASSWORD = "admin123"` |
 | BookStack OIDC: RS256 only, discovery supported, PKCE since v24.02, callback `/oidc/callback` | upstream OIDC docs |
 | BookStack `bookstack:create-admin --initial --generate-password` | upstream commands docs |
-| Vikunja CLI `user create --username --email --password [--make-admin]` | `pkg/cmd/user.go` |
+| Vikunja CLI is `user create --username --email --password`; there is **no** `--make-admin` | `pkg/cmd/user.go` v2.8.0 |
+| `user set-admin` refuses on a free instance (`admin_panel` is a paid feature) **and exits 0** while refusing | `pkg/cmd/user.go`, `pkg/license/license.go` |
+| `user create` never sets `is_admin`; an ordinary user can still create projects | `pkg/user/user_create.go`, `pkg/models/project_permissions.go` |
+| Vikunja reads provider secrets from `..._CLIENTSECRET_FILE` (verified: provider loads with it, is dropped without it) | container test, v2.8.0 image |
+| Vikunja's image is `FROM scratch` — no shell | `Dockerfile` |
+| postgres:18 needs `/var/lib/postgresql`, not `/var/lib/postgresql/data`; the app needs a writable `files/` | container test |
 | Vikunja OIDC: `auth.openid.enabled`, registration off via `service.enableregistration` | upstream config docs |
 | llama.cpp server is OpenAI-compatible **and** has a model router (`--models-dir`, `--models-max`) | `tools/server/README.md` |
 | LiteLLM is an OpenAI-format gateway with virtual keys/spend tracking; MIT except `litellm/enterprise/` | upstream README + LICENSE |

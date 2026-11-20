@@ -150,5 +150,18 @@
       "host": "vaultwarden.{zone}",
       "auth": "oidc"
     }
+  ],
+  "vikunja": [
+    {
+      "name": "vikunja",
+      "host": "vikunja.{zone}",
+      "auth": "oidc",
+      "token": { "adapter": "vikunja" },
+      "admin": {
+        "namespace": "vikunja",
+        "secret": "vikunja-secrets",
+        "user": "vikunja-admin"
+      }
+    }
   ]
 }
