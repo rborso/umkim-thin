@@ -54,14 +54,28 @@ values:
       storageClass: "{{ .storage.configClass }}"
     oidc:
       enabled: true
+  # Each backend entry REPLACES the chart's list item rather than merging into
+  # it, so it has to be complete - a field left out here does not fall back to
+  # values.yaml, it simply is not set. That is why `models` appears again: omit it
+  # and no model is downloaded, which is how the first install came up with an
+  # empty /models and a backend that answered for nothing.
   backends:
     - name: llama-a
-      # CPU-only by default: no driver, no device plugin, no GPU resource. The
-      # image is the CPU build, which is why gpu.enabled stays false here.
+      # CPU-only: the CPU image, no device resource, no driver. `gpu.enabled`
+      # stays false so ci/ai-check.sh can enforce that CPU mode requests no GPU.
       image: ghcr.io/ggml-org/llama.cpp:server
+      imagePullPolicy: IfNotPresent
+      gpu:
+        enabled: false
+      models:
+        - name: qwen2.5-0.5b-instruct-q4_k_m
+          url: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
       modelsMax: 1
+      modelsMemoryMargin: 0
+      preload: qwen2.5-0.5b-instruct-q4_k_m
       ctxSize: 2048
       parallel: 1
+      threads: 0
       persistence:
         size: 3Gi
         storageClass: "{{ .storage.configClass }}"
