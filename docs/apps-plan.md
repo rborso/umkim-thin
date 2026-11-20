@@ -61,8 +61,9 @@ Order matters: **Calibre-Web first** (no OIDC plumbing, no token, smallest), the
 **Vikunja** (proves OIDC + token in one place), then **BookStack**. The AI stack is
 a separate track with its own target (section 4).
 
-**PDF apps are dropped** by decision — Stirling's 5-user free cap, BentoPDF is
-client-side only, Gotenberg has no UI. Not in scope.
+**Declined, with reasons (section 5):** PDF toolkits (Stirling's 5-user cap),
+inventory (HomeBox already covers it), ticketing (nothing inbound-mail based can
+work without a mail transport).
 
 ## The prerequisite: a token hook in the test harness
 
@@ -505,8 +506,59 @@ Non-deterministic output, so assert shape and plumbing, never text:
 The balancing and sticky checks are deliberately a pair: with only one of them you
 cannot tell whether affinity is configured or merely absent. Both are cheap (a
 handful of short completions) and both are deterministic — no text assertion.
-- Time-box all of it; CPU inference must not make the gate flaky. If it exceeds the
-  budget, mark the AI checks informational.
+
+Time-box all of it; CPU inference must not make the gate flaky. If it exceeds the
+budget, mark the AI checks informational.
+
+## 5. Considered and declined
+
+Recorded so the same ground is not re-covered later. Each of these was evaluated
+and explicitly dropped.
+
+### Inventory / asset management — already covered
+
+The domestic case ("what do I own, when does the warranty end") is **HomeBox**,
+which is already in the catalog. Nothing else is needed:
+
+- **Snipe-IT** is IT-asset tracking for a small estate (assigned laptops, licence
+  seats). Its main value over a spreadsheet is expiry alerts **by email**, which
+  this platform cannot send, so it would arrive crippled.
+- **NetBox** models racks, IPAM and circuits — a datacenter tool with no data to
+  hold here.
+- **Grocy** is household stock, a different question again.
+
+If a real IT-asset need ever appears, the order is: notification transport first,
+then Snipe-IT.
+
+### Ticketing / helpdesk — nothing exists, and nothing is needed
+
+There is **no ticketing or helpdesk app** in the platform today, and nothing in the
+catalog references one (the word "ticket" appears only in security notes).
+
+What already covers "track this work":
+
+| Already here | Covers |
+|---|---|
+| **Gitea issues** (installed) | per-repo issues with labels, milestones, assignees |
+| **Nextcloud Deck** (if enabled) | kanban boards inside Nextcloud |
+| **Vikunja** (this plan, §3) | shared task lists — the lightest option |
+
+A *real* helpdesk (Zammad, FreeScout, osTicket) exists to turn **inbound email**
+into tickets. With no mail transport here, all three would be crippled on arrival —
+the same blocker as Snipe-IT. **Recommendation: no ticketing app.** If one is ever
+wanted: mail transport first, then Zammad, and re-check whether Gitea issues would
+have done.
+
+### PDF toolkits — dropped
+
+- **Stirling PDF** — free plan caps **5 users**; the limit was rejected.
+- **BentoPDF** — no user limit and a better privacy story (client-side), but **no
+  API**, so it can only be `auto-checked`, never `auto-tested`; also loads its WASM
+  from jsDelivr by default and carries a separately-licensed compression component.
+- **Gotenberg** — MIT, real API, no UI.
+
+Dropped by decision. If PDF returns, the honest split is BentoPDF for the UI and
+Gotenberg for the automatable half.
 
 ## What each app still needs before it is "added"
 
@@ -524,8 +576,6 @@ Per `docs/catalog.md` and the release trains, an app is not done when it install
 6. A human verification log (`verify.human`) for the chart version tested, or the
    entry shows no "verified" badge — which is the honest outcome if nobody has
    used it yet.
-
----
 
 ---
 
