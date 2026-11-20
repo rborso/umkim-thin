@@ -17,9 +17,9 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/vikunja
-  version: 0.1.0
+  version: 0.1.1
   versions:
-    - version: 0.1.0
+    - version: 0.1.1
       appVersion: 2.8.0
       channel: stable
 
