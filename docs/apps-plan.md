@@ -296,9 +296,9 @@ repeated `model_name`s.
 
 ### Sticky sessions: default on, and the trap to avoid
 
-**Sticky sessions should be the default**, and there is prior art for this in
-`rborso/umkim@devel` (`roles/fleet_llm`), which already runs a hub LiteLLM in
-front of per-node llama.cpp backends. Copy that design rather than reinvent it:
+**Sticky sessions should be the default** — a conversation that keeps landing on a
+different backend loses its prompt cache and feels erratic. The configuration below
+is the one to use:
 
 ```yaml
 # litellm config
@@ -322,11 +322,12 @@ Four things that matter, three of which are easy to get wrong:
    has its own pins and stickiness silently breaks under >1 replica. So the
    deployable unit is **LiteLLM + Redis**, not LiteLLM alone.
 
-2. **`session_affinity`, not `deployment_affinity`.** The umkim role documents this
-   explicitly: *"Do not enable `deployment_affinity` on the hub proxy: it pins by
-   API key hash and prevents load balancing across spokes for one key."* That is a
-   real trap — `deployment_affinity` sounds like what you want and quietly turns
-   your pool back into one backend per key.
+2. **`session_affinity`, not `deployment_affinity`.** Both exist and the wrong one
+   looks right. `deployment_affinity` pins **per API key**: every request bearing
+   that key — every user, every conversation — goes to the same backend, which
+   silently turns the pool back into one backend per key and defeats the point.
+   `session_affinity` pins per session id, which is what you want. Do not enable
+   `deployment_affinity` on a shared proxy.
 
 3. **The client must send a session id.** Stickiness is keyed on
    `x-litellm-session-id` (or `x-<vendor>-session-id`, or `metadata.session_id`).
@@ -360,10 +361,64 @@ headless Service rather than listed individually — and it means one llama.cpp
 Deployment scaled to N instead of N separate per-node Deployments. Pick one topology
 and stay consistent.
 
-There is also a stale-key hazard the umkim role handles: if `deployment_affinity`
-was ever enabled, its keys linger in Redis and keep pinning after you switch it
-off. That role deletes `deployment_affinity:*` on reconcile. Do the same, or a
-config change will not take effect.
+There is also a stale-key hazard: if `deployment_affinity` was ever enabled, its
+pins **linger in Redis** and keep pinning after the setting is turned off. A config
+change then appears not to take effect. On every reconcile, clear them:
+
+```sh
+kubectl -n <ns> exec deploy/redis -- sh -c \
+  'redis-cli --scan --pattern "deployment_affinity:*" | xargs -r redis-cli DEL'
+```
+
+Run it only while `deployment_affinity` is off — deleting pins while the feature is
+in use just moves traffic around.
+
+### The llama.cpp backend: what each node runs
+
+Each node is one `llama-server` process, not one per model. Two shapes, pick per
+node:
+
+**A. One model, pinned** — simplest, and the right default for a pool:
+
+```sh
+llama-server -hf Qwen/Qwen3-8B-GGUF:Q4_K_M \
+  --alias qwen3-8b \
+  --host 0.0.0.0 --port 8080 \
+  -c 8192        # context size; drives KV-cache memory
+  -ngl 99        # layers on GPU; 99 = all
+  -np 1          # parallel request slots; each costs KV memory
+  --jinja
+```
+
+- `--alias` sets the model id returned by `/v1/models`. **LiteLLM's `model_name`
+  must match it**, or requests 404 on a name the backend does not answer to.
+  Leaving `--alias` off makes llama.cpp derive the id from the GGUF filename, which
+  then drifts whenever you change the file — always set it.
+- `-c` (context) and `-np` (slots) multiply into KV-cache memory. `-c 8192 -np 1`
+  is a safe start on a 24 GB card; raising either is the usual cause of a server
+  that starts and then OOMs under load.
+- `-ngl 99` offloads every layer. Lower it only if the model does not fit.
+
+**B. Several models, router mode** — for a node that should offer more than one:
+
+```sh
+llama-server --host 0.0.0.0 --port 8080 \
+  --models-dir /models \
+  --models-max 2 \
+  --models-memory-margin 512
+```
+
+Each GGUF in `/models` becomes a model id. Multi-file models (multimodal, sharded)
+go in a **subdirectory**, with the projector file named `mmproj*`.
+
+`--models-max 2` and `--models-memory-margin 512` (MiB) are the ones that matter on
+a single GPU: without them the router will try to hold more models in VRAM than the
+card has, and the OOM kills the server rather than evicting a model. Set
+`--models-max` to what actually fits, and let the margin keep headroom.
+
+The upstream image is `ghcr.io/ggml-org/llama.cpp`, tag `server-cuda` for NVIDIA (a
+plain `server` tag for CPU). Each node needs the GGUF files on a volume — see the
+storage prerequisite below.
 
 ### What the config looks like
 
@@ -411,21 +466,13 @@ router_settings:
   cooldown_time: 30
 ```
 
-Each llama.cpp node is launched with its own model directory:
+The `api_base` values must be reachable from LiteLLM, and each `model_name` must
+equal the `--alias` that backend advertises (see the previous section), or the
+request 404s against a name the backend does not answer to.
 
-```sh
-llama-server --host 0.0.0.0 --port 8080 \
-  --models-dir /models --models-max 2 --models-memory-margin 512
-```
-
-`--models-max 2` and the memory margin matter on a single-GPU node: without them
-the router can try to hold more models in VRAM than the card has, and the OOM
-kills the server rather than the model.
-
-The umkim role also pins a **PEP 440 tag** (it uses `v1.102.2`, chosen because
-"session_affinity for sticky chats" landed in the 1.100 line) and caps memory
-(512Mi request / 1Gi limit) because a floating `:main` OOM-killed the hub at
-3–4 GiB. Both are worth keeping: pin the tag, cap the memory.
+Pin a **PEP 440 tag** for LiteLLM, not `:main` or `:latest` — `session_affinity`
+landed in the 1.100 line, so anything from about `v1.100` onward has it, and a
+pinned tag is what makes "the sticky behaviour you tested" the behaviour you get.
 
 ### Where tensor/pipeline parallelism fits (and why it is not the default)
 
@@ -474,16 +521,28 @@ the user will notice. Name them `qwen3-8b` and `qwen3-8b-hq` if the quants diffe
 ### Platform prerequisites this exposes
 
 1. **No GPU support exists in the platform today** — no `nvidia.com/gpu` resource,
-   no NVIDIA device plugin, no runtimeClass. Phase B needs the device plugin on the
-   GPU nodes and `resources.limits."nvidia.com/gpu"` in the charts. Platform change,
-   not a chart change.
+   no NVIDIA device plugin, no runtimeClass. Phase B needs, in order: the NVIDIA
+   **device plugin** (DaemonSet) so nodes advertise `nvidia.com/gpu`, the
+   **container toolkit** on each node, and then either
+   `resources.limits."nvidia.com/gpu": 1` in the chart **or** a
+   `runtimeClassName: nvidia` set up on the RuntimeClass. Which of the two you use
+   depends on whether the plugin advertises the resource; pick one per cluster and
+   document it, because mixing them produces pods that schedule and then cannot see
+   a GPU. This is a platform change, not a chart change.
 2. **Cross-node traffic**: LiteLLM → llama.cpp is plain HTTP on the pod/service
    network, which the existing NetworkPolicies handle. (vLLM/Ray in Phase C is the
    exception — NCCL needs its own ports and the policies assume a single node.)
 3. **Model storage**: each node serving models needs the GGUFs locally — a PVC per
    node, tens of GB. On Longhorn that is replicated, so budget accordingly. Shares
    nothing with the split-model case, which needs the *same* weights everywhere.
-4. **Memory**: not on dev-single. It needs its own target.
+4. **Memory**: not on dev-single. It needs its own target with GPUs attached.
+
+5. **Registry**: the CUDA image is large (several GB) and the model weights are
+   larger. Neither belongs in the chart mirror, which is seeded into a ConfigMap;
+   the API already refuses anything over that budget. Weights come from a PVC the
+   operator populates, or are downloaded by an init container with a bounded
+   timeout — decide which, and do not make an install depend on a multi-GB download
+   succeeding.
 
 ### Gate strategy
 
@@ -598,8 +657,7 @@ so a reader can tell which is which.
 | llama.cpp serves **many models from one process** in router mode (`--models-dir`, `--models-max`, `--models-memory-margin`) | `tools/server/README.md` |
 | LiteLLM pools deployments that share a `model_name`; `simple-shuffle` default; cooldowns on 429/>50% fails/401/404/408; `x-litellm-model-id` names the serving deployment | upstream load-balancing docs |
 | **Sticky sessions via `optional_pre_call_checks: [session_affinity]`, keyed on `x-litellm-session-id` / `metadata.session_id`, and requiring Redis to share pins across replicas** | LiteLLM load-balancing docs, session-affinity section |
-| **Do not enable `deployment_affinity` on a shared proxy** — it pins per API key and defeats balancing; stale `deployment_affinity:*` Redis keys keep pinning after the setting is turned off | `rborso/umkim@devel` `roles/fleet_llm` (comments + reconcile task) |
-| Prior art: umkim's hub runs LiteLLM pinned at `v1.102.2` with `simple-shuffle` + `session_affinity` + Redis in front of per-node `llama-cpp-helm` backends | `rborso/umkim@devel` charts + roles |
+| `deployment_affinity` pins **per caller/API key** (defeats balancing) while `session_affinity` pins per session id; stale `deployment_affinity:*` keys in Redis keep pinning after the setting is disabled | LiteLLM load-balancing docs (session-affinity settings table, "How it works") |
 | llama.cpp RPC exists for multi-host inference but is **"proof-of-concept … fragile and insecure"** per its own README | `tools/rpc/README.md` |
 | **exo is MLX/Apple-Silicon only** — no NVIDIA support | upstream README (all benchmarks M3 Ultra; MLX backend) |
 | vLLM multi-node = TP within a node, PP across nodes, via Ray | vLLM docs (parallelism and scaling) |
@@ -613,6 +671,10 @@ Assumptions **not** yet verified, and flagged as such:
   hook's feasibility).
 - Actual memory use of each on this platform (Cloudron's numbers are their
   minimums, not ours).
+- **LiteLLM sizing.** Budget ~1 GiB under load (512Mi request / 1Gi limit) and
+  expect it to need ~45 s before its readiness probe passes. These come from a
+  comparable LiteLLM + llama.cpp deployment rather than from this platform, and
+  they are the numbers most likely to be wrong here — measure before pinning.
 
 ## Open questions to settle before implementation
 
