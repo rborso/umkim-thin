@@ -131,6 +131,7 @@ export async function createUser(
       // expected when several journeys share a user, or when a run is repeated
       // against a live cluster), so treat it as success.
       if (/already exists|never takes over/i.test(text)) return;
+      if (redeemed.ok()) return;
       lastError = `invite redeem failed: ${redeemed.status()} ${text}`;
       await new Promise((r) => setTimeout(r, 5000));
     } finally {
@@ -138,6 +139,34 @@ export async function createUser(
     }
   }
   throw new Error(lastError || `could not invite ${username}`);
+}
+
+// awaitDirectoryLogin waits until a freshly invited user can actually
+// authenticate. Redeeming an invite reports success as soon as the account is
+// written, but Authelia's LDAP bind can fail for a moment afterwards
+// ("LDAP Result Code 49 Invalid Credentials" for a user that has just been
+// created). Tests that reuse a warm portal session never noticed; a fresh
+// browser that must log in as the new user does, and the failure looks like a
+// bad password rather than a race.
+export async function awaitDirectoryLogin(
+  username: string,
+  password: string,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const ctx = await anon();
+  try {
+    await waitFor(
+      async () => {
+        const r = await ctx.post(`https://${AUTH_HOST}/api/firstfactor`, {
+          data: { username, password, targetURL: `https://${AUTH_HOST}/` },
+        });
+        return r.status() === 200;
+      },
+      { what: `${username} to be able to sign in`, timeoutMs, intervalMs: 3000 },
+    );
+  } finally {
+    await ctx.dispose().catch(() => {});
+  }
 }
 
 // oidcLogin drives the real browser SSO flow of an OIDC app: open the app, get

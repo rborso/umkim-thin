@@ -10,6 +10,7 @@ import {
   portalSession,
   basic,
   createUser,
+  awaitDirectoryLogin,
   oidcLogin,
   waitFor,
   anon,
@@ -375,43 +376,67 @@ test.describe('miniflux directory login', () => {
   test.skip(!installed('miniflux'), 'miniflux is not installed');
 
   test('a directory user completes the Miniflux OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     const host = hostOf('miniflux');
     const username = ciUser('ci-miniflux');
     const password = ciPassword();
     await createUser(username, password, { displayName: username });
+    // A brand-new account can fail its first LDAP bind; wait until it really can
+    // sign in, or the portal form will reject a perfectly good password.
+    await awaitDirectoryLogin(username, password);
 
-    // Assert the *outcome* rather than the callback status seen by a page
-    // listener. Miniflux's login page contains "oidc" in its SSO link, which
-    // trips oidcLogin's inFlight() heuristic, and the callback can complete via a
-    // navigation the listener does not observe. What matters is that after the
-    // flow the app answers /v1/me for this identity - that endpoint returns 401
-    // (not a redirect) without a session, so a 200 here is real.
-    const { context, page } = await oidcLogin(browser, host, {
-      credentials: { username, password },
-      ready: async (p) =>
-        p
-          .evaluate(async () => {
-            const r = await fetch('/v1/me', {
+    // Drive the flow explicitly instead of through oidcLogin: Miniflux keeps its
+    // SSO entry point at /oauth2/oidc/redirect, so the whole app path contains
+    // "oidc" and the helper's in-progress heuristic never gets a stable page to
+    // click on. Doing it here is also the more honest test - it is exactly the
+    // sequence a person follows: portal login, click the SSO link, land in the app.
+    const context = await browser.newContext({
+      ignoreHTTPSErrors: process.env.UMKIM_THIN_STRICT_TLS !== '1',
+    });
+    const page = await context.newPage();
+
+    await page.goto(`https://${host}/`);
+    // The portal may already hold a session; only fill the form if it is shown.
+    const portalUser = page.locator('#username-textfield, input[autocomplete="username"]').first();
+    if (await portalUser.isVisible().catch(() => false)) {
+      await portalUser.fill(username);
+      const portalPass = page.locator('#password-textfield, input[autocomplete="current-password"]').first();
+      await portalPass.fill(password);
+      await portalPass.press('Enter');
+      await page.waitForURL((u) => !u.host.startsWith('auth.'), { timeout: 45_000 }).catch(() => {});
+    }
+    expect(new URL(page.url()).host, 'the portal let the user through').toContain(host);
+
+    // Miniflux renders "Sign in with <provider>" on its login page.
+    const sso = page.locator('a[href*="/oauth2/oidc/redirect"], a:has-text("Sign in with")').first();
+    await sso.waitFor({ state: 'visible', timeout: 30_000 });
+    await sso.click();
+
+    // The round trip is authelia's authorize endpoint, then Miniflux's callback.
+    // Landing on /unread means the session exists; /v1/me then proves it, because
+    // it answers 401 (not a redirect) without one.
+    await page.waitForURL((u) => u.host === host && !u.pathname.startsWith('/login'), { timeout: 60_000 });
+    let meStatus = 0;
+    let meID: unknown = null;
+    await expect
+      .poll(
+        async () => {
+          const r = await page.evaluate(async () => {
+            const res = await fetch('/v1/me', {
               credentials: 'same-origin',
               headers: { Accept: 'application/json' },
             });
-            if (r.status !== 200) return false;
-            const body = await r.json().catch(() => null);
-            return Boolean(body && body.id);
-          })
-          .catch(() => false),
-    });
-    const me = await page.evaluate(async () => {
-      const r = await fetch('/v1/me', {
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json' },
-      });
-      return { status: r.status, body: await r.json().catch(() => null) };
-    });
-    expect(me.status, 'Miniflux answers /v1/me after SSO').toBe(200);
-    expect(me.body?.id, 'the session belongs to a real Miniflux user').toBeTruthy();
-    expect(page.url(), 'still on the app').toContain(host);
+            return { status: res.status, body: await res.json().catch(() => null) };
+          }).catch(() => ({ status: 0, body: null }));
+          meStatus = r.status;
+          meID = r.body?.id;
+          return r.status;
+        },
+        { timeout: 30_000, intervals: [1000, 2000, 3000] },
+      )
+      .toBe(200);
+    expect(meID, 'the session maps to a Miniflux user').toBeTruthy();
+    expect(new URL(page.url()).host, 'still on the app').toBe(host);
     await context.close();
   });
 });

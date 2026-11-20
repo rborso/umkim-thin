@@ -259,6 +259,17 @@ func (d *Directory) Redeem(token, username, password, displayName, email string)
 		release()
 		return fmt.Errorf("username %q already exists; an invitation never takes over an account", username)
 	}
+	// LLDAP also enforces uniqueness on the email (case-insensitively). Check it
+	// here so a collision is reported as a sentence instead of surfacing the raw
+	// database error "UNIQUE constraint failed: users.lowercase_email", which is
+	// what an invitee saw when two invitations shared an address.
+	if found, err := d.userIDByEmail(base, token2, email); err != nil {
+		release()
+		return err
+	} else if found != "" {
+		release()
+		return fmt.Errorf("email %q is already used by the account %q; use a distinct address", email, found)
+	}
 
 	// Create the account, add it to its group, set the password.
 	create := struct {
@@ -455,6 +466,37 @@ func (d *Directory) groupID(base, token, name string) int {
 		}
 	}
 	return 0
+}
+
+// userIDByEmail returns the id of the account already using email, or "" when
+// none does. LLDAP does not expose an email lookup, so this walks the user list;
+// the directory is small (one tenant) and this runs once per redemption.
+func (d *Directory) userIDByEmail(base, token, email string) (string, error) {
+	var out struct {
+		Users []struct {
+			ID    string `json:"id"`
+			Email string `json:"email"`
+		} `json:"users"`
+	}
+	if err := d.gql(base, token, `{users{id email}}`, nil, &out); err != nil {
+		// A lookup failure must not block a legitimate redemption; the create call
+		// will still fail with the database error if the address really is taken.
+		return "", nil
+	}
+	for _, u := range out.Users {
+		if sameEmail(u.Email, email) {
+			return u.ID, nil
+		}
+	}
+	return "", nil
+}
+
+// sameEmail compares two addresses the way LLDAP does: case-insensitively and
+// ignoring surrounding space. Uniqueness is on the lowercased address, so a
+// user stored as Someone@Example.com collides with someone@example.com.
+func sameEmail(a, b string) bool {
+	a, b = strings.ToLower(strings.TrimSpace(a)), strings.ToLower(strings.TrimSpace(b))
+	return a != "" && a == b
 }
 
 // setPassword uses LLDAP's own helper inside the pod (there is no GraphQL
