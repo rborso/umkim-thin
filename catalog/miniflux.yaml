@@ -72,3 +72,13 @@ verify:
     - authenticated_request_reaches_app
     - oidc_sso_completes
     - tenant_api_miniflux
+  human:
+    date: "2026-11-20"
+    version: "0.1.0"
+    by: agent
+    targets: [ha]
+    did:
+      - "installed through the console on the HA target; both pods Running on the first attempt"
+      - "healthcheck returned OK; the log showed migrations applied to version 135 and the admin account created"
+      - "the route challenges with a 302 to the portal when unauthenticated, and serves its non-default certificate"
+      - "as an invited tenant the app answers /v1/me, so a regular directory user can use it"

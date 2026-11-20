@@ -168,7 +168,21 @@ export async function oidcLogin(
   const onAuth = () => page.url().includes(AUTH_HOST);
   // An OAuth round trip is in flight: the app is exchanging a code, or an
   // oidc/oauth route is doing the redirect. Clicking SSO again would start over.
-  const inFlight = () => /[?&]code=|oidc|oauth/i.test(page.url());
+  //
+  // Do not match a bare "oidc"/"oauth" in the app's path: Miniflux serves its SSO
+  // link at /oauth2/oidc/redirect, so the login page itself looked like a flow in
+  // progress and the helper never clicked the button. Only a completed
+  // authorization code on the URL, or the provider's own authorize endpoint,
+  // means a round trip is actually running.
+  const inFlight = () => {
+    if (/[?&]code=/.test(page.url())) return true;
+    try {
+      const u = new URL(page.url());
+      return /\/api\/oidc\/authorization|\.well-known\/openid-configuration/.test(u.pathname + '?' + u.search);
+    } catch {
+      return false;
+    }
+  };
 
   // The portal SPA: fill and submit when the form is shown. A browser that
   // already holds a session just gets redirected, so an absent form is fine.

@@ -381,15 +381,14 @@ test.describe('miniflux directory login', () => {
     const password = ciPassword();
     await createUser(username, password, { displayName: username });
 
-    let callbackStatus = 0;
+    // Assert the *outcome* rather than the callback status seen by a page
+    // listener. Miniflux's login page contains "oidc" in its SSO link, which
+    // trips oidcLogin's inFlight() heuristic, and the callback can complete via a
+    // navigation the listener does not observe. What matters is that after the
+    // flow the app answers /v1/me for this identity - that endpoint returns 401
+    // (not a redirect) without a session, so a 200 here is real.
     const { context, page } = await oidcLogin(browser, host, {
       credentials: { username, password },
-      onPage: (p) =>
-        p.on('response', (r) => {
-          if (r.url().includes('/oauth2/oidc/callback')) callbackStatus = r.status();
-        }),
-      // Miniflux lands on /unread once the session exists; the OIDC login button
-      // is only on /login, so being off it is the signal that SSO completed.
       ready: async (p) =>
         p
           .evaluate(async () => {
@@ -397,13 +396,21 @@ test.describe('miniflux directory login', () => {
               credentials: 'same-origin',
               headers: { Accept: 'application/json' },
             });
-            return r.status;
+            if (r.status !== 200) return false;
+            const body = await r.json().catch(() => null);
+            return Boolean(body && body.id);
           })
-          .then((s) => s === 200)
           .catch(() => false),
     });
-    expect(callbackStatus, 'Miniflux exchanged the code').toBeGreaterThanOrEqual(200);
-    expect(callbackStatus, 'Miniflux callback succeeded').toBeLessThan(400);
+    const me = await page.evaluate(async () => {
+      const r = await fetch('/v1/me', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    });
+    expect(me.status, 'Miniflux answers /v1/me after SSO').toBe(200);
+    expect(me.body?.id, 'the session belongs to a real Miniflux user').toBeTruthy();
     expect(page.url(), 'still on the app').toContain(host);
     await context.close();
   });

@@ -106,9 +106,9 @@ Human pass 2026-11-19 by agent on chart 0.1.7 (single, ha):
 Human pass 2026-11-20 by agent on chart 0.1.0 (ha):
 
 - installed through the console on the HA target; both pods Running on the first attempt
-- healthcheck returned OK and the log showed migrations applied to version 135
-- the console registered the OIDC client: the login page serves the Directory SSO link and /oauth2/oidc/callback answers
-- the route challenges with a redirect to the portal when unauthenticated
+- healthcheck returned OK; the log showed migrations applied to version 135 and the admin account created
+- the route challenges with a 302 to the portal when unauthenticated, and serves its non-default certificate
+- as an invited tenant the app answers /v1/me, so a regular directory user can use it
 
 ### nextcloud
 
