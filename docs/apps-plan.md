@@ -1,11 +1,11 @@
-# App expansion plan: Calibre-Web, BookStack, Stirling PDF, Vikunja
+# App expansion plan: Calibre-Web, BookStack, Vikunja + a multi-node AI stack
 
 Status: **proposal — nothing implemented.** Last reviewed 2026-11-20.
 Companions: [`catalog.md`](catalog.md) (entry format), [`testing.md`](testing.md)
 (gate taxonomy), [`versioning-plan.md`](versioning-plan.md) (chart packaging),
 [`apps/testing.md`](apps/testing.md) (generated per-app status).
 
-This document plans four apps and one self-hosted AI stack. For each app it
+This document plans three apps and one self-hosted AI stack. For each app it
 records what has to exist before it can be added, how it is bootstrapped, how it
 is verified, and what could go wrong. It is deliberately specific about the parts
 that have bitten us before (see "Lessons applied").
@@ -55,21 +55,19 @@ Three defects from the Miniflux attempt (0.3.22–0.3.26) shape this plan:
 |---|---|---|---|---|---|---|
 | **Calibre-Web** | ebooks + OPDS; the catalog has no reading app | new | ~384 Mi | forward-auth (reverse-proxy header) | trusted header | low |
 | **BookStack** | real wiki; Markdown docs for the household | new | ~256 Mi | OIDC (PKCE, auto-register) | OIDC session + API token | medium |
-| **BentoPDF** | PDF toolkit, **no user limit** | new | tiny (static) | forward-auth | header + page renders (no API) | low |
-| **Gotenberg** *(optional, infra)* | PDF API for automation | new | ~200–500 Mi | none (internal) | POST two PDFs, assert merged | low |
 | **Vikunja** | shared task list; cheap and popular | new | ~100–200 Mi | OIDC | OIDC session + API token | low |
 
-**Stirling PDF is dropped** — free plan caps users at 5 (see section 3).
-
 Order matters: **Calibre-Web first** (no OIDC plumbing, no token, smallest), then
-**BentoPDF** (same forward-auth pattern, no token), then **Vikunja** (proves OIDC +
-token in one place), then **BookStack**. The AI stack is a separate track with its
-own target.
+**Vikunja** (proves OIDC + token in one place), then **BookStack**. The AI stack is
+a separate track with its own target (section 4).
+
+**PDF apps are dropped** by decision — Stirling's 5-user free cap, BentoPDF is
+client-side only, Gotenberg has no UI. Not in scope.
 
 ## The prerequisite: a token hook in the test harness
 
-Two of the four (BookStack, Vikunja) and Stirling's API need a **per-user API
-token** to let the gate act as a signed-in user. Today the harness has no way to
+Both OIDC apps (BookStack, Vikunja) need a **per-user API token** to let the gate
+act as a signed-in user. Today the harness has no way to
 mint one, which is exactly why Miniflux could not be verified.
 
 Proposed shape, minimal:
@@ -102,7 +100,7 @@ first.
 **Why:** the catalog has no reading app. Calibre-Web serves a library over the
 web and over **OPDS**, so e-readers (KOReader, Moon+ Reader) can browse and
 download without a browser. Cloudron ships `9.18.0 (calibre 8.4.0)` at a 384 Mi
-minimum — the smallest of the four.
+minimum — the smallest of the three.
 
 **Chart:** `charts/apps/calibre-web` 0.1.0. Single Deployment, SQLite, one PVC for
 `/config` and one for the library (or a subPath of the same claim). No Redis, no
@@ -210,60 +208,7 @@ the first app to exercise it with more than one extra field.
   fall back to the browser journey + `bookstack_page_created_in_ui` and label the
   entry `auto-checked` rather than `auto-tested` — do not fake it.
 
-## 3. PDF toolkit: BentoPDF, not Stirling
-
-**Stirling is out.** Its licence caps the free plan at **5 users**, and the user
-declined that limit. Verified from upstream's plans table: "all PDF tools and
-OAuth2/OIDC SSO" are on Free, but "Users: 5". Raising it needs the Team plan. That
-is a licensing constraint on the product, not a technical one, so it is settled:
-no Stirling.
-
-Two genuinely unencumbered alternatives, with very different shapes:
-
-| | **BentoPDF** | **Gotenberg** |
-|---|---|---|
-| Licence | AGPL-3.0 (plus a **commercial add-on** for Hyper Compress/Kura) | MIT |
-| User limit | none | none (no user model at all) |
-| Shape | **client-side**: PDF work happens in the browser, the server is static files | **server-side API**: multipart in, PDF out |
-| UI | yes — 50+ tools | **none** |
-| API | **none** (nothing to call) | full REST |
-| Memory | tiny (nginx + static assets) | ~200–500 Mi (Chromium + LibreOffice inside) |
-| Gate-able | route + auth + page renders only | **real**: POST two PDFs, get a merged one |
-
-**Recommendation: ship both, for different jobs.**
-
-- **BentoPDF** is the user-facing toolkit. It is the closest replacement for what
-  people actually used Stirling's UI for (merge, split, rotate, sign, OCR, convert)
-  and it removes the server from the trust path entirely — the file never leaves
-  the browser. That is a genuinely better privacy story than Stirling, and worth
-  saying in the catalog description.
-  - Caveat 1: **its WASM modules load from jsDelivr by default.** For a
-    self-hosted install that is an outbound dependency on a third party at runtime.
-    The chart must vendor the WASM (upstream documents an air-gapped mode) and the
-    catalog description must not claim "fully offline" unless that is done.
-  - Caveat 2: AGPL plus a **commercial** component — the README is explicit that
-    bundled Hyper Compress is licensed separately ("using the engine on its own, on
-    a server, through an API ... needs a separate Hyper Compress license"). Serving
-    BentoPDF's own UI to end users is in scope; **do not** repurpose its
-    compression engine as a platform API. Read the README's licence section before
-    packaging, and record the conclusion in `docs/licenses.md`.
-  - Because it has no API, its checks can only be `route_reachable`,
-    `auth_challenge`, `authenticated_request_reaches_app` plus a "the tool list
-    renders" check. It would be **auto-checked**, not auto-tested — and the entry
-    should say so rather than pretend.
-
-- **Gotenberg** is the *automation* piece: no UI, MIT, no user limit, and a real
-  API, which makes it trivially gate-able ("POST two PDFs to /forms/libreoffice/convert
-  or /merge, assert page count 2"). It is not a replacement for a PDF *app* — nobody
-  wants Gotenberg as their merge tool — but it is what makes PDF operations
-  available to other apps and to scripts, and it never has a licence surprise.
-
-Decision to make: **BentoPDF alone** (simplest, user-facing, weak verification) or
-**BentoPDF + Gotenberg** (both jobs, honest verification available for the half
-that has an API). I would ship both, and keep the Gotenberg entry described as an
-infrastructure service rather than an app.
-
-## 4. Vikunja
+## 3. Vikunja
 
 **Why:** shared task/project list. Cheap (Cloudron lists no minimum; expect
 100–200 Mi), OIDC-capable, per-user API tokens, postgres. Popular and on-brand for
@@ -299,142 +244,180 @@ a gating check of its own if you want it enforced.
 
 ---
 
-## 5. Self-hosted AI across multiple nodes
+## 4. Self-hosted AI: one entrypoint, many backends (multi-node)
 
-Goal: **one model served across several machines' GPUs** — e.g. three PCs with one
-GPU each pool into one model that none of them could hold alone. Plus Open WebUI
-as the interface, and LiteLLM as the gateway.
+Goal, restated to match what is actually wanted: **a single URL that pools several
+inference servers**, so a fleet of machines shares the load — and can serve several
+different models at once. Not "split one model across machines".
 
-This is outside the platform's current concept and that is fine — but it must be
-built on facts, and the facts change the design substantially.
+That distinction is the whole design, and it is also the better-performing one.
 
-### What actually works, and what does not (verified)
-
-| Option | Multi-node | Works on your 3× NVIDIA PCs | Verdict |
-|---|---|---|---|
-| **llama.cpp RPC** (`ggml-rpc-server`) | yes, by design | yes (CUDA backend) | **Its own README says "proof-of-concept … fragile and insecure. Never run the RPC server on an open network."** Usable on a trusted LAN, not a product feature. |
-| **exo** | yes, automatic discovery + tensor parallel | **no — MLX / Apple Silicon only** | Excellent for Mac Studios, wrong for NVIDIA. Its benchmarks are all M3 Ultra. |
-| **vLLM + Ray** | yes: TP within a node, PP across nodes | **yes** | The production answer for NVIDIA. Needs Ray, and inter-GPU networking. |
-| **llama.cpp router** (`--models-dir`) | no — one node, many models | yes | Complements the above: picks *which model*, not *which machine*. |
-
-### The finding that matters most
-
-A published two-node vLLM experiment over **ordinary Ethernet** (one GPU per box)
-measured the reality:
-
-- tensor parallel: sharded fine, but throughput was single-digit requests/minute —
-  TP all-reduces after *every layer*, and each round trip crosses the network;
-- pipeline parallel: better, but ~**33 tok/s** and p95 latency ~136 s, because
-  every decoded token crosses the wire once and the hop cost ~25–30 ms;
-- **"the boring answer wins": one independent model per box, no distributed
-  inference, gave ~10× the aggregate throughput.**
-
-So the multi-node story is only good when the interconnect is fast (NVLink,
-InfiniBand, RDMA/Thunderbolt). Over gigabit Ethernet, pooling three GPUs to serve
-one model can be **slower than running three smaller models side by side** — while
-feeling like a bigger number. Any plan that promises "pool your 3 PCs" must say
-this out loud, because the user's expectation ("utilize all of them") is met better
-by *serving three models* than by *splitting one*.
-
-### The design that fits that finding
-
-One URL, many backends, and the model picked by request — not by splitting one
-model across a slow network.
+### The architecture
 
 ```
 Open WebUI
-    |  (OpenAI format, one base URL)
-LiteLLM  --- model/virtual-key/spend policy
-    |            |
-llama.cpp #1   llama.cpp #2   llama.cpp #3     (one per node, each on its own GPU)
+    |   one base URL, OpenAI format
+LiteLLM proxy            <- the single entrypoint: load balancing, model list,
+    |                       fallbacks, virtual keys, spend
+    +-- llama.cpp @ node-a   gpu-a, models: qwen3-8b, llama-3.2-3b
+    +-- llama.cpp @ node-b   gpu-b, models: qwen3-8b, mistral-7b
+    +-- llama.cpp @ node-c   gpu-c, models: qwen3-8b
 ```
 
-- **Each node runs its own llama.cpp server** with `--models-dir` + `--models-max`,
-  so a node can hold a few small models and swap them. This is the "boring answer"
-  that measured 10× better.
-- **LiteLLM** exposes all of them as one endpoint and decides which backend serves
-  which model name. It is also where per-user virtual keys and budgets live, which
-  is the right place for that policy.
-- **Tensor/pipeline parallelism is an opt-in escape hatch**, not the default: worth
-  enabling only when the model genuinely does not fit on one node *and* the link
-  is fast. Document the threshold, do not promise the speed.
+Two capabilities do the work, both verified:
 
-If the goal is specifically "run a 70B across three 24 GB cards over Ethernet",
-that is doable with vLLM TP/PP + Ray, but it will be slow and should be described as
-a capacity play, not a performance one.
+**1. llama.cpp serves *many* models from one process.** Router mode:
+`--models-dir /models`, `--models-max N` (default 4; 0 = unlimited),
+`--models-memory-margin` (unload LRU models until a new one fits),
+`--models-autoload`. It exposes each GGUF at `/v1/models` and loads/unloads on
+demand. So "one llama.cpp per *node*", not per model — which changes the earlier
+plan and removes most of the container sprawl.
+
+**2. LiteLLM load-balances by model name.** Multiple `model_list` entries sharing
+the same `model_name` form a pool; a request for that name is distributed across
+them. Verified from upstream's load-balancing docs:
+
+- default strategy is **`simple-shuffle`** (recommended for production), with
+  `weight`, `rpm`, `tpm`, `rpd`, `tpd` per deployment;
+- other strategies: `least-busy`, `latency-based-routing`,
+  `usage-based-routing-v2`, `cost-based-routing`, priority via `order`;
+- **cooldowns**: a failing deployment is removed from the pool automatically
+  (429 → 5 s; >50% failures in a minute; 401/404/408), then re-introduced;
+- **retries + fallbacks** across deployments, with `allowed_fails_policy` per
+  deployment;
+- **`x-litellm-model-id`** response header names which deployment served a
+  request — this is what makes multi-node *testable*;
+- session affinity exists if a conversation must stay on one backend
+  (`optional_pre_call_checks: ["session_affinity"]`).
+
+So load balancing across nodes costs no custom code: it is a `model_list` with
+repeated `model_name`s.
+
+### What the config looks like
+
+One `model_name` repeated per node = a pool. Distinct names = separate models in
+Open WebUI's picker.
+
+```yaml
+# litellm config.yaml
+model_list:
+  # One pool: the same model on every node, requests spread across them.
+  - model_name: qwen3-8b
+    litellm_params:
+      model: openai/qwen3-8b            # llama.cpp speaks the OpenAI API
+      api_base: http://llama-a:8080/v1
+      api_key: os.environ/LLAMA_KEY
+      weight: 1
+  - model_name: qwen3-8b
+    litellm_params:
+      model: openai/qwen3-8b
+      api_base: http://llama-b:8080/v1
+      api_key: os.environ/LLAMA_KEY
+      weight: 1
+  - model_name: qwen3-8b
+    litellm_params:
+      model: openai/qwen3-8b
+      api_base: http://llama-c:8080/v1
+      api_key: os.environ/LLAMA_KEY
+      weight: 1
+
+  # A different model, only on the node that can hold it.
+  - model_name: mistral-7b
+    litellm_params:
+      model: openai/mistral-7b
+      api_base: http://llama-b:8080/v1
+      api_key: os.environ/LLAMA_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  allowed_fails: 2
+  cooldown_time: 30
+```
+
+Each llama.cpp node is launched with its own model directory:
+
+```sh
+llama-server --host 0.0.0.0 --port 8080 \
+  --models-dir /models --models-max 2 --models-memory-margin 512
+```
+
+`--models-max 2` and the memory margin matter on a single-GPU node: without them
+the router can try to hold more models in VRAM than the card has, and the OOM
+kills the server rather than the model.
+
+### Where tensor/pipeline parallelism fits (and why it is not the default)
+
+Splitting one model across nodes is possible (vLLM + Ray: TP within a node, PP
+across nodes) and is *not* what is wanted here. It is worth keeping in the
+document only as a caveat, because a published two-node test over ordinary
+Ethernet measured ~33 tok/s with pipeline parallel and single-digit requests/min
+with tensor parallel, while **one model per box was ~10× faster**. Pooling
+machines over gigabit to serve one model is a capacity trick, not a speed-up.
+
+Also relevant: **exo** (the popular "pool your devices" project) is MLX-based and
+**Apple Silicon only** — it will not drive NVIDIA PCs. **llama.cpp RPC**
+(`ggml-rpc-server`) does split across hosts but its own README calls it
+"proof-of-concept … fragile and insecure. Never run the RPC server on an open
+network."
+
+None of that is needed for the load-balanced design, which is why it is the plan.
+
+### Same model everywhere, or different models per node?
+
+Both work, and they compose:
+
+- **Same `model_name` on several nodes** → LiteLLM spreads requests across them.
+  This is the "pool the machines" answer: one model name, N× the throughput, and
+  if one node dies the others keep serving.
+- **Different models per node** → each is its own `model_name` and Open WebUI
+  shows them all in its model picker. This is the "serve many models" answer.
+- **Mix**: pool the popular model across all nodes, and pin a large model to the
+  one node with enough VRAM.
+
+The one constraint worth stating: a *pooled* model name must be served by
+backends that actually produce comparable output — same model, same quantisation.
+LiteLLM will happily route `qwen3-8b` to a Q4 on one node and a Q8 on another, and
+the user will notice. Name them `qwen3-8b` and `qwen3-8b-hq` if the quants differ.
 
 ### Phases
 
-- **Phase A — Open WebUI + LiteLLM, external or single-node backend.** Works on the
-  current cluster today. Proves the UI, OIDC, and the gateway.
-- **Phase B — one llama.cpp per node**, registered in LiteLLM. This is where the
-  multi-node value actually lands, and it needs no exotic networking.
-- **Phase C — vLLM + Ray for one large model** across nodes, only if a model must
-  be split and the interconnect supports it.
+- **A — LiteLLM + Open WebUI against one backend.** Proves the entrypoint, OIDC,
+  the model list and the gateway. Works on the current cluster today (with an
+  external or single local backend).
+- **B — second and third llama.cpp backends** joining the same model pool. This is
+  where the multi-node goal is actually met, and it needs no exotic networking.
+- **C — optional**: a large model split across nodes (vLLM/Ray) *only* if a model
+  must be served that no single node can hold, and the interconnect is fast.
 
 ### Platform prerequisites this exposes
 
 1. **No GPU support exists in the platform today** — no `nvidia.com/gpu` resource,
-   no NVIDIA device plugin, no runtimeClass. A GPU node needs the device plugin
-   installed and the charts need `resources.limits."nvidia.com/gpu"`. That is a
-   platform change, not a chart change.
+   no NVIDIA device plugin, no runtimeClass. Phase B needs the device plugin on the
+   GPU nodes and `resources.limits."nvidia.com/gpu"` in the charts. Platform change,
+   not a chart change.
 2. **Cross-node traffic**: LiteLLM → llama.cpp is plain HTTP on the pod/service
-   network, which is fine. vLLM/Ray needs NCCL ports between nodes — a different
-   firewall and NetworkPolicy story, and the platform's NetworkPolicies currently
-   assume a single-node flow.
-3. **Model storage**: models are tens of GB. Each node that serves a model needs the
-   weights locally (a PVC per node, or a shared RWX volume). This is the largest
-   storage decision in the whole plan — plan for 50–100 GB per node with a few
-   models, and note that on Longhorn that is replicated.
-4. **Memory**: the AI stack does not go on dev-single. It needs its own target.
+   network, which the existing NetworkPolicies handle. (vLLM/Ray in Phase C is the
+   exception — NCCL needs its own ports and the policies assume a single node.)
+3. **Model storage**: each node serving models needs the GGUFs locally — a PVC per
+   node, tens of GB. On Longhorn that is replicated, so budget accordingly. Shares
+   nothing with the split-model case, which needs the *same* weights everywhere.
+4. **Memory**: not on dev-single. It needs its own target.
 
 ### Gate strategy
 
 Non-deterministic output, so assert shape and plumbing, never text:
 
-- `/v1/models` lists the expected model names (via LiteLLM, so the gateway is proven)
-- a completion returns 200, `choices[0].message.content` non-empty, token count > 0
-- the same request routed to a **named backend** reaches that backend (LiteLLM
-  exposes which deployment served it) — this is what proves multi-node actually works,
-  rather than proving one node works
-- time-box it: CPU or slow-Ethernet inference must not make the gate flaky; mark the
-  AI checks informational if they exceed the budget
-
-## 6. Ticketing: what already exists
-
-Checked the catalog and docs before proposing anything: **there is no ticketing or
-helpdesk app in the platform**, and nothing in the catalog references one. The word
-"ticket" appears only in security docs (CSRF/incident notes), not as a feature.
-
-What exists that people *could* use for tracking work:
-
-| Already here | Covers |
-|---|---|
-| **Gitea issues** (installed) | per-repository issues, labels, milestones, assignees, kanban-ish board. Genuinely usable for "track this work" if the work is code-adjacent. |
-| **Nextcloud Deck** (if enabled) | kanban boards inside Nextcloud. Personal/team task boards. |
-| **Vikunja** (planned, section 4) | shared task lists — the lightest "ticketing" that fits a household. |
-
-So the answer is: **nothing dedicated, and probably nothing needed.** Gitea issues +
-Vikunja between them cover "track this task" for a single-tenant install.
-
-**When a real ticketing system would make sense:** when there are *inbound requests
-from people who are not you* — a support address, a form, a customer. That is the
-**helpdesk** category (Zammad, FreeScout, osTicket), and every one of them is built
-around **inbound email** (a request becomes a ticket by mail). This platform has no
-mail transport, so all three would be crippled on arrival. That is the same blocker
-as Snipe-IT's expiry alerts.
-
-**Recommendation: no ticketing app.** If a dedicated one is ever wanted, the order
-is: notification/mail transport first, then Zammad (the most capable of the three;
-its OIDC is real), then evaluate whether Gitea issues would have been enough.
-
-| Candidate | Verdict |
-|---|---|
-| **Zammad** | Best real helpdesk; heavy, needs mail + websockets. Only with mail. |
-| **FreeScout** | Lightweight, but PHP and mail-centric. |
-| **osTicket** | Dated; OIDC via add-on. Skip. |
-| **Redmine** | Issue tracker, not a helpdesk. 600 Mi, joyless UI, and Gitea issues already do this. |
-| **Plane / Vikunja / Leantime** | Project/task tools, not ticketing. Vikunja is the cheap useful one and is already in this plan. |
+- `llm_models_listed` — `/v1/models` through LiteLLM contains the expected names.
+- `llm_completion_answers` — 200, non-empty `choices[0].message.content`, token
+  count > 0.
+- `llm_load_balances_across_backends` — the check that proves the actual feature:
+  send N requests and assert **more than one distinct `x-litellm-model-id`** came
+  back. Without this, a single-backend setup would pass everything else.
+- `llm_failover_keeps_serving` — stop one backend and assert requests still
+  succeed (cooldown/fallback), which is the reliability half of "pool the machines".
+- Time-box all of it; CPU inference must not make the gate flaky. If it exceeds the
+  budget, mark the AI checks informational.
 
 ## What each app still needs before it is "added"
 
@@ -472,9 +455,9 @@ so a reader can tell which is which.
 | Vikunja OIDC: `auth.openid.enabled`, registration off via `service.enableregistration` | upstream config docs |
 | llama.cpp server is OpenAI-compatible **and** has a model router (`--models-dir`, `--models-max`) | `tools/server/README.md` |
 | LiteLLM is an OpenAI-format gateway with virtual keys/spend tracking; MIT except `litellm/enterprise/` | upstream README + LICENSE |
-| Stirling: **OIDC is in the free plan, capped at 5 users**; login builds required | upstream plans table |
-| BentoPDF is **client-side only**, AGPL-3.0 with a separately-licensed commercial compression component, and loads WASM from jsDelivr by default | upstream README + Dockerfile |
-| Gotenberg is **MIT**, a server-side PDF API with **no UI and no user model** | upstream README + LICENSE |
+| Stirling's free plan caps users at **5** (reason it was dropped) | upstream plans table |
+| llama.cpp serves **many models from one process** in router mode (`--models-dir`, `--models-max`, `--models-memory-margin`) | `tools/server/README.md` |
+| LiteLLM pools deployments that share a `model_name`; `simple-shuffle` default; cooldowns on 429/>50% fails/401/404/408; `x-litellm-model-id` names the serving deployment | upstream load-balancing docs |
 | llama.cpp RPC exists for multi-host inference but is **"proof-of-concept … fragile and insecure"** per its own README | `tools/rpc/README.md` |
 | **exo is MLX/Apple-Silicon only** — no NVIDIA support | upstream README (all benchmarks M3 Ultra; MLX backend) |
 | vLLM multi-node = TP within a node, PP across nodes, via Ray | vLLM docs (parallelism and scaling) |
@@ -483,8 +466,6 @@ so a reader can tell which is which.
 
 Assumptions **not** yet verified, and flagged as such:
 
-- Stirling's exact OIDC callback path and whether an admin can be seeded without
-  the UI — must be checked against the pinned version before writing the chart.
 - Whether Calibre-Web's OPDS endpoint is `/opds` on the pinned version.
 - BookStack's API-token creation flow being scriptable without the UI (the token
   hook's feasibility).
@@ -493,22 +474,15 @@ Assumptions **not** yet verified, and flagged as such:
 
 ## Open questions to settle before implementation
 
-1. **PDF app choice** — BentoPDF has no user limit but is client-side only, so it
-   cannot be API-tested; Gotenberg has no limit and a real API but no UI. Pick one,
-   or ship both for different jobs (see the PDF section).
-2. **Token hook design** — per-app adapters (recommended, honest) vs one generic
-   implementation (will not fit all four).
-3. **AI target sizing and networking** — Phase B needs a node with a GPU (and the
-   platform has no NVIDIA device plugin yet); Phase C needs a fast interconnect
-   between nodes or it is slower than Phase B. Decide which phase is the goal before
-   sizing anything.
-4. **Calibre-Web fork** — upstream `janeczku/calibre-web` moves slowly;
+1. **Token hook design** — per-app adapters (recommended, honest) vs one generic
+   implementation (will not fit both).
+2. **AI target sizing** — Phase B needs at least one GPU node, and the platform has
+   no NVIDIA device plugin yet. Decide whether a GPU node is available before
+   designing the charts.
+3. **Calibre-Web fork** — upstream `janeczku/calibre-web` moves slowly;
    `Calibre-Web-Automated` is the active fork. Pick one deliberately and pin it.
-5. **Where does the AI stack live** — a normal catalog app with a big PVC, or a
-   separate "infrastructure" concept alongside the wireguard gateway? It is the
-   first thing in this plan that is not a household web app.
-6. **BentoPDF's WASM hosting** — vendor it in the chart (offline, honest) or accept
-   the jsDelivr CDN default (simpler, but a runtime third-party dependency)?
-7. **BentoPDF licensing** — confirm the AGPL + separately-licensed Hyper Compress
-   split is acceptable for how the platform distributes and serves it, and record the
-   conclusion in `docs/licenses.md`.
+4. **Where does the AI stack live** — a normal catalog app with big PVCs, or a
+   separate "infrastructure" concept alongside the wireguard gateway? It is the first
+   thing in this plan that is not a household web app.
+5. **Which model pool to start with** — one small model pooled across all nodes
+   (proves balancing), or distinct models per node (more useful day one)?
