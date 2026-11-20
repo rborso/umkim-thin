@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rborso/umkim-thin/internal/update"
 	"gopkg.in/yaml.v3"
@@ -132,10 +133,96 @@ type OIDC struct {
 	Scopes []string `yaml:"scopes,omitempty"`
 }
 
-// Verify is what "tested" means for this entry.
+// Test categories. The console and docs show one of these per app, and it is
+// derived from the entry (Category) rather than declared: a category is a
+// statement about evidence, so it must come from the evidence.
+const (
+	// CategoryAutoTested: every declared check resolves to a gating Playwright
+	// test, so a regression fails CI without a human involved.
+	CategoryAutoTested = "auto-tested"
+	// CategoryAutoChecked: a suite exists but it is informational (excluded from
+	// the gate), so a failure is reported rather than failed. This is deliberately
+	// distinct from auto-tested; conflating them was the old behaviour, where
+	// verify.playwright always pointed at journeys/.
+	CategoryAutoChecked = "auto-checked"
+	// CategoryVerified: a person used the app and logged what they did. This is
+	// independent of the automatic tiers: an app can be both.
+	CategoryVerified = "verified"
+	// CategoryUntested: installable, but nothing is claimed.
+	CategoryUntested = "untested"
+)
+
+// GatingSuites are the Playwright files whose failures fail CI. A check tag found
+// only outside these is informational (see CategoryAutoChecked).
+var GatingSuites = []string{
+	"apps.spec.ts", "auth.spec.ts", "tls.spec.ts", "console.spec.ts",
+	"home.spec.ts", "journeys/tenant.spec.ts",
+}
+
+// Category derives the app's test status. auto says whether its checks resolved
+// to gating tests, informational says whether they resolved to any test at all;
+// the caller (ci/static.sh via `catalog verify`) does the resolving, because that
+// needs the test tree.
+func (e Entry) Category(auto, informational bool) string {
+	switch {
+	case auto:
+		return CategoryAutoTested
+	case informational:
+		return CategoryAutoChecked
+	case e.Verify.Human != nil:
+		return CategoryVerified
+	default:
+		return CategoryUntested
+	}
+}
+
+// VerificationStale reports whether the human log predates the pinned chart
+// version. It does not drop the claim: it is shown as "verified on <old version>"
+// so a reader knows the check happened before the current release. Rewriting the
+// log to the new version without re-testing is what this is for.
+func (e Entry) VerificationStale() bool {
+	h := e.Verify.Human
+	return h != nil && h.Version != "" && h.Version != e.Chart.Version
+}
+
+// The category is derived, never typed in (see Entry.Category): an entry is
+// "auto-tested" when it declares checks and they all resolve to gating Playwright
+// tests, and "verified" when a human log exists for it. Declaring a label by hand
+// is what let the old `checks` list drift - four entries named checks that appear
+// in no test at all.
 type Verify struct {
-	Playwright string   `yaml:"playwright"`
-	Checks     []string `yaml:"checks"`
+	// Playwright is the suite that exercises this app. A suite under
+	// tests/playwright/journeys/ is informational; the gating suites are named
+	// in GatingSuites.
+	Playwright string `yaml:"playwright"`
+	// Harness names a non-Playwright check when the app has no browser surface
+	// (the WireGuard gateway is verified by ci/vpn-check.sh). Its value is the
+	// script, so a reader can run it themselves.
+	Harness string `yaml:"harness,omitempty"`
+	// Checks are the acceptance checks that must exist as `@check:<name>` tags in
+	// the Playwright suites. ci/static.sh resolves every one of them, so a check
+	// that is only a comment cannot be declared.
+	Checks []string `yaml:"checks"`
+	// Human logs the last time a person actually used the app, and on which chart
+	// version. It does not expire the badge (that would require re-verifying every
+	// bump); it is reported as "verified on <old version>" when the chart moved.
+	Human *HumanVerification `yaml:"human,omitempty"`
+}
+
+// HumanVerification records a manual pass. Pinned to a chart version so a later
+// bump is visible as stale rather than silently inheriting the claim.
+type HumanVerification struct {
+	// Date is the day the pass finished, as YYYY-MM-DD.
+	Date string `yaml:"date"`
+	// Version is chart.version that was exercised.
+	Version string `yaml:"version"`
+	// By is who did it (a handle, not an email - this file is public).
+	By string `yaml:"by"`
+	// Target names where it was exercised: "single", "ha", or both.
+	Targets []string `yaml:"targets"`
+	// Did is what the person actually did, in their words. Keep it to steps a
+	// user would recognise; "logged in" alone is not a verification.
+	Did []string `yaml:"did"`
 }
 
 // Entry is one catalog file.
@@ -333,8 +420,39 @@ func (e Entry) Validate() error {
 			seen[h.Route] = true
 		}
 	}
-	if e.Verify.Playwright == "" || len(e.Verify.Checks) == 0 {
+	// An entry must declare how it is checked: a Playwright suite, or a harness
+	// script for an app with no browser surface (the WireGuard gateway). Claiming
+	// nothing is not publishable, and claiming a suite that does not exist is
+	// caught by ci/static.sh (see `catalog verify`).
+	if e.Verify.Playwright == "" && e.Verify.Harness == "" {
 		return fmt.Errorf("%s: an entry without a verification suite is not publishable", e.Name)
+	}
+	if len(e.Verify.Checks) == 0 {
+		return fmt.Errorf("%s: verify.checks is empty (an entry without checks is not publishable)", e.Name)
+	}
+	// A manual log must be specific enough to be useful: a date, the chart
+	// version it covers, and at least one thing the person actually did. "Logged
+	// in" alone is not a verification, so a log with no steps is rejected.
+	if h := e.Verify.Human; h != nil {
+		if _, err := time.Parse("2006-01-02", h.Date); err != nil {
+			return fmt.Errorf("%s: verify.human.date must be YYYY-MM-DD", e.Name)
+		}
+		if h.Version == "" {
+			return fmt.Errorf("%s: verify.human.version is required (the chart version tested)", e.Name)
+		}
+		if h.By == "" {
+			return fmt.Errorf("%s: verify.human.by is required", e.Name)
+		}
+		if len(h.Did) == 0 {
+			return fmt.Errorf("%s: verify.human.did needs at least one step", e.Name)
+		}
+		for _, t := range h.Targets {
+			switch t {
+			case "single", "ha":
+			default:
+				return fmt.Errorf("%s: verify.human.targets has unknown target %q", e.Name, t)
+			}
+		}
 	}
 	return nil
 }

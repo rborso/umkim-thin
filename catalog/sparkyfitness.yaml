@@ -86,6 +86,14 @@ verify:
   playwright: tests/playwright/journeys/sparkyfitness.spec.ts
   checks:
     - route_reachable
-    - oidc_login_redirects_to_provider
-    - oidc_login_completes
-    - app_api_reachable
+    - authenticated_request_reaches_app
+    - oidc_sso_completes
+    - tenant_api_sparkyfitness
+  human:
+    date: "2026-11-19"
+    version: "0.1.4"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "completed the SSO round trip as the invited tenant and read /api/auth/get-session"
+      - "confirmed the OIDC provider is registered and an anonymous API call is not served directly"

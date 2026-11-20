@@ -45,7 +45,7 @@ test.describe('gitea directory login', () => {
   test.skip(!installed('gitea'), 'gitea is not installed');
   test.skip(!user || !pass, 'UMKIM_THIN_PORTAL_USER / _PASSWORD not set');
 
-  test('a regular directory user signs in (LDAP), and the API shows that identity', async () => {
+  test('a regular directory user signs in (LDAP), and the API shows that identity @check:ldap_user_visible', async () => {
     const host = hostOf('gitea');
     const base = `https://${host}`;
     const ctx = await portalSession({ username: user, password: pass });
@@ -74,7 +74,7 @@ test.describe('jellyfin directory login', () => {
   test.skip(!installed('jellyfin'), 'jellyfin is not installed');
   test.skip(!user || !pass, 'UMKIM_THIN_PORTAL_USER / _PASSWORD not set');
 
-  test('a regular directory user authenticates against Jellyfin (LDAP)', async () => {
+  test('a regular directory user authenticates against Jellyfin (LDAP) @check:ldap_user_visible', async () => {
     test.setTimeout(180_000);
     const host = hostOf('jellyfin');
     const base = `https://${host}`;
@@ -113,7 +113,7 @@ test.describe('jellyfin directory login', () => {
 test.describe('immich directory login', () => {
   test.skip(!installed('immich'), 'immich is not installed');
 
-  test('a regular directory user signs in with the real OIDC flow', async ({ browser }) => {
+  test('a regular directory user signs in with the real OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
     test.setTimeout(120_000);
     const host = hostOf('immich');
     const username = ciUser('ci-immich');
@@ -140,7 +140,7 @@ test.describe('immich directory login', () => {
 test.describe('paperless directory login', () => {
   test.skip(!installed('paperless'), 'paperless is not installed');
 
-  test('a regular directory user signs in with the real OIDC flow', async ({ browser }) => {
+  test('a regular directory user signs in with the real OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
     test.setTimeout(120_000);
     const host = hostOf('paperless');
     const username = ciUser('ci-paperless');
@@ -177,7 +177,7 @@ test.describe('paperless directory login', () => {
 test.describe('nextcloud directory login', () => {
   test.skip(!installed('nextcloud'), 'nextcloud is not installed');
 
-  test('a regular directory user authenticates against Nextcloud (LDAP)', async () => {
+  test('a regular directory user authenticates against Nextcloud (LDAP) @check:ldap_user_visible', async () => {
     const host = hostOf('nextcloud');
     const base = `https://${host}`;
     const username = ciUser('ci-nextcloud');
@@ -201,7 +201,7 @@ test.describe('gitea ssh', () => {
   const admin = appAdmin('gitea');
   test.skip(!admin.pass, 'UMKIM_THIN_GITEA_ADMIN_PASSWORD not set');
 
-  test('git clones and pushes over the dedicated SSH port', async () => {
+  test('git clones and pushes over the dedicated SSH port @check:git_ssh_reachable', async () => {
     test.setTimeout(120_000);
     const host = hostOf('gitea');
     const port = process.env.UMKIM_THIN_GITEA_SSH_PORT || '2222';
@@ -272,7 +272,7 @@ test.describe('gitea ssh', () => {
 test.describe('sparkyfitness directory login', () => {
   test.skip(!installed('sparkyfitness'), 'sparkyfitness is not installed');
 
-  test('a regular directory user signs in with the real OIDC flow', async ({ browser }) => {
+  test('a regular directory user signs in with the real OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
     test.setTimeout(120_000);
     const host = hostOf('sparkyfitness');
     const username = ciUser('ci-sparky');
@@ -310,7 +310,7 @@ test.describe('sparkyfitness directory login', () => {
 test.describe('actualbudget directory login', () => {
   test.skip(!installed('actualbudget'), 'actualbudget is not installed');
 
-  test('a directory user completes the Actual Budget OIDC flow', async ({ browser }) => {
+  test('a directory user completes the Actual Budget OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
     test.setTimeout(120_000);
     const host = hostOf('actualbudget');
     const username = ciUser('ci-actual');
@@ -342,7 +342,7 @@ test.describe('actualbudget directory login', () => {
 test.describe('homebox directory login', () => {
   test.skip(!installed('homebox'), 'homebox is not installed');
 
-  test('a directory user completes the HomeBox OIDC flow', async ({ browser }) => {
+  test('a directory user completes the HomeBox OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
     test.setTimeout(120_000);
     const host = hostOf('homebox');
     const username = ciUser('ci-homebox');

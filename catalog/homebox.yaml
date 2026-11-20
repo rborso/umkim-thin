@@ -60,6 +60,14 @@ verify:
   playwright: tests/playwright/journeys/homebox.spec.ts
   checks:
     - route_reachable
-    - oidc_login_redirects_to_provider
-    - oidc_login_completes
-    - inventory_status_reachable
+    - authenticated_request_reaches_app
+    - oidc_sso_completes
+    - tenant_api_homebox
+  human:
+    date: "2026-11-19"
+    version: "0.1.2"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "completed the SSO round trip as the invited tenant and read /api/v1/users/self"
+      - "created a location and an item with a photo, searched for it, and exported the inventory"

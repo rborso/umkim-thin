@@ -81,4 +81,15 @@ verify:
     - route_reachable
     - auth_challenge
     - authenticated_request_reaches_app
-    - ldap_user_visible        # the signed-in identity exists in Gitea
+    - ldap_user_visible
+    - git_ssh_reachable
+    - tenant_write_gitea
+  human:
+    date: "2026-11-19"
+    version: "0.1.23"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "signed in as an invited tenant and created a private repository over the API; the owner was the directory identity, not a local account"
+      - "deleted it again through the same API"
+      - "branch, commit, pull request, merge, release with an asset, archive download"

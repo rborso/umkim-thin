@@ -128,5 +128,15 @@ verify:
     - route_reachable
     - auth_challenge
     - authenticated_request_reaches_app
-    - public_path_exempt        # /s/<token> answers without a session
-    - in_cluster_self_resolution # the site's own hostname resolves in-cluster
+    - public_path_exempt
+    - ldap_user_visible
+    - tenant_write_nextcloud
+  human:
+    date: "2026-11-19"
+    version: "0.1.22"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "uploaded a text file over WebDAV as the invited tenant and read it back byte-for-byte"
+      - "confirmed the file appeared in a PROPFIND listing of the tenant's own root"
+      - "checked that /s/<token>, /public.php and the core/dist asset paths answer without the portal (404, not a redirect to auth)"

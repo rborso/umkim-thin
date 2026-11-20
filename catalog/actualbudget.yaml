@@ -64,6 +64,5 @@ verify:
   playwright: tests/playwright/journeys/actualbudget.spec.ts
   checks:
     - route_reachable
-    - oidc_login_redirects_to_provider
-    - oidc_login_completes
-    - app_health_reachable
+    - authenticated_request_reaches_app
+    - oidc_sso_completes

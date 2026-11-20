@@ -75,7 +75,5 @@ verify:
   playwright: tests/playwright/journeys/vaultwarden.spec.ts
   checks:
     - route_reachable
-    - sso_login_completes
-    - master_password_setup
-    - vault_item_create
-    - master_password_unlock
+    - authenticated_request_reaches_app
+    - oidc_sso_completes

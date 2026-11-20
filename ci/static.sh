@@ -698,6 +698,29 @@ if command -v helm >/dev/null 2>&1; then
 fi
 echo "   ok"
 
+echo ">> every declared check resolves to a test, and the app docs match"
+# The catalog claims each app is tested through verify.checks. Those names are
+# only a claim if a test carries them, so resolve every one against the suites
+# (and against a harness script for an app with no browser surface). Four entries
+# once named checks that appeared in no test at all, and named a journeys/ suite
+# as "the" verification even though that suite is informational - so this is the
+# guard that makes the category honest rather than typed in.
+if command -v go >/dev/null 2>&1; then
+  if ! go run ./cmd/umkim-thin catalog verify --strict >/tmp/umkim-verify.txt 2>&1; then
+    echo "a catalog entry declares a check no test carries:"
+    grep -E "unresolved" /tmp/umkim-verify.txt | sed 's/^/  /' >&2
+    echo "add an @check:<name> tag to the test that exercises it" >&2
+    exit 1
+  fi
+  # The generated status doc must match the catalog: a chart bump or a new human
+  # pass that is not regenerated would leave the doc describing the old state.
+  if ! ./ci/gen-app-docs.py --check >/dev/null 2>&1; then
+    echo "docs/apps/testing.md is out of date: run ./ci/gen-app-docs.py" >&2
+    exit 1
+  fi
+fi
+echo "   ok"
+
 echo ">> every catalogued version is packaged (current or N-1)"
 # docs/versioning-plan.md: "The chart tarball for each advertised version exists
 # in the local mirror and its Chart.yaml version/appVersion match the catalog

@@ -174,4 +174,13 @@ verify:
     - route_reachable
     - auth_challenge
     - authenticated_request_reaches_app
-    - import_chain_reaches_library   # request -> indexer -> client -> imported
+    - tenant_ui_servarr
+  human:
+    date: "2026-11-19"
+    version: "0.3.7"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "loaded each *arr UI and Jellyfin through the portal as the invited tenant, with no authorization loop"
+      - "confirmed each *arr answers its own API with its key, and a root folder can be created on the shared media volume"
+      - "removed from the single-node target afterwards to free memory; the stack lives on HA"

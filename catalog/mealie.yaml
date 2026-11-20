@@ -66,6 +66,14 @@ verify:
   playwright: tests/playwright/journeys/mealie.spec.ts
   checks:
     - route_reachable
-    - oidc_login_redirects_to_provider
-    - oidc_login_completes
-    - recipe_list_reachable
+    - authenticated_request_reaches_app
+    - oidc_sso_completes
+    - tenant_api_mealie
+  human:
+    date: "2026-11-19"
+    version: "0.1.7"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "completed the SSO round trip as the invited tenant and read /api/users/self"
+      - "created a recipe as the app admin and searched for it by name"

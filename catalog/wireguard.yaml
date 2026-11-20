@@ -50,9 +50,11 @@ values:
   vpnZone: "vpn.{{ .zone }}"
 
 verify:
-  playwright: tests/playwright/journeys/wireguard.spec.ts
+  # No browser surface: the gateway is exercised by ci/vpn-check.sh (a real
+  # WireGuard tunnel and an app fetched through it), so it declares a harness
+  # rather than a Playwright suite. It previously named
+  # tests/playwright/journeys/wireguard.spec.ts, which does not exist.
+  harness: ci/vpn-check.sh
   checks:
-    - gateway_udp_reachable
-    - peer_config_generated
-    - client_reaches_cluster_service
+    - wireguard_tunnel_up
     - client_reaches_app_route

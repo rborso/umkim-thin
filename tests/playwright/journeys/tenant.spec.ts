@@ -33,7 +33,7 @@ test.describe('tenant can work in gitea', () => {
   test.skip(!installed('gitea'), 'gitea is not installed');
   test.skip(!user || !pass, 'portal user not set');
 
-  test('a regular user creates a repository and reads it back', async () => {
+  test('a regular user creates a repository and reads it back @check:tenant_write_gitea', async () => {
     const base = `https://${hostOf('gitea')}`;
     const ctx = await portalSession({ username: user, password: pass });
     // LDAP materialises the account on first use; a Basic-auth call does that
@@ -63,7 +63,7 @@ test.describe('tenant can work in nextcloud', () => {
   test.skip(!installed('nextcloud'), 'nextcloud is not installed');
   test.skip(!user || !pass, 'portal user not set');
 
-  test('a regular user uploads a file and lists it', async () => {
+  test('a regular user uploads a file and lists it @check:tenant_write_nextcloud', async () => {
     const base = `https://${hostOf('nextcloud')}`;
     const ctx = await portalSession({ username: user, password: pass });
     const auth = { Authorization: basic(user, pass), 'OCS-APIRequest': 'true' };
@@ -102,7 +102,7 @@ test.describe('tenant can work in paperless', () => {
   test.skip(!installed('paperless'), 'paperless is not installed');
   test.skip(!user || !pass, 'portal user not set');
 
-  test('a regular user signs in by SSO and gets their document list', async ({ browser }) => {
+  test('a regular user signs in by SSO and gets their document list @check:tenant_api_paperless', async ({ browser }) => {
     test.setTimeout(180_000);
     const host = hostOf('paperless');
     // Paperless is OIDC-only: the API is authenticated by the session the SSO
@@ -140,7 +140,7 @@ test.describe('tenant can work in immich', () => {
   test.skip(!installed('immich'), 'immich is not installed');
   test.skip(!user || !pass, 'portal user not set');
 
-  test('a regular user signs in by SSO and can list their albums', async ({ browser }) => {
+  test('a regular user signs in by SSO and can list their albums @check:tenant_api_immich', async ({ browser }) => {
     test.setTimeout(180_000);
     const host = hostOf('immich');
     // Immich is OIDC-only; the API identity is the session the app itself
@@ -185,7 +185,7 @@ test.describe('tenant can work in mealie', () => {
   test.skip(!installed('mealie'), 'mealie is not installed');
   test.skip(!user || !pass, 'portal user not set');
 
-  test('a regular user signs in by SSO and reaches the recipe API', async ({ browser }) => {
+  test('a regular user signs in by SSO and reaches the recipe API @check:tenant_api_mealie', async ({ browser }) => {
     test.setTimeout(180_000);
     const host = hostOf('mealie');
     // An SSO account has no local password, so a token minted from a password is
@@ -221,7 +221,7 @@ test.describe('tenant can work in the servarr stack', () => {
   test.skip(!installed('sonarr'), 'sonarr is not installed');
   test.skip(!user || !pass, 'portal user not set');
 
-  test('the tenant reaches the *arr UI past the portal and sees a real page', async () => {
+  test('the tenant reaches the *arr UI past the portal and sees a real page @check:tenant_ui_servarr', async () => {
     // The *arr apps have no accounts of their own: the portal is the identity
     // boundary. What a tenant can do is load the UI, and that must be the app,
     // not a redirect back to the portal (an authorization loop).
@@ -253,7 +253,9 @@ test.describe('tenant can work in homebox and sparkyfitness', () => {
     { app: 'sparkyfitness', path: '/api/auth/get-session' },
   ];
   for (const p of probes) {
-    test(`a regular user signs in to ${p.app} and its session API answers`, async ({ browser }) => {
+    // The tag is per app: the check names in the catalog are
+    // tenant_api_homebox / tenant_api_sparkyfitness, so each probe carries its own.
+    test(`a regular user signs in to ${p.app} and its session API answers @check:tenant_api_${p.app}`, async ({ browser }) => {
       test.skip(!installed(p.app), `${p.app} is not installed`);
       test.setTimeout(180_000);
       const host = hostOf(p.app);

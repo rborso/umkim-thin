@@ -118,7 +118,7 @@ if ! sudo wg-quick up "$conf" >/tmp/ci-wg-up.log 2>&1; then
   bad "wg-quick up failed: $(tail -2 /tmp/ci-wg-up.log | tr '\n' ' ')"
   exit 1
 fi
-ok "tunnel is up"
+ok "tunnel is up @check:wireguard_tunnel_up"
 
 # The gateway reads its peers from a mounted Secret and reloads every 10s.
 # Kubelet can take a while to propagate a fresh Secret to every node, so wait
@@ -148,7 +148,7 @@ done
 for h in $hosts; do
   c=$(http_code "https://$h/" --resolve "$h:443:$server_ip" -m 15)
   case "$c" in
-    200|301|302|303|307|308|401|403) ok "app via tunnel $h ($c)" ;;
+    200|301|302|303|307|308|401|403) ok "app via tunnel $h ($c) @check:client_reaches_app_route" ;;
     *) bad "app via tunnel $h ($c)" ;;
   esac
 done

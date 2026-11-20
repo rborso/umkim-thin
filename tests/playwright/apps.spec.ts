@@ -44,7 +44,9 @@ async function login(page: Page, host: string) {
 
 for (const app of apps) {
   test.describe(`${app.name} (${app.auth})`, () => {
-    test('route_reachable + auth_challenge', async ({ request }) => {
+    // @check:route_reachable @check:auth_challenge apply to every installed app:
+    // the route answers, and an anonymous request is challenged rather than served.
+    test('route_reachable + auth_challenge @check:route_reachable @check:auth_challenge', async ({ request }) => {
       const res = await request.get(url(app.host), { maxRedirects: 0 });
       expect(res.status(), `reachability of ${app.host}`).toBeLessThan(500);
       expect(res.status(), `anonymous request to ${app.host} should be challenged`)
@@ -56,7 +58,7 @@ for (const app of apps) {
     });
 
     for (const p of app.public ?? []) {
-      test(`public_path_exempt ${p}`, async ({ request }) => {
+      test(`public_path_exempt ${p} @check:public_path_exempt`, async ({ request }) => {
         const res = await request.get(url(app.host, p), { maxRedirects: 0 });
         // The path may 404 (no such share), but must NOT be pushed to the portal.
         expect(
@@ -67,7 +69,7 @@ for (const app of apps) {
       });
     }
 
-    test('authenticated_request_reaches_app', async ({ browser }) => {
+    test('authenticated_request_reaches_app @check:authenticated_request_reaches_app', async ({ browser }) => {
       test.skip(!USER || !PASS, 'set UMKIM_THIN_USER / UMKIM_THIN_PASSWORD');
       const ctx = await browser.newContext();
       const page = await ctx.newPage();

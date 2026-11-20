@@ -419,6 +419,8 @@ func catalogCmd(dir string, args []string) error {
 
   list                       list installable apps
   show <name>                show one entry, with its verification
+  verify [--strict]          resolve each entry's checks against the Playwright
+                             suites and show its auto-tested/verified category
   package [--out FILE]       build the uploadable catalog .tar.gz (YAML + VERSION)
 
 The package can be uploaded on the console's Catalog tab; it does not require a
@@ -428,7 +430,10 @@ local mirror when present).
 		return nil
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("catalog needs a subcommand: list | show | package")
+		return fmt.Errorf("catalog needs a subcommand: list | show | verify | package")
+	}
+	if args[0] == "verify" {
+		return verifyCmd(".", args[1:])
 	}
 	if args[0] == "package" {
 		fs := flag.NewFlagSet("catalog package", flag.ContinueOnError)
@@ -522,9 +527,28 @@ local mirror when present).
 					fmt.Printf("            public: %s\n", p)
 				}
 			}
-			fmt.Printf("  verify:   %s\n", e.Verify.Playwright)
+			if e.Verify.Playwright != "" {
+				fmt.Printf("  verify:   %s\n", e.Verify.Playwright)
+			}
+			if e.Verify.Harness != "" {
+				fmt.Printf("  harness:  %s\n", e.Verify.Harness)
+			}
 			for _, c := range e.Verify.Checks {
 				fmt.Printf("            %s\n", c)
+			}
+			// The category is derived, so print it as a conclusion rather than a
+			// field: whether these checks actually resolve is decided by
+			// `catalog verify`, which has the test tree.
+			fmt.Printf("  tested:   run `umkim-thin catalog verify` for the resolved category\n")
+			if h := e.Verify.Human; h != nil {
+				state := "current"
+				if e.VerificationStale() {
+					state = fmt.Sprintf("STALE, verified on %s", h.Version)
+				}
+				fmt.Printf("  human:    %s by %s (%s)\n", h.Date, h.By, state)
+				for _, d := range h.Did {
+					fmt.Printf("            - %s\n", d)
+				}
 			}
 			return nil
 		}
