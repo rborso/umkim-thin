@@ -77,3 +77,15 @@ verify:
     # a page through /api/pages and reads it back. Proves the wiki stores content,
     # not just that SSO works.
     - bookstack_api_token_writes_page
+  human:
+    date: "2026-11-20"
+    version: "0.1.4"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "installed from the console on dev-single and ha-dev; the post-install job created the admin and set the registration role, and the app came up with 0 restarts"
+      - "signed in at the portal as a freshly invited tenant and completed the OIDC round trip; BookStack auto-registered the account"
+      - "as that tenant, created a book through the app and saw it listed in the books index"
+      - "minted an API token as a signed-in user, then created a book and a page through /api and read the page body back"
+      - "confirmed the ha-dev bootstrap needs its own storage tree: the image's s6 init does not run for a Job, so Laravel could not open storage/logs"
+

@@ -22,7 +22,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | App | Auto | Chart | Human |
 |---|---|---|---|
 | actualbudget | auto-tested | 0.1.3 | - |
-| bookstack | auto-tested | 0.1.4 | - |
+| bookstack | auto-tested | 0.1.4 | 2026-11-20 (agent) |
 | gitea | auto-tested | 0.1.23 | 2026-11-19 (agent) |
 | homebox | auto-tested | 0.1.2 | 2026-11-19 (agent) |
 | immich | auto-tested | 0.1.13 | 2026-11-19 (agent) |
@@ -54,7 +54,13 @@ No human pass is recorded for this app.
 - `tenant_api_bookstack` - journeys/tenant.spec.ts
 - `bookstack_api_token_writes_page` - auth.spec.ts
 
-No human pass is recorded for this app.
+Human pass 2026-11-20 by agent on chart 0.1.4 (single, ha):
+
+- installed from the console on dev-single and ha-dev; the post-install job created the admin and set the registration role, and the app came up with 0 restarts
+- signed in at the portal as a freshly invited tenant and completed the OIDC round trip; BookStack auto-registered the account
+- as that tenant, created a book through the app and saw it listed in the books index
+- minted an API token as a signed-in user, then created a book and a page through /api and read the page body back
+- confirmed the ha-dev bootstrap needs its own storage tree: the image's s6 init does not run for a Job, so Laravel could not open storage/logs
 
 ### gitea
 
