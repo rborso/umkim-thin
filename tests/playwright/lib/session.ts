@@ -185,9 +185,9 @@ export async function oidcLogin(
   // An OAuth round trip is in flight: the app is exchanging a code, or an
   // oidc/oauth route is doing the redirect. Clicking SSO again would start over.
   //
-  // Do not match a bare "oidc"/"oauth" in the app's path: Miniflux serves its SSO
-  // link at /oauth2/oidc/redirect, so the login page itself looked like a flow in
-  // progress and the helper never clicked the button. Only a completed
+  // Do not match a bare "oidc"/"oauth" in the app's path: an app that serves its
+  // SSO link under /oauth2/oidc/... makes its own login page look like a flow in
+  // progress, and the helper then never clicks the button. Only a completed
   // authorization code on the URL, or the provider's own authorize endpoint,
   // means a round trip is actually running.
   const inFlight = () => {
