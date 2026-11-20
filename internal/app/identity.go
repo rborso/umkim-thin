@@ -392,6 +392,28 @@ func (in *Installer) applyOIDCValues(e catalog.Entry, values map[string]any, cli
 			"mappingEmail":       "email",
 			"mappingDisplayName": "name",
 		})
+	case "ai":
+		// The stack nests the front end's OIDC under webui.oidc, so the generic
+		// oidc.* merge below would leave clientSecret empty - and Open WebUI only
+		// registers an OIDC provider when it has a client secret (or PKCE). An
+		// empty secret is not "no SSO configured", it is a silently missing login
+		// button, which is how the first install came up with no way to sign in.
+		existing, _ := values["webui"].(map[string]any)
+		webui := map[string]any{}
+		for k, v := range existing {
+			webui[k] = v
+		}
+		oidcExisting, _ := webui["oidc"].(map[string]any)
+		oidc := map[string]any{}
+		for k, v := range oidcExisting {
+			oidc[k] = v
+		}
+		oidc["enabled"] = true
+		oidc["issuerUrl"] = issuer
+		oidc["clientId"] = client.ClientID
+		oidc["clientSecret"] = client.ClientSecret
+		webui["oidc"] = oidc
+		set(values, "webui", webui)
 	case "vaultwarden":
 		// Keep the catalog's SSO policy (only/signups/match) while filling the
 		// generated client. The master password never comes from here.
