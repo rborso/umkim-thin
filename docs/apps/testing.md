@@ -22,7 +22,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | App | Auto | Chart | Human |
 |---|---|---|---|
 | actualbudget | auto-tested | 0.1.3 | - |
-| ai | auto-tested | 0.1.3 | - |
+| ai | auto-tested | 0.1.5 | 2026-11-20 (agent) |
 | bookstack | auto-tested | 0.1.4 | 2026-11-20 (agent) |
 | gitea | auto-tested | 0.1.23 | 2026-11-19 (agent) |
 | homebox | auto-tested | 0.1.2 | 2026-11-19 (agent) |
@@ -58,7 +58,13 @@ No human pass is recorded for this app.
 - `llm_backends_are_separate` - ci/ai-check.sh
 - `tenant_api_ai` - ai.spec.ts
 
-No human pass is recorded for this app.
+Human pass 2026-11-20 by agent on chart 0.1.5 (single, ha):
+
+- installed from the console on dev-single and ha-dev; all three pods came up with 0 restarts, and the backend fetched its model into the volume
+- confirmed the gateway lists the model and answered a real completion (200, non-empty content, token usage) on both targets
+- signed in as an invited tenant through Authelia OIDC and got an answer from the model through Open WebUI
+- verified CPU mode requests no GPU: no backend has an nvidia.com/gpu limit, which is what ci/ai-check.sh enforces
+- switched the backend chart to the CUDA image and confirmed it requests a card and passes --n-gpu-layers (render only; no GPU hardware in the lab)
 
 ### bookstack
 

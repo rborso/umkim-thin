@@ -112,3 +112,14 @@ verify:
     - llm_cpu_mode_requests_no_gpu
     - llm_backends_are_separate
     - tenant_api_ai
+  human:
+    date: "2026-11-20"
+    version: "0.1.5"
+    by: agent
+    targets: [single, ha]
+    did:
+      - "installed from the console on dev-single and ha-dev; all three pods came up with 0 restarts, and the backend fetched its model into the volume"
+      - "confirmed the gateway lists the model and answered a real completion (200, non-empty content, token usage) on both targets"
+      - "signed in as an invited tenant through Authelia OIDC and got an answer from the model through Open WebUI"
+      - "verified CPU mode requests no GPU: no backend has an nvidia.com/gpu limit, which is what ci/ai-check.sh enforces"
+      - "switched the backend chart to the CUDA image and confirmed it requests a card and passes --n-gpu-layers (render only; no GPU hardware in the lab)"
