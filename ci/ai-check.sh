@@ -25,15 +25,27 @@ export PROVISION_ENV="${PROVISION_ENV:-deploy/provision-${TARGET}.env}"
 source ci/lib.sh
 
 ns="${AI_NAMESPACE:-ai}"
+release="${AI_RELEASE:-ai}"
+
+# kube <args...> : run kubectl on the target node as root.
+#
+# The command is passed as arguments rather than spliced into a heredoc: a
+# heredoc through `ssh 'sudo bash -s'` silently mangles backslash escapes, which
+# is how an earlier version of this script reported "no backend found" while a
+# direct kubectl returned a row.
+kube() {
+  local quoted=""
+  printf -v quoted '%q ' "$@"
+  node_root <<EOS
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+/usr/local/bin/kubectl -n $(printf '%q' "$ns") $quoted
+EOS
+}
 
 echo "== ai stack: pod spec (${TARGET}) =="
 
-spec="$(node_root <<EOS 2>/dev/null
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-/usr/local/bin/kubectl -n $ns get deploy -l app.kubernetes.io/name=llamacpp \\
-  -o jsonpath='{range .items[*]}{.metadata.name}{"\\t"}{.spec.template.spec.containers[0].resources.limits.nvidia.com/gpu}{"\\n"}{end}'
-EOS
-)"
+# One row per backend: name, then the GPU limit (empty when unset).
+spec="$(kube get deploy -l app.kubernetes.io/name=llamacpp -o "custom-columns=NAME:.metadata.name,GPU:.spec.template.spec.containers[0].resources.limits.nvidia\.com/gpu,REPLICAS:.spec.replicas" --no-headers 2>/dev/null)"
 
 if [ -z "$spec" ]; then
   bad "no llama.cpp backend found in namespace $ns"
@@ -42,13 +54,20 @@ if [ -z "$spec" ]; then
   exit 1
 fi
 
-# Every backend must have an empty GPU limit. An absent key prints as nothing.
 gpu_requested=""
-while IFS=$'\t' read -r name gpu; do
+multi=""
+backends=0
+while read -r name gpu reps _; do
   [ -n "$name" ] || continue
-  if [ -n "$gpu" ]; then
-    gpu_requested="$gpu_requested $name($gpu)"
-  fi
+  backends=$((backends + 1))
+  case "$gpu" in
+    "" | "<none>") ;;
+    *) gpu_requested="$gpu_requested $name($gpu)" ;;
+  esac
+  case "$reps" in
+    "" | "1" | "<none>") ;;
+    *) multi="$multi $name($reps)" ;;
+  esac
 done <<<"$spec"
 
 if [ -n "$gpu_requested" ]; then
@@ -59,34 +78,23 @@ else
   ok "@check:llm_cpu_mode_requests_no_gpu no backend requests a GPU"
 fi
 
-# Each backend is a separate Deployment. With one, the "separate" property is
-# trivially true; the check still runs so a future change to replicas is caught.
-backends=$(printf '%s\n' "$spec" | grep -c . || true)
-replicas="$(node_root <<EOS 2>/dev/null
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-/usr/local/bin/kubectl -n $ns get deploy -l app.kubernetes.io/name=llamacpp \\
-  -o jsonpath='{range .items[*]}{.metadata.name}={.spec.replicas}{"\\n"}{end}'
-EOS
-)"
-multi=$(printf '%s\n' "$replicas" | awk -F= '$2+0 > 1 {print $1"="$2}')
 if [ -n "$multi" ]; then
-  bad "@check:llm_backends_are_separate a backend is scaled past one replica ($multi)"
+  bad "@check:llm_backends_are_separate a backend is scaled past one replica:$multi"
   echo "  add another backends[] entry instead; replicas hide the pool from LiteLLM"
   fails=$((fails + 1))
 else
   ok "@check:llm_backends_are_separate $backends backend deployment(s), one replica each"
 fi
 
-# The gateway must see the backends it was configured with.
-models="$(node_root <<EOS 2>/dev/null
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-/usr/local/bin/kubectl -n $ns exec deploy/${AI_RELEASE:-ai}-litellm -- \\
-  python3 -c 'import os,urllib.request,json
-r=urllib.request.Request("http://127.0.0.1:4000/v1/models", headers={"Authorization":"Bearer "+os.environ["LITELLM_MASTER_KEY"]})
-d=json.load(urllib.request.urlopen(r, timeout=20))
-print(" ".join(sorted(m["id"] for m in d.get("data",[]))))' 2>/dev/null
-EOS
-)"
+# The gateway must see the models it was configured to publish.
+models="$(kube exec "deploy/${release}-litellm" -- python3 -c '
+import os, json, urllib.request
+r = urllib.request.Request("http://127.0.0.1:4000/v1/models",
+    headers={"Authorization": "Bearer " + os.environ["LITELLM_MASTER_KEY"]})
+d = json.load(urllib.request.urlopen(r, timeout=20))
+print(" ".join(sorted(m["id"] for m in d.get("data", []))))
+' 2>/dev/null | tr -d '\r')"
+
 if [ -z "$models" ]; then
   bad "the gateway did not answer /v1/models inside the pod"
   fails=$((fails + 1))
