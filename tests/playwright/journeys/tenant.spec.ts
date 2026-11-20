@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installed, hostOf, portalSession, basic, oidcLogin, PORTAL_USER, PORTAL_PASS } from '../lib/session';
+import { installed, hostOf, portalSession, basic, oidcLogin, tokenInStorage, PORTAL_USER, PORTAL_PASS } from '../lib/session';
 
 // "A regular tenant signs in and actually does something" per app.
 //
@@ -289,38 +289,31 @@ test.describe('tenant can work in vikunja', () => {
     // Vikunja auto-registers OIDC users, so this is a real first-use path: the
     // invited tenant has no local account, and the app has to create one and let
     // it own a project.
+    //
+    // Readiness and the API calls both go through the app's own JWT: Vikunja
+    // keeps it in localStorage and sends it as a bearer header. A same-origin
+    // fetch with `credentials: 'same-origin'` is anonymous here, which is why
+    // this test first reported 401s while the browser was plainly logged in.
     const { context, page } = await oidcLogin(browser, host, {
       credentials: { username: user, password: pass },
-      ready: async (p) =>
-        p
-          .evaluate(async () => {
-            const r = await fetch('/api/v1/user', {
-              credentials: 'same-origin',
-              headers: { Accept: 'application/json' },
-            });
-            return r.status;
-          })
-          .then((s) => s === 200)
-          .catch(() => false),
+      ready: async (p) => tokenInStorage(p),
     });
 
     const result = await page.evaluate(async (title: string) => {
+      const token = localStorage.getItem('token') || '';
+      const h = { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
       const create = await fetch('/api/v1/projects', {
         method: 'PUT',
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        headers: h,
         body: JSON.stringify({ title }),
       });
       const created = await create.json().catch(() => null);
       if (create.status >= 300) return { create: create.status, list: 0, found: false };
-      const list = await fetch('/api/v1/projects', {
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json' },
-      });
+      const list = await fetch('/api/v1/projects', { headers: h });
       const projects = await list.json().catch(() => []);
       const found = Array.isArray(projects) && projects.some((p: any) => p.title === title);
       if (created?.id) {
-        await fetch(`/api/v1/projects/${created.id}`, { method: 'DELETE', credentials: 'same-origin' });
+        await fetch(`/api/v1/projects/${created.id}`, { method: 'DELETE', headers: h });
       }
       return { create: create.status, list: list.status, found };
     }, `tenant-${suffix}`);

@@ -15,6 +15,7 @@ import {
   anon,
   appAdmin,
   appToken,
+  tokenInStorage,
   PORTAL_USER,
   PORTAL_PASS,
 } from './lib/session';
@@ -382,26 +383,20 @@ test.describe('vikunja directory login', () => {
     const password = ciPassword();
     await createUser(username, password, { displayName: username });
 
-    // Vikunja's callback is per provider key (/api/v1/auth/openid/<key>/callback),
-    // so this watches the app's own callback rather than a /oidc/callback path.
+    // Vikunja's callback is per provider key, and it is on the v2 API:
+    // /api/v2/auth/openid/<key>/callback (verified by watching the live exchange).
+    // v1 has the same route, but the app's own frontend uses v2, so that is what
+    // a real login exercises.
     let callbackStatus = 0;
     const { context, page } = await oidcLogin(browser, host, {
       credentials: { username, password },
       onPage: (p) =>
         p.on('response', (r) => {
-          if (r.url().includes('/api/v1/auth/openid/')) callbackStatus = r.status();
+          if (r.url().includes('/auth/openid/') && r.request().method() === 'POST') {
+            callbackStatus = r.status();
+          }
         }),
-      ready: async (p) =>
-        p
-          .evaluate(async () => {
-            const r = await fetch('/api/v1/user', {
-              credentials: 'same-origin',
-              headers: { Accept: 'application/json' },
-            });
-            return r.status;
-          })
-          .then((s) => s === 200)
-          .catch(() => false),
+      ready: async (p) => tokenInStorage(p),
     });
     expect(callbackStatus, 'Vikunja exchanged the code').toBeGreaterThanOrEqual(200);
     expect(callbackStatus, 'Vikunja callback succeeded').toBeLessThan(400);
@@ -424,7 +419,10 @@ test.describe('vikunja api token', () => {
     const token = await appToken('vikunja', admin);
     expect(token, 'the token hook returned a token').toBeTruthy();
 
-    const ctx = await anon();
+    // The app's API host is behind Authelia, so even a valid API token needs the
+    // portal session to get past the ingress. appToken() authenticates through
+    // the public host for the same reason; this context carries that cookie.
+    const ctx = await portalSession();
     const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const project = `ci-${ciUser('vj')}-${Date.now()}`;
     let projectId = 0;
@@ -433,10 +431,12 @@ test.describe('vikunja api token', () => {
         headers: auth,
         data: { title: project },
       });
-      expect([200, 201], `create project -> ${created.status()} ${await created.text()}`.slice(0, 300)).toContain(
-        created.status(),
-      );
-      projectId = (await created.json()).id;
+      // A 200 carrying HTML means the request never reached the app: the portal
+      // served its own page. Say that instead of failing on JSON.parse.
+      const createdText = await created.text();
+      expect(createdText, `create project -> ${created.status()}`).not.toMatch(/^<!DOCTYPE/i);
+      expect([200, 201], `create project -> ${created.status()}`).toContain(created.status());
+      projectId = JSON.parse(createdText).id;
 
       const taskTitle = `${project}-task`;
       const task = await ctx.put(`${base}/api/v1/projects/${projectId}/tasks`, {
@@ -447,7 +447,8 @@ test.describe('vikunja api token', () => {
       const taskId = (await task.json()).id;
 
       // Read back through a different request: proves it persisted, not just
-      // that the create response echoed the payload.
+      // that the create response echoed the payload. Needs the token's
+      // "read_one" permission, which is separate from "read_all".
       const read = await ctx.get(`${base}/api/v1/tasks/${taskId}`, { headers: auth });
       expect(read.status(), 'the task is readable back').toBe(200);
       expect((await read.json()).title, 'the stored task is the one created').toBe(taskTitle);

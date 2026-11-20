@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installed, hostOf, appAdmin, appToken, anon } from '../lib/session';
+import { installed, hostOf, appAdmin, appToken, anon, portalSession } from '../lib/session';
 
 // Vikunja client journey: INFORMATIONAL (excluded from the gate; see
 // docs/apps/testing.md). The gate itself covers the app through auth.spec.ts
@@ -19,7 +19,9 @@ test.describe('vikunja', () => {
     test.setTimeout(120_000);
     const base = `https://${hostOf('vikunja')}`;
     const token = await appToken('vikunja', admin);
-    const ctx = await anon();
+    // The API sits behind Authelia, so the portal session is needed as well as
+    // the app's bearer token (appToken authenticates through the same host).
+    const ctx = await portalSession();
     const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const title = `groceries-${Date.now()}`;
     let projectId = 0;

@@ -187,7 +187,10 @@ test.describe('console', () => {
     });
     expect(result.status, 'console /api/status').toBe(200);
     expect(Array.isArray(result.body), 'status is an array').toBeTruthy();
-    expect(result.body.length, 'at least five installed apps').toBeGreaterThanOrEqual(5);
+    // The console lists what is actually installed. Asserting a fixed number
+    // broke the moment the dev environments were trimmed to the apps under test,
+    // so just require that it reports a non-empty app list.
+    expect(result.body.length, 'the console reports the installed apps').toBeGreaterThanOrEqual(1);
 
     // The authenticated page must carry the edge/console security headers.
     const root = await page.goto(`https://${CONSOLE_HOST}/`);

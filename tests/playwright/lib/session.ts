@@ -403,6 +403,20 @@ export async function oidcLogin(
   return { context, page };
 }
 
+// tokenInStorage reports whether a Vikunja page holds a signed-in session, and
+// doubles as a generic "the app stored its own token" readiness probe.
+//
+// Vikunja does NOT use a cookie for API auth: the SPA keeps a JWT in
+// localStorage under `token` and sends it as a bearer header. So a
+// `fetch(..., {credentials:'same-origin'})` from the page is anonymous even
+// after a successful SSO round trip, which is what made the first version of
+// this check fail while the browser was visibly logged in.
+export async function tokenInStorage(page: Page, key = 'token'): Promise<boolean> {
+  return page
+    .evaluate((k) => Boolean(localStorage.getItem(k)), key)
+    .catch(() => false);
+}
+
 // png builds a valid w*h RGB PNG. Image pipelines (thumbnailers, OCR previews)
 // reject degenerate 1x1 images, so the journeys use a real picture.
 export function png(width = 64, height = 64): Buffer {
