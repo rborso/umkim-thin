@@ -13,9 +13,9 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/ai
-  version: 0.1.1
+  version: 0.1.2
   versions:
-    - version: 0.1.1
+    - version: 0.1.2
       appVersion: 1.83.7
       channel: stable
 
@@ -49,6 +49,11 @@ oidc:
 values:
   webui:
     externalUrl: "https://{{ .host }}"
+    # Seeds the first admin so the app has a user before any SSO sign-in: without
+    # one every API call is 401 and the OIDC landing page has nobody to become.
+    admin:
+      email: "ai-admin@{{ .zone }}"
+      name: "Admin"
     persistence:
       size: 2Gi
       storageClass: "{{ .storage.configClass }}"
