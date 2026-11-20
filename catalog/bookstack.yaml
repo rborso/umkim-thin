@@ -12,9 +12,9 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/bookstack
-  version: 0.1.1
+  version: 0.1.2
   versions:
-    - version: 0.1.1
+    - version: 0.1.2
       appVersion: 26.09.3
       channel: stable
 
