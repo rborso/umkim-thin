@@ -210,15 +210,21 @@ credentials.
 
 ## Dev target sizing
 
-The `dev-single` VPS (8 GiB RAM) runs all ten `ci_apps` plus identity, the
-console and Collabora. Observed usage after a deep run is about 6.3 GiB, with
-roughly 1.3 GiB available; Collabora grows during a document edit and pushes the
-peak higher. Provisioning disables swap (k3s expects it off and the playbook
-comments the fstab entry), so there is no overflow buffer.
+The `dev-single` VPS (8 GiB RAM) runs **nine** `ci_apps` - every app except the
+servarr stack - plus identity, the console and Collabora. The servarr stack was
+removed from this target because it was the largest tenant (~2 GiB of requests on
+its own) and is not exercised here; it stays on the HA target, which has three
+8 GiB nodes in the same lab.
 
-This is intentional. The gate and the journeys complete in this footprint, so
-keep `ci_apps` complete on `dev-single` and do not run two deep targets against
-the same VPS. When a run needs more headroom, give the target more RAM rather
-than dropping an app from the coverage set. The HA target has three 8 GiB nodes
-in the same lab and does not share this limit.
+With servarr installed the node sat at ~99% of memory requests (6940Mi of ~7000Mi
+allocatable), which is not just tight: nothing else could be scheduled. The
+identity reconcile Job could not get 32Mi, so it stayed `active` for 30 hours and,
+because its CronJob is `concurrencyPolicy: Forbid`, blocked every later run.
+Removing servarr took the node to ~69% (4892Mi) and the reconcile completes again.
+
+Provisioning disables swap (k3s expects it off and the playbook comments the
+fstab entry), so there is no overflow buffer. When a run needs more headroom, give
+the target more RAM rather than dropping another app from the coverage set; the
+servarr stack is covered on HA, so the coverage set as a whole is unchanged. Do
+not run two deep targets against the same VPS.
 

@@ -128,7 +128,19 @@ REMOTE
 out=$(remote | node_root 2>&1)
 rc=$?
 printf '%s\n' "$out"
+# A target that does not install servarr (dev-single leaves it out to save
+# memory) has nothing to exercise. Skip rather than fail, and check before
+# reporting anything: the remote helper already prints "FAIL qBittorrent
+# service/credentials" for a missing stack, which reads like a defect.
 if [ "$rc" -ne 0 ]; then
+  if ! node_root <<'EOS' >/dev/null 2>&1
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+/usr/local/bin/kubectl -n servarr get deploy qbittorrent >/dev/null 2>&1
+EOS
+  then
+    echo "servarr not installed on this target; skipping the download check"
+    exit 0
+  fi
   echo "servarr download check failed" >&2
   exit 1
 fi

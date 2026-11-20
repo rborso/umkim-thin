@@ -68,8 +68,10 @@ home.spec.ts journeys/tenant.spec.ts`) signs in as a regular invited tenant
 LDAP, Immich and Paperless over the real OIDC flow, and Gitea's SSH clone/push
 on the dedicated port 2222. See `docs/auth.md` for the OIDC status (Gitea's
 source is configured but its new-user auto-registration is not gated;
-Nextcloud's `user_oidc` is disabled). HA and single install the same `ci_apps`
-(including Nextcloud); the functional user journeys stay informational.
+Nextcloud's `user_oidc` is disabled). HA installs the full `ci_apps`; single
+leaves out the servarr stack to keep memory for the rest of the platform (see
+`docs/testing.md`), so the media chain is a full-profile HA check. The functional
+user journeys stay informational.
 
 ## The bootstrap image
 
