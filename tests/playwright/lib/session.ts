@@ -90,20 +90,30 @@ type TokenAdapter = (host: string, cred: TokenRequest) => Promise<string>;
 
 // loginJWT posts to an app's local-login endpoint and returns the bearer token
 // it issues. Only used by adapters whose app accepts that for the next step.
+//
+// The call goes through the app's PUBLIC host, which sits behind Authelia for
+// every catalog app, so the request needs the portal session's cookie *and* the
+// app's own credentials - two different accounts. Without the cookie Traefik
+// answers 303 to the portal and the reply is a redirect, not a token. (curl on
+// the node against the Service works, but that is not the path a client uses.)
 async function loginJWT(
   host: string,
   path: string,
   cred: TokenRequest,
   field = 'token',
 ): Promise<{ token: string; ctx: Awaited<ReturnType<typeof anon>> }> {
-  const ctx = await anon();
+  // The portal session belongs to a directory account; the app login belongs to
+  // the app's own local admin. PORTAL_USER/USER are the directory identities the
+  // rest of the suite uses.
+  const ctx = await portalSession();
   const r = await ctx.post(`https://${host}${path}`, {
     data: { username: cred.user, password: cred.pass },
     headers: { 'Content-Type': 'application/json' },
   });
   if (!r.ok()) {
+    const body = (await r.text()).slice(0, 200);
     await ctx.dispose();
-    throw new Error(`login at ${path} for ${cred.user} -> ${r.status()} ${(await r.text()).slice(0, 200)}`);
+    throw new Error(`login at ${path} for ${cred.user} -> ${r.status()} ${body}`);
   }
   const body = await r.json().catch(() => ({}));
   const token: string = body?.[field] ?? '';
@@ -131,9 +141,15 @@ const vikunjaToken: TokenAdapter = async (host, cred) => {
         expires_at: expires,
         // Explicit rather than "everything": a token that cannot write would
         // make the gating check pass for the wrong reason.
+        //
+        // read_one matters and is easy to miss: Vikunja derives the required
+        // permission from the route's method and path, so a single-item
+        // GET /api/v1/tasks/<id> is "read_one" while the collection is
+        // "read_all". Without it the read-back 401s even though the create
+        // worked. Verified against a running instance.
         permissions: {
-          projects: ['read_all', 'create', 'update', 'delete'],
-          tasks: ['read_all', 'create', 'update', 'delete'],
+          projects: ['read_all', 'read_one', 'create', 'update', 'delete'],
+          tasks: ['read_all', 'read_one', 'create', 'update', 'delete'],
         },
       },
     });

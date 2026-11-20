@@ -47,8 +47,13 @@ auth:
 oidc:
   clientId: vikunja
   redirectUris:
-    # Vikunja's callback is per provider key, not the host root.
-    - "https://{{ .host }}/api/v1/auth/openid/authelia/callback"
+    # NOT /api/v1/auth/openid/<key>/callback. Verified against the deployed app:
+    # the frontend sends redirect_uri=https://<host>/auth/openid/authelia, and
+    # Authelia rejects anything else with "redirect_uri does not match any of the
+    # client's registered redirect URIs". Vikunja then POSTs the code to
+    # /api/v1/auth/openid/authelia/callback, but that is the exchange endpoint,
+    # not the URI registered with the provider.
+    - "https://{{ .host }}/auth/openid/authelia"
 
 values:
   externalUrl: "https://{{ .host }}"
