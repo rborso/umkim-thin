@@ -324,3 +324,52 @@ test.describe('tenant can work in vikunja', () => {
     await context.close();
   });
 });
+
+test.describe('tenant can work in bookstack', () => {
+  test.skip(!installed('bookstack'), 'bookstack is not installed');
+  test.skip(!user || !pass, 'portal user not set');
+
+  test('a regular user signs in by SSO and creates a page @check:tenant_api_bookstack', async ({ browser }) => {
+    test.setTimeout(180_000);
+    const host = hostOf('bookstack');
+    // BookStack auto-registers OIDC users with the default role, so the tenant
+    // should be able to create a page without an admin touching anything.
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username: user, password: pass },
+      ready: async (p) => {
+        const url = p.url();
+        return url.includes(host) && !url.includes('/oidc') && !url.includes('/login');
+      },
+    });
+
+    // Create a page through the same session, then confirm the app lists it.
+    // Forms carry a CSRF token, so scrape it from the create form.
+    const result = await page.evaluate(async (title: string) => {
+      const createForm = await fetch('/create-page', { credentials: 'same-origin' });
+      const html = await createForm.text();
+      const token = (html.match(/name="_token"\s+value="([^"]+)"/) ?? [])[1];
+      if (!token) return { created: 0, found: false };
+      const form = new URLSearchParams();
+      form.set('_token', token);
+      form.set('name', title);
+      form.set('html', '<p>written by a regular tenant</p>');
+      const post = await fetch('/create-page', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+        redirect: 'manual',
+      });
+      const after = await fetch('/search?term=' + encodeURIComponent(title), {
+        credentials: 'same-origin',
+      });
+      const text = await after.text();
+      return { created: post.status, found: text.includes(title) };
+    }, `tenant-page-${suffix}`);
+
+    // 302 is the normal success path (redirect to the new page).
+    expect([200, 302, 303], `the tenant creates a page -> ${result.created}`).toContain(result.created);
+    expect(result.found, 'the page the tenant created is searchable').toBe(true);
+    await context.close();
+  });
+});

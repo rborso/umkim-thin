@@ -163,5 +163,18 @@
         "user": "vikunja-admin"
       }
     }
+  ],
+  "bookstack": [
+    {
+      "name": "bookstack",
+      "host": "bookstack.{zone}",
+      "auth": "oidc",
+      "token": { "adapter": "bookstack" },
+      "admin": {
+        "namespace": "bookstack",
+        "secret": "bookstack-secrets",
+        "user": "admin@bookstack.local"
+      }
+    }
   ]
 }

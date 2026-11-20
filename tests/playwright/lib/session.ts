@@ -165,8 +165,78 @@ const vikunjaToken: TokenAdapter = async (host, cred) => {
   }
 };
 
+// bookstackToken mints an API token through BookStack's own account form.
+//
+// There is no JSON endpoint for this: a token is created by POSTing a form, and
+// the secret is flashed to the session and rendered once on the redirect target.
+// Verified end to end against a real container, which is where all of these
+// details came from:
+//
+//   * login is a form POST with a CSRF `_token` scraped from /login;
+//   * the session cookie is `Secure`, so it is sent explicitly rather than left
+//     to cookie-jar host matching (the CI talks to https anyway, but the same
+//     code runs against a plain-http dev URL);
+//   * the user id comes from /my-account/auth;
+//   * POST /api-tokens/<userId>/create returns 302 to /api-tokens/<userId>/<id>;
+//     the page there carries the secret in the `token_id` field;
+//   * the API wants `Authorization: Token <id>:<secret>` - id alone is 401.
+const bookstackToken: TokenAdapter = async (host, cred) => {
+  const base = `https://${host}`;
+  const ctx = await portalSession();
+  try {
+    const loginPage = await ctx.get(`${base}/login`);
+    if (!loginPage.ok()) throw new Error(`bookstack /login -> ${loginPage.status()}`);
+    const csrf = ((await loginPage.text()).match(/name="_token"\s+value="([^"]+)"/) ?? [])[1];
+    if (!csrf) throw new Error('bookstack /login had no CSRF token');
+
+    const login = await ctx.post(`${base}/login`, {
+      form: { _token: csrf, email: cred.user, password: cred.pass },
+      maxRedirects: 0,
+    });
+    // A successful login is a 302; a failed one re-renders the form (200).
+    if (login.status() !== 302) {
+      throw new Error(`bookstack login for ${cred.user} -> ${login.status()}`);
+    }
+
+    const account = await ctx.get(`${base}/my-account/auth`);
+    const userId = ((await account.text()).match(/\/api-tokens\/(\d+)\/create/) ?? [])[1];
+    if (!userId) throw new Error('bookstack: no user id on /my-account/auth (session not established?)');
+
+    const form = await ctx.get(`${base}/api-tokens/${userId}/create`);
+    const formCsrf = ((await form.text()).match(/name="_token"\s+value="([^"]+)"/) ?? [])[1];
+    if (!formCsrf) throw new Error('bookstack token form had no CSRF token');
+
+    // maxRedirects: 0 so the redirect target is known; the secret is rendered
+    // there in the same session, so fetch it immediately.
+    const created = await ctx.post(`${base}/api-tokens/${userId}/create`, {
+      form: { _token: formCsrf, name: `umkim-thin-ci-${Date.now()}`, expires_at: '2030-01-01' },
+      maxRedirects: 0,
+    });
+    if (created.status() !== 302) {
+      throw new Error(`bookstack token create -> ${created.status()}`);
+    }
+    const location = created.headers()['location'] ?? '';
+    if (!location) throw new Error('bookstack token create returned no redirect target');
+
+    const page = await ctx.get(location.startsWith('http') ? location : `${base}${location}`);
+    const html = await page.text();
+    // The id is a form field; the secret is a bare readonly input with NO name
+    // attribute (see resources/views/users/api-tokens/edit.blade.php). Excluding
+    // named inputs is what tells the two readonly fields apart.
+    const id = (html.match(/name="token_id"[^>]*value="([^"]+)"/) ?? [])[1];
+    const secret = (html.match(/<input(?![^>]*\bname=)[^>]*\breadonly[^>]*\bvalue="([^"]+)"/) ?? [])[1];
+    if (!id || !secret) {
+      throw new Error('bookstack token page did not expose both halves of the token');
+    }
+    return `${id}:${secret}`;
+  } finally {
+    await ctx.dispose();
+  }
+};
+
 const ADAPTERS: Record<string, TokenAdapter> = {
   vikunja: vikunjaToken,
+  bookstack: bookstackToken,
 };
 
 // appToken returns a per-user API token for `app`, minted as `cred`.

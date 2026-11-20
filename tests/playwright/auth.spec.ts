@@ -460,3 +460,79 @@ test.describe('vikunja api token', () => {
     }
   });
 });
+
+test.describe('bookstack directory login', () => {
+  test.skip(!installed('bookstack'), 'bookstack is not installed');
+
+  test('a directory user completes the BookStack OIDC flow @check:oidc_sso_completes', async ({ browser }) => {
+    test.setTimeout(120_000);
+    const host = hostOf('bookstack');
+    const username = ciUser('ci-bookstack');
+    const password = ciPassword();
+    await createUser(username, password, { displayName: username });
+
+    let callbackStatus = 0;
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username, password },
+      onPage: (p) =>
+        p.on('response', (r) => {
+          if (r.url().includes('/oidc/callback')) callbackStatus = r.status();
+        }),
+      // BookStack sets a session and redirects to the shelf/home page.
+      ready: async (p) => {
+        const url = p.url();
+        return url.includes(host) && !url.includes('/oidc') && !url.includes('/login');
+      },
+    });
+    expect(callbackStatus, 'BookStack exchanged the code').toBeGreaterThanOrEqual(200);
+    expect(callbackStatus, 'BookStack callback succeeded').toBeLessThan(400);
+    expect(page.url(), 'still on the app').toContain(host);
+    await context.close();
+  });
+});
+
+test.describe('bookstack api token', () => {
+  test.skip(!installed('bookstack'), 'bookstack is not installed');
+  const admin = appAdmin('bookstack');
+  test.skip(!admin.user || !admin.pass, 'BOOKSTACK admin credentials not set');
+
+  test('an API token writes a page and reads it back @check:bookstack_api_token_writes_page', async () => {
+    test.setTimeout(120_000);
+    const host = hostOf('bookstack');
+    const base = `https://${host}`;
+    // The hook drives BookStack's own token form; there is no JSON way to mint
+    // one. It returns "id:secret", which is the format the API expects.
+    const token = await appToken('bookstack', admin);
+    expect(token, 'the token hook returned a token').toContain(':');
+
+    // The app host is behind Authelia, so the session rides along with the API
+    // token - the same as the other catalog apps.
+    const ctx = await portalSession();
+    const auth = { Authorization: `Token ${token}`, 'Content-Type': 'application/json' };
+    const name = `ci-page-${ciUser('bs')}-${Date.now()}`;
+    let pageId = 0;
+    try {
+      const created = await ctx.post(`${base}/api/pages`, {
+        headers: auth,
+        data: { name, html: '<p>written by the umkim-thin gate</p>' },
+      });
+      const body = await created.text();
+      expect(body, `create page -> ${created.status()}`).not.toMatch(/^<!DOCTYPE/i);
+      expect([200, 201], `create page -> ${created.status()} ${body.slice(0, 200)}`).toContain(created.status());
+      pageId = JSON.parse(body).id;
+
+      // Read it back through a separate request: proves it was stored rather
+      // than echoed from the create payload.
+      const read = await ctx.get(`${base}/api/pages/${pageId}`, { headers: auth });
+      expect(read.status(), 'the page is readable back').toBe(200);
+      const stored = await read.json();
+      expect(stored.name, 'the stored page is the one created').toBe(name);
+      expect(stored.html, 'the body survived the round trip').toContain('umkim-thin gate');
+    } finally {
+      if (pageId) {
+        await ctx.delete(`${base}/api/pages/${pageId}`, { headers: auth }).catch(() => undefined);
+      }
+      await ctx.dispose();
+    }
+  });
+});
