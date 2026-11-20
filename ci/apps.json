@@ -156,7 +156,9 @@
       "name": "vikunja",
       "host": "vikunja.{zone}",
       "auth": "oidc",
-      "token": { "adapter": "vikunja" },
+      "token": {
+        "adapter": "vikunja"
+      },
       "admin": {
         "namespace": "vikunja",
         "secret": "vikunja-secrets",
@@ -169,12 +171,21 @@
       "name": "bookstack",
       "host": "bookstack.{zone}",
       "auth": "oidc",
-      "token": { "adapter": "bookstack" },
+      "token": {
+        "adapter": "bookstack"
+      },
       "admin": {
         "namespace": "bookstack",
         "secret": "bookstack-secrets",
         "user": "admin@bookstack.local"
       }
+    }
+  ],
+  "ai": [
+    {
+      "name": "ai",
+      "host": "chat.{zone}",
+      "auth": "oidc"
     }
   ]
 }
