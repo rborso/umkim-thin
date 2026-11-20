@@ -180,18 +180,27 @@ already in the tree:
     - ansible.builtin.find: ...       # confirm it worked
 ```
 
-The GPU role is the same shape with `nvidia-smi` as the assertion:
+The GPU role is the same shape with `nvidia-smi` as the assertion. The concrete
+steps are not guessed — see "What the umkim project already does" below for the
+version arrived at on real hardware, which this role should follow almost verbatim:
 
 | Step | Detail |
 |---|---|
-| gather | `lspci -d 10de:`; skip the role entirely when no GPU |
-| repo | `dnf config-manager --add-repo` for `cuda-rhel9` / `cuda-rhel10` by major |
-| driver | `dnf module install nvidia-driver:<branch>/latest-dkms` |
-| toolkit | `dnf install nvidia-container-toolkit` |
-| runtime | `nvidia-ctk runtime configure --runtime=containerd` |
-| restart | `systemctl restart containerd` — node-local, brief |
-| reboot | only if a new kernel landed; reuse the `common` reboot block |
-| verify | `nvidia-smi -L` non-empty, `nvidia-ctk` config present, module loaded for the **running** kernel |
+| gather | `lspci -nn`, assert a `10de:` device; read `mokutil --sb-state` |
+| catalog | look up PCI id → driver branch + per-OS overrides (not a fixed branch) |
+| repo | `cuda-rhel9.repo` or `cuda-rhel10.repo` by OS major |
+| prereqs | `kernel-devel-$(uname -r)`, `kernel-headers-$(uname -r)`, `gcc`, `make`, `pciutils`, `elfutils-libelf-devel`, EPEL (for dkms) |
+| nouveau | blacklist + rebuild initramfs |
+| driver | EL9: `dnf module enable nvidia-driver:<branch>-dkms`; EL10: direct packages, plus `crb`, EGL libs, and per-GPU open-vs-proprietary |
+| dkms | `dkms autoinstall` after the packages |
+| reboot | only when the install changed something |
+| verify | `nvidia-smi -L` with retries, then **pin the boot kernel** with `grubby` |
+| secure boot | import the DKMS MOK key only if SB is on **and** `nvidia-smi` failed; print the manual enrolment step |
+
+The toolkit and runtime are **post-cluster**, not part of this role's driver phase:
+`nvidia-container-toolkit`, `nvidia-ctk runtime configure --runtime=containerd
+--nvidia-set-as-default`, persist `default-runtime: nvidia` in
+`/etc/rancher/k3s/config.yaml`, restart k3s.
 
 Two constraints from the existing tree that the role must respect:
 
@@ -210,12 +219,15 @@ Two constraints from the existing tree that the role must respect:
 
 The host work does **not** create `nvidia.com/gpu`. That needs a device plugin:
 
-- **NVIDIA device plugin DaemonSet** (small, unprivileged-ish, `nodeSelector` on
-  `feature.node.kubernetes.io/pci-10de.present=true`), which publishes
-  `nvidia.com/gpu` in `status.allocatable`.
-- Optionally **NFD** for that label and for `nvidia.com/gpu.present`. Without NFD the
-  plugin can still be pinned with an explicit `nodeSelector` on the node name, which
-  is simpler for a single-GPU-node install.
+- **NVIDIA device plugin DaemonSet**, which publishes `nvidia.com/gpu` in
+  `status.allocatable`. The working configuration (from the prior art) is a small
+  ConfigMap + DaemonSet with `deviceDiscoveryStrategy: nvml`,
+  `failOnInitError: false`, tolerating `nvidia.com/gpu:NoSchedule`,
+  `priorityClassName: system-node-critical`, and a pinned image
+  (`nvcr.io/nvidia/k8s-device-plugin:v0.19.3`).
+- **NFD is not required** if the cluster default runtime is already `nvidia` and the
+  DaemonSet simply runs on every node — which is what the prior art does. Adding NFD
+  only matters if workloads need `pci-10de.present` labels to select nodes.
 - Optional: **DCGM exporter** if metrics are wanted — out of scope here.
 
 Then a chart asks for it the plain way:
@@ -270,18 +282,137 @@ outputs and assert the plan. A GPU is only needed for the last two rows.
 5. Device plugin DaemonSet; `ci/assert.sh` pre-flight.
 6. Only then the AI stack charts.
 
-## Open questions
+## What the umkim project already does
 
-1. **DKMS vs precompiled** — DKMS is recommended above for kernel-update survival,
-   but it needs `kernel-devel`/`gcc`/`make` on the host and lengthens the install.
-   Confirm that trade on a real Rocky 9 and a real Rocky 10 node.
-2. **Secure Boot** — if the lab hosts have it on, MOK enrolment is a manual step
-   (`mokutil --import`), which is not automatable without physical/console access.
-   Decide whether to support it or require Secure Boot off.
-3. **Who reboots** — the Ansible role does it today; the agent would need to. Pick
-   one owner to avoid a reboot loop, and make the other refuse.
-4. **Rocky 10 support** — confirm whether NVIDIA now publishes `cuda-rhel10` drivers
-   for the branch we want. If not, Rocky 10 GPU nodes are unsupported and the role
-   must say so rather than half-installing.
-5. **Marketplace/interconnect** — not relevant to a single-GPU node; listed only so
-   Phase C (multi-node tensor parallel) is not confused with this work.
+`rborso/umkim@devel` has a working `gpu_host` Ansible role with a hardware catalog.
+Its answers to this document's questions are worth recording, because they were
+arrived at on real hardware and they settle most of what would otherwise be
+guesswork here. Summarised, not pinned to a commit — re-check before relying on a
+specific value.
+
+### Hardware catalog, not a hardcoded branch
+
+`data/gpu/catalog.yaml` maps **PCI device id → driver branch + vram + per-OS
+overrides**, keyed by `10de:XXXX`:
+
+```yaml
+driver_branches:
+  "535":
+    min_host_driver_version: "535.104.05"
+    el10_direct_packages: true          # EL10: direct packages, no DNF module
+    cuda_repo:
+      el9:  { url: .../rhel9/x86_64/cuda-rhel9.repo,  filename: cuda-rhel9.repo }
+      el10: { url: .../rhel10/x86_64/cuda-rhel10.repo, filename: cuda-rhel10.repo }
+
+pci_devices:
+  "10de:1c8c":
+    marketing_name: NVIDIA GeForce GTX 1050 Ti
+    driver_branch: "535"
+    vram_gb: 4
+    el10_kmod_flavor: proprietary      # not in the EL10 open module
+    el10_driver_version: "580.178.04"  # Pascal mobile needs the 580 legacy stack
+```
+
+That is the answer to "which branch": **not one number, a lookup** — per GPU and per
+OS major. A single hardcoded branch is what breaks the moment a second GPU model or
+Rocky 10 appears, which is exactly the failure mode this document was worried about.
+
+### Rocky 9 vs 10 — both are supported, differently
+
+- **EL9**: `dnf module enable nvidia-driver:<branch>-dkms`, then
+  `nvidia-driver` / `nvidia-driver-cuda`.
+- **EL10**: **no DNF module** — install the packages directly from `cuda-rhel10`.
+  It also needs `kernel-modules-$(uname -r)` and `kernel-modules-extra-$(uname -r)`,
+  EPEL/CRB enabled, and the EGL packages (`egl-gbm`, `egl-wayland2`, `egl-x11`)
+  for the driver libs.
+- **Open vs proprietary**: some GPUs (e.g. Pascal mobile) are not in the EL10 *open*
+  kernel module and need `kmod-nvidia-latest-dkms` with an explicit version pin. The
+  catalog carries that per PCI id rather than assuming open works everywhere.
+
+So Rocky 10 *is* supported — the earlier "RHEL 10 drivers do not exist" concern is
+outdated, and the answer is per-GPU rather than per-OS.
+
+### The operational details that matter
+
+From `roles/gpu_host/tasks/driver.yml`, each of which is a problem someone already
+hit:
+
+| Step | Why |
+|---|---|
+| `kernel-devel-$(uname -r)`, `kernel-headers-$(uname -r)`, `gcc`, `make`, `elfutils-libelf-devel` | DKMS builds against the **running** kernel; the unversioned packages install for the newest, which may not be running |
+| blacklist `nouveau` + rebuild initramfs | the open driver otherwise claims the card first and the proprietary module will not load |
+| `dkms autoinstall` after package install | the RPM's own hook does not always fire on a running system |
+| **pin the boot kernel** (`grubby --set-default /boot/vmlinuz-$(uname -r)`) | otherwise the next reboot may come up on a kernel the module was not built for |
+| `epel-release` when using DKMS | `dkms` lives in EPEL |
+| reboot only when the install changed something | avoids a needless reboot on every idempotent run |
+| `nvidia-smi -L` with retries (12 × 10 s) after reboot | the module takes a moment to load |
+| `mokutil --sb-state`, and only import the MOK key when Secure Boot is on **and** `nvidia-smi` failed | MOK import is only needed in that case, and it is a password-bearing command (`no_log: true`) |
+
+### Secure Boot + MOK: it is automatable, with one manual step
+
+The role does `mokutil --import /var/lib/dkms/mok.pub` with a vault password when
+Secure Boot is enabled and `nvidia-smi` failed. MOK enrolment still needs one
+interactive confirmation at the blue MOK screen on next boot — the role prints
+exactly that instruction. So: **partially automatable**; the design must surface it
+as a known manual step, not pretend it is unattended.
+
+### Runtime: default runtime, not RuntimeClass
+
+This is the detail that differs from what I would have chosen:
+
+- `nvidia-ctk runtime configure --runtime=containerd --nvidia-set-as-default` against
+  `/var/lib/rancher/k3s/agent/etc/containerd/config.toml`
+- **plus** `default-runtime: nvidia` persisted in `/etc/rancher/k3s/config.yaml`, so
+  a k3s restart does not lose it
+- then restart k3s and wait for the API
+
+The device plugin is deployed with `deviceDiscoveryStrategy: nvml` and
+`failOnInitError: false`, tolerating `nvidia.com/gpu:NoSchedule`, as
+`system-node-critical`, pinned to `nvcr.io/nvidia/k8s-device-plugin:v0.19.3`. It sets
+`runtimeClassName` **only if configured to**, defaulting to false *because the
+cluster default runtime is already nvidia*.
+
+**So the platform should follow that**: make `nvidia` the **default runtime** and
+leave `runtimeClassName` off. It avoids the "resource and runtimeClass both set"
+trap from earlier in this document by removing the choice.
+
+### Order of operations, as actually implemented
+
+1. Host driver, **before** the cluster is bootstrapped (or `--force` on a Ready
+   cluster). Driver first, because k3s coming up mid-install while the module
+   changes is worse.
+2. Reboot, verify `nvidia-smi`.
+3. Cluster bootstrap.
+4. Container toolkit + device plugin, then a capability flag
+   (`fleet.capability/gpu=true`) so workloads can require a GPU-capable node.
+
+That is a cleaner sequence than "agent can do all of it": driver is pre-cluster,
+runtime is post-cluster, and the two never race.
+
+## What this changes in the design above
+
+- **Drop the single `driverBranch` field** from the plan request. The agent takes
+  the PCI id and the OS major and **looks them up** in a catalog shipped with the
+  platform, exactly like the storage agent resolves storage classes.
+- **Drop "DKMS vs precompiled" as an open question** — DKMS with the running-kernel
+  `kernel-devel` is the working answer; precompiled-per-kernel was the thing to
+  avoid.
+- **Drop "who reboots"** — the driver install reboots (it must, to load the module),
+  and the role is the owner. The agent's `apply` reports `rebootRequired` and lets
+  the role do it, consistent with the pre-cluster/post-cluster split.
+- **Secure Boot** is a *known manual step* with an automated import attempt, not an
+  unsupported configuration.
+- **Runtime**: default-runtime approach, not RuntimeClass.
+- **Add** `grubby` boot-kernel pinning and `nouveau` blacklisting to the plan, and
+  the EL10 EGL/CRB/kernel-modules specifics.
+
+## Open questions that remain
+
+1. Does this platform want the driver install **before** the cluster is bootstrapped
+   (the umkim order) or only on an already-running node? `install.sh` has no GPU
+   concept today, so the natural fit is "on a ready node, via the agent" — but then
+   the boot-kernel pin and reboot have to be safe with workloads running.
+2. **Multi-GPU / multi-node**: the catalog is per PCI id per node; nothing here
+   assumes more than one GPU per host. Confirm the target fleet.
+3. Whether to adopt the umkim catalog format as-is (it is a small YAML schema) or
+   reshape it for the console's node model.
