@@ -22,7 +22,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | App | Auto | Chart | Human |
 |---|---|---|---|
 | actualbudget | auto-tested | 0.1.3 | - |
-| bookstack | auto-tested | 0.1.3 | - |
+| bookstack | auto-tested | 0.1.4 | - |
 | gitea | auto-tested | 0.1.23 | 2026-11-19 (agent) |
 | homebox | auto-tested | 0.1.2 | 2026-11-19 (agent) |
 | immich | auto-tested | 0.1.13 | 2026-11-19 (agent) |
