@@ -44,7 +44,13 @@ oidc:
   clientId: openwebui
   requirePkce: false
   redirectUris:
-    - "https://{{ .host }}/oauth/callback"
+    # Open WebUI builds this as /oauth/<provider>/callback, where the provider
+    # key for a generic OIDC client is "oidc" - not the bare /oauth/callback the
+    # docs show for single-provider setups. Verified from the live authorize
+    # request: registering the short form made Authelia answer "The
+    # 'redirect_uri' parameter does not match any of the OAuth 2.0 Client's
+    # pre-registered 'redirect_uris'".
+    - "https://{{ .host }}/oauth/oidc/callback"
 
 values:
   webui:

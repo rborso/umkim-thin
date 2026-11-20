@@ -470,7 +470,8 @@ export async function oidcLogin(
       : page.locator('#oidc-login, button:has-text("Authelia"), a:has-text("Authelia")');
     if ((await sso.count()) === 0) {
       sso = page.locator(
-        'button:has-text("SSO"), a:has-text("SSO"), button:has-text("OpenID"), a:has-text("OpenID"), button:has-text("Sign in with"):not(:has-text("Passkey")), a:has-text("Sign in with")',
+        // "Continue with <provider>" is Open WebUI's wording.
+        'button:has-text("Continue with"), a:has-text("Continue with"), button:has-text("SSO"), a:has-text("SSO"), button:has-text("OpenID"), a:has-text("OpenID"), button:has-text("Sign in with"):not(:has-text("Passkey")), a:has-text("Sign in with")',
       );
     }
     if (await sso.count()) {
