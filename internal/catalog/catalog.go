@@ -156,7 +156,7 @@ const (
 // only outside these is informational (see CategoryAutoChecked).
 var GatingSuites = []string{
 	"apps.spec.ts", "auth.spec.ts", "tls.spec.ts", "console.spec.ts",
-	"home.spec.ts", "journeys/tenant.spec.ts",
+	"home.spec.ts", "lib.spec.ts", "journeys/tenant.spec.ts",
 }
 
 // Category derives the app's test status. auto says whether its checks resolved

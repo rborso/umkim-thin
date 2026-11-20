@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-app verification targets for the lab run. {zone} is substituted with the target's zone; 'public' are sample paths that must bypass auth. 'admin' names the app's own admin account: ci/e2e.sh reads that Secret and exports UMKIM_THIN_<APP>_ADMIN_USER / _ADMIN_PASSWORD for the client journeys.",
+  "_comment": "Per-app verification targets for the lab run. {zone} is substituted with the target's zone; 'public' are sample paths that must bypass auth. 'admin' names the app's own admin account: ci/e2e.sh reads that Secret and exports UMKIM_THIN_<APP>_ADMIN_USER / _ADMIN_PASSWORD for the client journeys. 'token' names the per-user API-token adapter in tests/playwright/lib/session.ts (appToken) that an app with no session API needs; omit it for apps that do not.",
   "gitea": [
     {
       "name": "gitea",

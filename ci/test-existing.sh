@@ -306,7 +306,7 @@ set +e
 # sign in and do something in each app, which neither the login matrix nor the
 # app-admin journeys cover (see ci/e2e.sh).
 ./node_modules/.bin/playwright test apps.spec.ts auth.spec.ts tls.spec.ts console.spec.ts home.spec.ts \
-  journeys/tenant.spec.ts --output "$REPORT_DIR/artifacts" >"$REPORT_DIR/gate.log" 2>&1
+  lib.spec.ts journeys/tenant.spec.ts --output "$REPORT_DIR/artifacts" >"$REPORT_DIR/gate.log" 2>&1
 gate_rc=$?
 set -e
 tail -35 "$REPORT_DIR/gate.log"

@@ -18,7 +18,16 @@ export const PORTAL_PASS = process.env.UMKIM_THIN_PORTAL_PASSWORD || PASS;
 export const AUTH_HOST = process.env.UMKIM_THIN_AUTH_HOST || (ZONE ? `auth.${ZONE}` : '');
 export const CONSOLE_HOST = ZONE ? `console.${ZONE}` : '';
 
-export type App = { name: string; host: string; auth: string; public?: string[] };
+export type App = {
+  name: string;
+  host: string;
+  auth: string;
+  public?: string[];
+  // Which per-app token adapter can mint an API token (see appToken). Declared
+  // in ci/apps.json so the harness stays data-driven: adding an app that needs a
+  // token never means editing this file, only registering an adapter below.
+  token?: { adapter?: string };
+};
 export const APPS: App[] = JSON.parse(process.env.UMKIM_THIN_APPS || '[]');
 
 export function installed(name: string): boolean {
@@ -47,13 +56,132 @@ export function appAdmin(app: string): { user: string; pass: string } {
   };
 }
 
-// The app's API key, exported by ci/e2e.sh from the `apiKey` entry in
-// ci/apps.json (UMKIM_THIN_<APP>_API_KEY). The *arr apps keep theirs in a chart
-// Secret, so the CI reads it there rather than from a config file.
+// appApiKey is the app's own *shared* API key (the *arr apps keep theirs in a
+// chart Secret). It is not a per-user credential: see appToken for that.
 export function appApiKey(app: string): string {
   const key = app.toUpperCase().replace(/[^A-Z0-9]/g, '_');
   return process.env[`UMKIM_THIN_${key}_API_KEY`] ?? '';
 }
+
+// ---------------------------------------------------------------------------
+// Per-user API tokens
+// ---------------------------------------------------------------------------
+//
+// Some apps have no session API a test can call: every request needs a token
+// the user mints in their own profile (BookStack, Vikunja). Without one, the
+// gate can only prove that a login page loads - which is what "could not be
+// verified" meant for Miniflux, and why it was dropped.
+//
+// The adapters below are deliberately per-app rather than one generic
+// implementation, because the retrieval differs in every case:
+//
+//   vikunja   PUT  /api/v1/tokens        JWT -> scoped API token, one call
+//   bookstack GET  /api-tokens/<id>/...  HTML form + CSRF, no JSON API for it
+//
+// A shared interface keeps the call sites identical, and ci/apps.json decides
+// which adapter an app uses so this file does not grow an app list.
+
+type TokenRequest = { user: string; pass: string };
+
+// anonTokenContext is a request context for an app host. `post`/`get` carry a
+// token if the adapter has one, and the caller's credentials are passed
+// explicitly because these are the app's own accounts (not the portal's).
+type TokenAdapter = (host: string, cred: TokenRequest) => Promise<string>;
+
+// loginJWT posts to an app's local-login endpoint and returns the bearer token
+// it issues. Only used by adapters whose app accepts that for the next step.
+async function loginJWT(
+  host: string,
+  path: string,
+  cred: TokenRequest,
+  field = 'token',
+): Promise<{ token: string; ctx: Awaited<ReturnType<typeof anon>> }> {
+  const ctx = await anon();
+  const r = await ctx.post(`https://${host}${path}`, {
+    data: { username: cred.user, password: cred.pass },
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!r.ok()) {
+    await ctx.dispose();
+    throw new Error(`login at ${path} for ${cred.user} -> ${r.status()} ${(await r.text()).slice(0, 200)}`);
+  }
+  const body = await r.json().catch(() => ({}));
+  const token: string = body?.[field] ?? '';
+  if (!token) {
+    await ctx.dispose();
+    throw new Error(`login at ${path} returned no ${field}: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  return { token, ctx };
+}
+
+// vikunjaToken mints a scoped API token from a username/password login.
+//
+// Verified against the upstream router (pkg/routes/routes.go): the endpoint is
+// PUT /api/v1/tokens, NOT /api/v1/user/token (that path only refreshes a JWT).
+// A token needs a title, an expiry and explicit permissions, and the cleartext
+// is returned exactly once, in the creation response.
+const vikunjaToken: TokenAdapter = async (host, cred) => {
+  const { token: jwt, ctx } = await loginJWT(host, '/api/v1/login', cred);
+  try {
+    const expires = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    const r = await ctx.put(`https://${host}/api/v1/tokens`, {
+      headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+      data: {
+        title: 'umkim-thin-ci',
+        expires_at: expires,
+        // Explicit rather than "everything": a token that cannot write would
+        // make the gating check pass for the wrong reason.
+        permissions: {
+          projects: ['read_all', 'create', 'update', 'delete'],
+          tasks: ['read_all', 'create', 'update', 'delete'],
+        },
+      },
+    });
+    if (!r.ok()) {
+      throw new Error(`vikunja token -> ${r.status()} ${(await r.text()).slice(0, 300)}`);
+    }
+    const body = await r.json().catch(() => ({}));
+    const token: string = body?.token ?? '';
+    if (!token) throw new Error(`vikunja token response carried no token: ${JSON.stringify(body).slice(0, 300)}`);
+    return token;
+  } finally {
+    await ctx.dispose();
+  }
+};
+
+const ADAPTERS: Record<string, TokenAdapter> = {
+  vikunja: vikunjaToken,
+};
+
+// appToken returns a per-user API token for `app`, minted as `cred`.
+//
+// The adapter is chosen by the app's entry in ci/apps.json, so an app that
+// needs a token declares it there instead of this file knowing app names. An
+// app with no adapter is an error rather than an empty string: a test that
+// silently got '' would assert against an unauthenticated app and pass.
+export async function appToken(
+  app: string,
+  cred?: Partial<TokenRequest>,
+): Promise<string> {
+  const entry = APPS.find((a) => a.name === app);
+  const adapterName = entry?.token?.adapter ?? app;
+  const adapter = ADAPTERS[adapterName];
+  if (!adapter) {
+    throw new Error(
+      `no token adapter for ${app} (declared: ${adapterName}); add one to lib/session.ts and set token.adapter in ci/apps.json`,
+    );
+  }
+  const host = hostOf(app);
+  if (!host) throw new Error(`${app} is not in UMKIM_THIN_APPS`);
+  const fallback = appAdmin(app);
+  const user = cred?.user ?? fallback.user;
+  const pass = cred?.pass ?? fallback.pass;
+  if (!user || !pass) {
+    throw new Error(`appToken(${app}) needs credentials; set the app admin or pass them explicitly`);
+  }
+  return adapter(host, { user, pass });
+}
+
 
 // portalSession logs in through the Authelia portal and returns a context whose
 // cookie jar carries the session (the cookie is scoped to the zone, so it is
