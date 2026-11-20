@@ -293,6 +293,77 @@ them. Verified from upstream's load-balancing docs:
 So load balancing across nodes costs no custom code: it is a `model_list` with
 repeated `model_name`s.
 
+### Sticky sessions: default on, and the trap to avoid
+
+**Sticky sessions should be the default**, and there is prior art for this in
+`rborso/umkim@devel` (`roles/fleet_llm`), which already runs a hub LiteLLM in
+front of per-node llama.cpp backends. Copy that design rather than reinvent it:
+
+```yaml
+# litellm config
+general_settings:
+  redis_host: redis.<ns>.svc.cluster.local      # required: pins live in Redis
+  redis_port: "6379"
+
+router_settings:
+  routing_strategy: simple-shuffle
+  redis_host: redis.<ns>.svc.cluster.local
+  redis_port: "6379"
+  optional_pre_call_checks:
+    - session_affinity                            # the sticky switch
+  deployment_affinity_ttl_seconds: 3600
+```
+
+Four things that matter, three of which are easy to get wrong:
+
+1. **Session affinity needs Redis.** The pin map lives in the router cache; with
+   Redis configured it is shared across LiteLLM replicas, without it each replica
+   has its own pins and stickiness silently breaks under >1 replica. So the
+   deployable unit is **LiteLLM + Redis**, not LiteLLM alone.
+
+2. **`session_affinity`, not `deployment_affinity`.** The umkim role documents this
+   explicitly: *"Do not enable `deployment_affinity` on the hub proxy: it pins by
+   API key hash and prevents load balancing across spokes for one key."* That is a
+   real trap — `deployment_affinity` sounds like what you want and quietly turns
+   your pool back into one backend per key.
+
+3. **The client must send a session id.** Stickiness is keyed on
+   `x-litellm-session-id` (or `x-<vendor>-session-id`, or `metadata.session_id`).
+   Without one, every request is independently shuffled and "sticky" does nothing.
+   Open WebUI must pass a conversation id; if it does not, add a tiny shim or set
+   the header in the proxy in front. **This is the piece to verify first** — a
+   sticky config with no session id is indistinguishable from no stickiness.
+
+4. **Affinity applies to async router paths** (`/v1/chat/completions`,
+   `/v1/responses`, `/v1/embeddings`). The sync SDK methods skip it, and the
+   `usage-based-routing` (v1) strategy skips it on every call.
+
+**Open WebUI sends no session id** — verified in its `routers/openai.py`, which sets
+Azure `api-key`/`api-version` headers and nothing session-related. So as shipped, the
+sticky config above would be inert. Two ways to fix it, and this is a decision to
+make before building:
+
+- **Cheapest:** set `ENABLE_FORWARD_USER_INFO_HEADERS=true` in Open WebUI; it then
+  sends `X-OpenWebUI-User-Id` per request. That makes chat sticky *per user* rather
+  than *per conversation* — usually the right granularity for prompt-cache reuse on a
+  single-GPU-per-node fleet, and it needs no code.
+- **Precise:** a tiny shim in front of LiteLLM that maps a conversation id to
+  `x-litellm-session-id`. More moving parts; only worth it if per-conversation
+  pinning is genuinely needed.
+
+**An alternative worth knowing:** LiteLLM's *cache-aware routing* with
+`kubernetes_pod_discovery` targets a headless Service and keeps requests from the
+same session on one pod for prompt-cache reuse; requests without a session id fall
+back to round-robin. That is a good fit if the llama.cpp backends are behind one
+headless Service rather than listed individually — and it means one llama.cpp
+Deployment scaled to N instead of N separate per-node Deployments. Pick one topology
+and stay consistent.
+
+There is also a stale-key hazard the umkim role handles: if `deployment_affinity`
+was ever enabled, its keys linger in Redis and keep pinning after you switch it
+off. That role deletes `deployment_affinity:*` on reconcile. Do the same, or a
+config change will not take effect.
+
 ### What the config looks like
 
 One `model_name` repeated per node = a pool. Distinct names = separate models in
@@ -306,19 +377,19 @@ model_list:
     litellm_params:
       model: openai/qwen3-8b            # llama.cpp speaks the OpenAI API
       api_base: http://llama-a:8080/v1
-      api_key: os.environ/LLAMA_KEY
+      api_key: "none"
       weight: 1
   - model_name: qwen3-8b
     litellm_params:
       model: openai/qwen3-8b
       api_base: http://llama-b:8080/v1
-      api_key: os.environ/LLAMA_KEY
+      api_key: "none"
       weight: 1
   - model_name: qwen3-8b
     litellm_params:
       model: openai/qwen3-8b
       api_base: http://llama-c:8080/v1
-      api_key: os.environ/LLAMA_KEY
+      api_key: "none"
       weight: 1
 
   # A different model, only on the node that can hold it.
@@ -326,10 +397,14 @@ model_list:
     litellm_params:
       model: openai/mistral-7b
       api_base: http://llama-b:8080/v1
-      api_key: os.environ/LLAMA_KEY
+      api_key: "none"
 
 router_settings:
   routing_strategy: simple-shuffle
+  redis_host: redis.<ns>.svc.cluster.local
+  redis_port: "6379"
+  optional_pre_call_checks: [session_affinity]
+  deployment_affinity_ttl_seconds: 3600
   num_retries: 2
   allowed_fails: 2
   cooldown_time: 30
@@ -345,6 +420,11 @@ llama-server --host 0.0.0.0 --port 8080 \
 `--models-max 2` and the memory margin matter on a single-GPU node: without them
 the router can try to hold more models in VRAM than the card has, and the OOM
 kills the server rather than the model.
+
+The umkim role also pins a **PEP 440 tag** (it uses `v1.102.2`, chosen because
+"session_affinity for sticky chats" landed in the 1.100 line) and caps memory
+(512Mi request / 1Gi limit) because a floating `:main` OOM-killed the hub at
+3–4 GiB. Both are worth keeping: pin the tag, cap the memory.
 
 ### Where tensor/pipeline parallelism fits (and why it is not the default)
 
@@ -411,11 +491,20 @@ Non-deterministic output, so assert shape and plumbing, never text:
 - `llm_models_listed` — `/v1/models` through LiteLLM contains the expected names.
 - `llm_completion_answers` — 200, non-empty `choices[0].message.content`, token
   count > 0.
-- `llm_load_balances_across_backends` — the check that proves the actual feature:
-  send N requests and assert **more than one distinct `x-litellm-model-id`** came
-  back. Without this, a single-backend setup would pass everything else.
+- `llm_load_balances_across_backends` — send N requests **without** a session id and
+  assert **more than one distinct `x-litellm-model-id`** came back. Without this,
+  a single-backend setup would pass everything else.
+- `llm_session_sticks_to_one_backend` — the sticky half: send N requests **with the
+  same `x-litellm-session-id`** and assert exactly **one** distinct model-id. This
+  is the check that catches the classic failure: sticky enabled but the client never
+  sends an id, which looks identical to stickiness that works until you read the
+  headers.
 - `llm_failover_keeps_serving` — stop one backend and assert requests still
   succeed (cooldown/fallback), which is the reliability half of "pool the machines".
+
+The balancing and sticky checks are deliberately a pair: with only one of them you
+cannot tell whether affinity is configured or merely absent. Both are cheap (a
+handful of short completions) and both are deterministic — no text assertion.
 - Time-box all of it; CPU inference must not make the gate flaky. If it exceeds the
   budget, mark the AI checks informational.
 
@@ -458,6 +547,9 @@ so a reader can tell which is which.
 | Stirling's free plan caps users at **5** (reason it was dropped) | upstream plans table |
 | llama.cpp serves **many models from one process** in router mode (`--models-dir`, `--models-max`, `--models-memory-margin`) | `tools/server/README.md` |
 | LiteLLM pools deployments that share a `model_name`; `simple-shuffle` default; cooldowns on 429/>50% fails/401/404/408; `x-litellm-model-id` names the serving deployment | upstream load-balancing docs |
+| **Sticky sessions via `optional_pre_call_checks: [session_affinity]`, keyed on `x-litellm-session-id` / `metadata.session_id`, and requiring Redis to share pins across replicas** | LiteLLM load-balancing docs, session-affinity section |
+| **Do not enable `deployment_affinity` on a shared proxy** — it pins per API key and defeats balancing; stale `deployment_affinity:*` Redis keys keep pinning after the setting is turned off | `rborso/umkim@devel` `roles/fleet_llm` (comments + reconcile task) |
+| Prior art: umkim's hub runs LiteLLM pinned at `v1.102.2` with `simple-shuffle` + `session_affinity` + Redis in front of per-node `llama-cpp-helm` backends | `rborso/umkim@devel` charts + roles |
 | llama.cpp RPC exists for multi-host inference but is **"proof-of-concept … fragile and insecure"** per its own README | `tools/rpc/README.md` |
 | **exo is MLX/Apple-Silicon only** — no NVIDIA support | upstream README (all benchmarks M3 Ultra; MLX backend) |
 | vLLM multi-node = TP within a node, PP across nodes, via Ray | vLLM docs (parallelism and scaling) |
@@ -486,3 +578,7 @@ Assumptions **not** yet verified, and flagged as such:
    thing in this plan that is not a household web app.
 5. **Which model pool to start with** — one small model pooled across all nodes
    (proves balancing), or distinct models per node (more useful day one)?
+6. **Sticky granularity** — Open WebUI sends no session id (verified), so pick one:
+   `ENABLE_FORWARD_USER_INFO_HEADERS` for per-user stickiness (cheap, no code), or a
+   shim for per-conversation. Also decide the topology: explicit per-node backends
+   in `model_list`, or one headless Service with `kubernetes_pod_discovery`.
