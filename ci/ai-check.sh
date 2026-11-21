@@ -31,7 +31,11 @@ release="${AI_RELEASE:-ai}"
 # expectation has to be a property of the target, not of the script.
 #
 #   ai_gpu=true  in the provision env (or AI_GPU=1) -> assert a card IS used
-ai_gpu="${AI_GPU:-${ai_gpu:-false}}"
+# Accept 1/true/yes so AI_GPU=1 works: the comparison below is against "true".
+case "${AI_GPU:-${ai_gpu:-false}}" in
+  1|true|yes|on) ai_gpu=true ;;
+  *) ai_gpu=false ;;
+esac
 
 # kube <args...> : run kubectl on the target node as root.
 #
