@@ -129,7 +129,9 @@ verify:
     # the per-user permission is off, so an admin-only test would prove nothing.
     - llm_user_api_key_lifecycle
     # Tagged in ci/ai-check.sh, not the browser gate: a pod spec is not visible
-    # to Playwright.
+    # to Playwright. The harness asserts CPU-mode on a normal target and the GPU
+    # path on one that sets ai_gpu=true (the lab GPU host), so both contracts are
+    # covered by the code that can actually see the pod spec.
     - llm_cpu_mode_requests_no_gpu
     - llm_backends_are_separate
     - tenant_api_ai

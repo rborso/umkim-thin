@@ -622,6 +622,67 @@ This also means the driver work is an **enhancement**, not a prerequisite, which
 a much better place for it in the roadmap: ship CPU-only inference first, add GPU
 support without changing the app contract.
 
+## Verified on real Pascal hardware
+
+The first GPU run happened on the lab's only card, a **Pascal GTX 1050 Ti Mobile
+(10de:1c8c, 4 GiB)** on the host `172.16.10.4`. It confirmed the parts of this
+design that could not be tested without a card, and turned two predictions into
+facts.
+
+**The install order held.** The platform was installed first, on a bare Rocky
+Linux 10.2 host, then the driver work ran with **no apps installed** — so the
+single-node reboot was an outage of nothing. This is the sequence the document
+argues for, and it was worth it: the driver install needed a kernel change.
+
+**Pascal needs the proprietary, pinned branch, exactly as predicted.** The host
+was on an old point kernel (`6.12.0-211.16.1.el10_2.0.1`) with no matching
+`kernel-devel` in the repos, so DKMS could not build. The fix was a kernel update
+to `el10_3` and a reboot, then:
+
+```
+kmod-nvidia-latest-dkms-580.196.07  nvidia-driver-580.196.07
+nvidia-driver-cuda-580.196.07
+```
+
+The open module was not attempted on the card, consistent with the catalog schema
+that flags it per PCI id.
+
+**The EL10 extras this document listed are all required, not advisory.** The
+first install attempt failed on missing `libglvnd-opengl`, `libvdpau`, `egl-gbm`,
+`egl-wayland2` and `egl-x11`. Installing the driver packages alone is not enough
+on EL10.
+
+**Reboot: confirmed required.** `dnf needs-restarting -r` reported a pending
+reboot, and `nvidia-smi` only appeared after the reboot onto the new kernel.
+
+**The device plugin's `auto` strategy needs a default runtime.** With the nvidia
+runtime merely *defined* in containerd, the plugin logged "Incompatible strategy
+detected auto" and found no devices. Setting `default-runtime: nvidia` in
+`/etc/rancher/k3s/config.yaml` (and restarting the plugin) made it register:
+
+```
+Registered device plugin for 'nvidia.com/gpu' with Kubelet
+node capacity: nvidia.com/gpu: 1
+```
+
+A pod requesting `nvidia.com/gpu: 1` then ran `nvidia-smi` successfully.
+
+**The AI stack on the card.** The chart's `gpu.enabled` switched the backend to
+`llama.cpp:server-cuda`, requested one card, and the container saw
+`CUDA0: NVIDIA GeForce GTX 1050 Ti (4034 MiB, 3986 MiB free)`. Inference went
+from ~1.1 s per short completion on CPU threads to **0.17–0.29 s** once the model
+was loaded, with 491 MiB resident. The first request after a fresh start took
+~31 s because it pays the load cost, which is why the gate's first check is the
+model list rather than a completion.
+
+**What this changes here:** the CPU assertion in `ci/ai-check.sh` had to become a
+per-target property. It now asserts the GPU contract on a target that sets
+`ai_gpu=true` (a card is requested, the node advertises it, the CUDA image runs)
+and keeps the CPU contract everywhere else.
+
+**Still unproven:** multi-GPU splitting (`--split-mode`, `--tensor-split`) — the
+lab has one card, so that remains fixture-tested only.
+
 ## Tests for the hardware paths
 
 You asked for tests including pre-checks. The split:
