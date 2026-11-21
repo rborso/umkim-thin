@@ -1,0 +1,259 @@
+---
+# GPU node support — the HOST half: an NVIDIA driver that survives a reinstall.
+#
+# This role exists because the driver was first installed by hand on the lab GPU
+# host, and the next k3s reinstall took the device plugin with it. Anything an
+# operator has to remember after a reinstall is a bug in provisioning.
+#
+# Two halves must both happen for `nvidia.com/gpu` to appear on the node:
+#
+#   1. the driver on the host (this file), which requires a reboot;
+#   2. the device plugin in the cluster (tasks/device_plugin.yml), which cannot
+#      run until k3s and the CNI are up.
+#
+# A driver without the plugin leaves a node with a working card that advertises
+# nothing, which is why the AI stack then sits Pending with
+# "Insufficient nvidia.com/gpu" and nothing in the app logs explains it.
+
+- name: gpu | refuse anything that is not EL10
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution in ['Rocky', 'RedHat', 'OracleLinux']
+      - ansible_distribution_major_version | int >= 10
+    fail_msg: >-
+      GPU support is EL10 only (this host is {{ ansible_distribution }}
+      {{ ansible_distribution_version }}). The cuda-rhel10 repository and this
+      driver packaging are what the role knows how to install; a partial install
+      on another release is worse than refusing.
+
+- name: gpu | is there actually an NVIDIA card?
+  # Read sysfs rather than shelling out to lspci: this runs before pciutils is
+  # installed, and a fresh EL10 does not ship it. Vendor 0x10de is NVIDIA, and
+  # class 0x03xxxx is a display controller — the audio function on the same card
+  # is also NVIDIA-vendor, so filtering on the class avoids calling a card
+  # present because its HDMI audio is.
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for d in /sys/bus/pci/devices/*/vendor; do
+      [ "$(cat "$d")" = "0x10de" ] || continue
+      dev=$(basename "$(dirname "$d")")
+      class=$(cat "/sys/bus/pci/devices/$dev/class")
+      case "$class" in 0x03*) echo "$dev $class" ;; esac
+    done
+  register: gpu_lspci
+  changed_when: false
+  failed_when: false
+
+# The role is opt-in, so a host that sets gpu_enabled=true and has no card is a
+# mistake worth stopping for: the alternative is a multi-minute driver install
+# and a reboot on a machine that cannot use either.
+- name: gpu | require a card to be present
+  ansible.builtin.assert:
+    that:
+      - gpu_lspci.stdout | trim | length > 0
+    fail_msg: >-
+      gpu_enabled is true but no NVIDIA device (10de:) is visible on this host.
+      Either the card is passed through and not visible, or this environment
+      belongs to a different machine.
+
+- name: gpu | note the detected cards
+  ansible.builtin.debug:
+    msg: "{{ gpu_lspci.stdout_lines }}"
+
+# --- repositories ----------------------------------------------------------
+- name: gpu | enable CRB (the EGL and GLVND packages live there)
+  ansible.builtin.command:
+    cmd: dnf config-manager --set-enabled crb
+  register: gpu_crb
+  changed_when: "'enabled' in gpu_crb.stdout"
+  failed_when: false
+
+- name: gpu | install EPEL
+  ansible.builtin.dnf:
+    name: epel-release
+    state: present
+
+# `dnf install <url>` treats the argument as an RPM and fails on a .repo file,
+# so fetch it into place instead.
+- name: gpu | add the CUDA repository
+  ansible.builtin.get_url:
+    url: https://developer.download.nvidia.com/compute/cuda/repos/rhel10/x86_64/cuda-rhel10.repo
+    dest: /etc/yum.repos.d/cuda-rhel10.repo
+    mode: '0644'
+
+- name: gpu | refresh the package cache
+  ansible.builtin.dnf:
+    update_cache: true
+
+# --- build prerequisites ---------------------------------------------------
+# DKMS builds against the RUNNING kernel, so it needs kernel-devel for exactly
+# `uname -r`. Preferring that over "install the newest kernel" is deliberate: a
+# host whose running kernel is fine must not be upgraded just because a newer
+# point release exists, because the upgrade forces a reboot on a node that may
+# already be serving.
+#
+# The exception is real and was hit in the lab: a point kernel that the repos
+# have since dropped has NO kernel-devel available at all, so DKMS cannot build
+# on it and the kernel must move.
+- name: gpu | is kernel-devel installed for the running kernel?
+  ansible.builtin.command:
+    cmd: "rpm -q kernel-devel-{{ ansible_kernel }}"
+  register: gpu_devel_running
+  changed_when: false
+  failed_when: false
+
+- name: gpu | can kernel-devel be installed for the running kernel?
+  ansible.builtin.command:
+    cmd: "dnf -q list available kernel-devel-{{ ansible_kernel }}"
+  register: gpu_devel_available
+  changed_when: false
+  failed_when: false
+
+- name: gpu | decide whether the kernel has to move
+  ansible.builtin.set_fact:
+    # A kernel upgrade is only justified when the running kernel has no headers
+    # and none can be installed for it.
+    gpu_kernel_must_move: >-
+      {{ gpu_devel_running.rc != 0 and gpu_devel_available.rc != 0 }}
+
+- name: gpu | install the headers for the running kernel
+  ansible.builtin.dnf:
+    name:
+      - "kernel-devel-{{ ansible_kernel }}"
+      - "kernel-modules-extra-{{ ansible_kernel }}"
+    state: present
+  when: not (gpu_kernel_must_move | bool)
+
+# Only when the running kernel cannot be built against: bring in a kernel the
+# repos do support. The reboot below then lands on it.
+- name: gpu | move to a kernel that the repositories support
+  ansible.builtin.dnf:
+    name:
+      - kernel
+      - kernel-devel
+      - kernel-headers
+      - kernel-modules
+      - kernel-modules-extra
+    state: present
+  when: gpu_kernel_must_move | bool
+
+- name: gpu | install the DKMS toolchain
+  ansible.builtin.dnf:
+    name:
+      - dkms
+      - gcc
+      - make
+      - elfutils-libelf-devel
+      - pciutils
+    state: present
+
+# The driver's user-space libraries depend on these on EL10. The first hand
+# install failed dependency resolution without them, so they are part of the set
+# rather than an optional extra.
+- name: gpu | install the EGL and GLVND libraries the driver links against
+  ansible.builtin.dnf:
+    name:
+      - libglvnd-opengl
+      - libvdpau
+      - egl-gbm
+      - egl-wayland2
+      - egl-x11
+    state: present
+
+# --- the driver ------------------------------------------------------------
+# "open" is Turing and newer only; pre-Turing cards (Pascal included) need the
+# proprietary module. Both are packaged as DKMS so the module follows a kernel
+# change instead of needing a rebuild per kernel version.
+- name: gpu | choose the module package
+  ansible.builtin.set_fact:
+    gpu_kmod_package: >-
+      {{ 'kmod-nvidia-open-dkms' if gpu_driver_flavor == 'open'
+         else 'kmod-nvidia-latest-dkms' }}
+
+- name: gpu | install the driver
+  ansible.builtin.dnf:
+    name:
+      # A branch is pinned whenever the driver version is set. For a pre-Turing
+      # card that is not cosmetic: later branches have dropped the card, so
+      # "latest" is a driver that installs and then cannot drive it.
+      - "{{ gpu_kmod_package }}{{ ('-' ~ gpu_driver_version) if gpu_driver_version else '' }}"
+      - "nvidia-driver{{ ('-' ~ gpu_driver_version) if gpu_driver_version else '' }}"
+      - "nvidia-driver-cuda{{ ('-' ~ gpu_driver_version) if gpu_driver_version else '' }}"
+      - nvidia-container-toolkit
+      # SELinux stays enforcing; this is the policy module that lets the driver
+      # create its device nodes rather than an afterthought.
+      - nvidia-driver-selinux
+    state: present
+  register: gpu_driver_install
+
+# nouveau claims the card at boot and the proprietary driver will not take it
+# back. This must be in place before the reboot that loads the new module.
+- name: gpu | blacklist nouveau
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/blacklist-nouveau.conf
+    mode: '0644'
+    content: |
+      # The NVIDIA driver cannot bind a card that nouveau has already claimed.
+      blacklist nouveau
+      options nouveau modeset=0
+  register: gpu_nouveau
+
+- name: gpu | rebuild the initramfs without nouveau
+  ansible.builtin.command:
+    cmd: dracut --force
+  when: gpu_nouveau.changed
+  changed_when: true
+
+# --- reboot, then verify ---------------------------------------------------
+# Required, not conditional: NVIDIA's guide says the kernel and user-space parts
+# must be the same version and must be loaded by a reboot, and the driver
+# packages register themselves with DNF as reboot-requiring. `needs-restarting`
+# is how that is checked rather than guessed.
+- name: gpu | is a reboot required?
+  ansible.builtin.command:
+    cmd: dnf needs-restarting -r
+  register: gpu_needs_restart
+  changed_when: false
+  failed_when: false
+
+- name: gpu | reboot to load the new kernel and module
+  ansible.builtin.reboot:
+    msg: >-
+      Rebooting to load the NVIDIA driver. On a single-node install every
+      workload on this host stops until it returns, which is why the driver is
+      installed before any app.
+    reboot_timeout: 900
+  when:
+    - gpu_reboot | bool
+    - (gpu_needs_restart.rc | default(0)) == 1 or (gpu_driver_install.changed | default(false))
+
+- name: gpu | does the driver see a card?
+  ansible.builtin.command:
+    cmd: nvidia-smi --query-gpu=name,driver_version,memory.total,compute_cap --format=csv,noheader
+  register: gpu_smi
+  changed_when: false
+  retries: 12
+  delay: 10
+  until: gpu_smi.rc == 0
+
+- name: gpu | is the card driven by this kernel?
+  ansible.builtin.command:
+    cmd: lsmod
+  register: gpu_lsmod
+  changed_when: false
+
+- name: gpu | refuse to continue with nouveau bound or no module loaded
+  ansible.builtin.assert:
+    that:
+      - "'nouveau' not in gpu_lsmod.stdout"
+      - "'nvidia' in gpu_lsmod.stdout"
+    fail_msg: >-
+      The card is not driven by the NVIDIA module (nouveau bound, or nvidia did
+      not load). A reboot may be pending, or the blacklist is not in effect.
+
+- name: gpu | report the detected hardware
+  ansible.builtin.debug:
+    msg:
+      - "GPU: {{ gpu_smi.stdout }}"
+      - "kernel: {{ ansible_kernel }}"
+      - "driver package: {{ gpu_kmod_package }} {{ gpu_driver_version }}"

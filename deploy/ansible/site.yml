@@ -16,6 +16,14 @@
     - role: longhorn_host
       tags: [longhorn]
       when: storage_backend | default('') == 'longhorn'
+    # The GPU driver comes before k3s on purpose: it needs a reboot, and a reboot
+    # is an outage. Doing it first means the one-node outage happens while there
+    # is no cluster and no app to take down. The role is a no-op unless the env
+    # sets gpu_enabled.
+    - role: gpu_node
+      tags: [gpu]
+      tasks_from: main
+      when: gpu_enabled | default(false) | bool
     - role: k3s
       tags: [k3s]
 
@@ -34,6 +42,12 @@
     - role: longhorn
       tags: [longhorn]
       when: storage_backend | default('') == 'longhorn'
+    # The device plugin cannot register anything until kubelet is up, so it runs
+    # here rather than with the driver. Same role, different entry point.
+    - role: gpu_node
+      tags: [gpu]
+      tasks_from: device_plugin
+      when: gpu_enabled | default(false) | bool
     - role: identity
       tags: [identity]
     - role: traefik

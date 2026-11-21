@@ -35,6 +35,15 @@ disable-network-policy: true
 # Align k3s's advertised ranges with the CNI (Calico's pool is pod_cidr).
 cluster-cidr: {{ pod_cidr }}
 service-cidr: {{ service_cidr }}
+{% if gpu_enabled | default(false) | bool %}
+# On a GPU node the NVIDIA runtime must be containerd's DEFAULT, not merely
+# defined: k3s adds the runtime on its own once nvidia-container-toolkit is
+# installed, but the device plugin's auto discovery only registers a card when
+# the default runtime is the NVIDIA one ("Incompatible strategy detected auto"
+# otherwise). Set here rather than by `nvidia-ctk`, whose conf.d drop-in k3s's
+# generated config does not import — and here, so a reinstall keeps it.
+default-runtime: {{ gpu_containerd_runtime | default('nvidia') }}
+{% endif %}
 {% if k3s_effective_tls_san | length %}
 tls-san:
 {% for san in k3s_effective_tls_san %}

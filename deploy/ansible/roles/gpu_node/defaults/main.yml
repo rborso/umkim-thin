@@ -1,0 +1,45 @@
+---
+# GPU node support: the NVIDIA driver on the host, and the device plugin that
+# turns it into a schedulable resource.
+#
+# Off by default. A normal install must not add a vendor repository, build a
+# kernel module, or reboot a host, so a GPU node opts in explicitly with
+# `gpu_enabled: true` in its provision env. A cluster with no GPU keeps the plain
+# path, and the AI stack runs CPU-only.
+gpu_enabled: false
+
+# The module flavour. "open" is Turing and newer only; pre-Turing cards (Pascal
+# and older) need the proprietary module, so this is a per-host decision rather
+# than a default. Getting it wrong yields a driver that installs and then does
+# not drive the card.
+gpu_driver_flavor: proprietary
+
+# Pin the driver branch. Empty means "whatever the cuda repo calls newest", which
+# is wrong for a pre-Turing card: later branches have dropped Pascal support, so
+# an unpinned install is a driver that installs and cannot drive the card. A pin
+# also keeps the host reproducible — it must not drift to a new branch on a
+# routine re-run.
+gpu_driver_version: ""
+
+# The device plugin is what turns "a driver on the host" into "nvidia.com/gpu on
+# the node". Pinned: the DaemonSet is a cluster-wide singleton, and an unplanned
+# upgrade changes the resource API under the charts.
+gpu_device_plugin_version: v0.17.0
+gpu_device_plugin_manifest: >-
+  https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/{{ gpu_device_plugin_version }}/deployments/static/nvidia-device-plugin.yml
+
+# Image for the one-shot pod that proves the card is usable from inside a
+# container. Small, and pinned so the check does not depend on whatever :latest
+# is today.
+gpu_probe_image: docker.io/nvidia/cuda:12.4.1-base-ubuntu22.04
+
+# The containerd runtime the driver packages register. k3s adds it automatically
+# when the binary is present but leaves `runc` as the default, and the device
+# plugin's auto discovery then refuses with "Incompatible strategy detected
+# auto". `default-runtime: nvidia` in the k3s config is what makes it register.
+gpu_containerd_runtime: nvidia
+
+# The reboot is required by NVIDIA's installation model: kernel and user-space
+# parts must be one version, loaded by a reboot. This switch exists for a
+# re-run where an operator has already rebooted; it is not an alternative.
+gpu_reboot: true

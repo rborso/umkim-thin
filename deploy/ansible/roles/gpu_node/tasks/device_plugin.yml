@@ -1,0 +1,140 @@
+---
+# GPU node support — the CLUSTER half.
+#
+# Runs in the platform play, after k3s and the CNI: the device plugin is a
+# DaemonSet and cannot register a resource on a node whose kubelet is not up.
+#
+# Everything here is idempotent because it is the difference between "the GPU
+# survived a reinstall" and "someone must remember to re-apply the plugin".
+
+# k3s adds the `nvidia` runtime to its generated containerd config on its own
+# once nvidia-container-toolkit is installed, but keeps `runc` as the default.
+# The device plugin's auto discovery then refuses:
+#
+#   Incompatible strategy detected auto
+#   If this is a GPU node, did you configure the NVIDIA Container Toolkit?
+#
+# The default is set in the k3s config template, so a fresh install starts on the
+# right runtime and needs no restart. This task only covers a host that was
+# installed before that line existed: it repairs the setting and restarts k3s.
+#
+# Note what is NOT used: `nvidia-ctk runtime configure --set-as-default` writes
+# /etc/containerd/conf.d/, which k3s's generated config does not import. The
+# runtime ends up defined and still not default.
+- name: gpu | make nvidia the default containerd runtime
+  ansible.builtin.lineinfile:
+    path: /etc/rancher/k3s/config.yaml
+    line: "default-runtime: {{ gpu_containerd_runtime }}"
+    regexp: '^default-runtime:'
+  register: gpu_runtime_default
+
+- name: gpu | restart k3s so the runtime default takes effect
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: restarted
+  when: gpu_runtime_default.changed
+
+- name: gpu | wait for the API after the restart
+  ansible.builtin.command:
+    cmd: /usr/local/bin/k3s kubectl get --raw /readyz
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: gpu_api_ready
+  until: gpu_api_ready.rc == 0
+  retries: 36
+  delay: 10
+  changed_when: false
+
+- name: gpu | fetch the pinned device plugin manifest
+  ansible.builtin.get_url:
+    url: "{{ gpu_device_plugin_manifest }}"
+    dest: /tmp/nvidia-device-plugin.yaml
+    mode: '0644'
+    force: true
+
+- name: gpu | install the device plugin
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl apply --validate=false -f /tmp/nvidia-device-plugin.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: gpu_plugin_apply
+  changed_when: "'created' in gpu_plugin_apply.stdout or 'configured' in gpu_plugin_apply.stdout"
+
+# The DaemonSet is the only thing that turns a driver into a schedulable
+# resource, so its absence is the failure this role exists to prevent. The node
+# advertises the resource only once the plugin has registered with the kubelet,
+# a few seconds after the pod becomes Ready — hence polling rather than a sleep.
+- name: gpu | wait for the node to advertise a GPU
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl get node {{ ansible_hostname }}
+      -o jsonpath={.status.allocatable.nvidia\.com/gpu}
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: gpu_allocatable
+  until: gpu_allocatable.stdout | trim | length > 0 and gpu_allocatable.stdout | trim != '0'
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: gpu | remove a probe left behind by an interrupted run
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n default delete pod gpu-probe --ignore-not-found --wait=true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: gpu | render the probe pod
+  ansible.builtin.template:
+    src: gpu-probe.yaml.j2
+    dest: /tmp/gpu-probe.yaml
+    mode: '0644'
+
+# Advertising a resource is not the same as being able to use it: the runtime has
+# to hand the device into the container. This is the check the AI stack relies
+# on, and it fails loudly here instead of as a Pending llama.cpp pod later.
+- name: gpu | run a pod that asks for the card
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl apply -f /tmp/gpu-probe.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
+
+- name: gpu | wait for the probe to finish
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl -n default wait pod/gpu-probe
+      --for=jsonpath={.status.phase}=Succeeded --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: gpu_probe_wait
+  changed_when: false
+  failed_when: false
+
+- name: gpu | read the probe output
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n default logs gpu-probe
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: gpu_probe_logs
+  changed_when: false
+  failed_when: false
+
+- name: gpu | the card must be visible inside a pod
+  ansible.builtin.assert:
+    that:
+      - "'GPU 0:' in gpu_probe_logs.stdout"
+    fail_msg: >-
+      The node advertises nvidia.com/gpu but a pod cannot see the card
+      (probe wait: {{ gpu_probe_wait.stderr | default('') | trim }}; logs:
+      {{ gpu_probe_logs.stdout | default('') | trim }}). Check that
+      {{ gpu_containerd_runtime }} is the default runtime in
+      /etc/rancher/k3s/config.yaml and that the device plugin pod is Running.
+    success_msg: "{{ gpu_probe_logs.stdout_lines | select('search', 'GPU') | list | join(' ') }}"
+
+- name: gpu | clean up the probe
+  ansible.builtin.command:
+    cmd: /usr/local/bin/kubectl -n default delete pod gpu-probe --ignore-not-found --wait=false
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false

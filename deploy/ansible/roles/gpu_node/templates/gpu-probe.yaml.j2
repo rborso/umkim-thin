@@ -1,0 +1,23 @@
+---
+# A one-shot pod that proves the GPU is usable from inside a container, not just
+# advertised on the node. Deliberately asks for nvidia.com/gpu: 1 so it is
+# scheduled only if the device plugin has registered a card.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-probe
+  namespace: default
+  labels:
+    app.kubernetes.io/name: umkim-thin-gpu-probe
+spec:
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: {{ gpu_probe_image }}
+      command: ["nvidia-smi", "-L"]
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+  # A gone node (or a cordoned one being drained) must not leave this hanging
+  # for the full pod lifetime.
+  activeDeadlineSeconds: 600

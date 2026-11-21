@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: gpu_node
+  description: >-
+    NVIDIA driver on an EL10 host, and the device plugin that advertises
+    nvidia.com/gpu to the cluster.
+  license: Apache-2.0
+  min_ansible_version: "2.14"
+dependencies: []

@@ -182,7 +182,14 @@ cat >> "$stage/ansible/group_vars/all/99-local.yml" <<EOF
 acme_staging: ${acme_staging:-false}
 lab_ca_default: ${lab_ca_default:-true}
 secrets_encryption: ${secrets_encryption:-true}
+gpu_enabled: ${gpu_enabled:-false}
+gpu_driver_flavor: "${gpu_driver_flavor:-proprietary}"
+gpu_driver_version: "${gpu_driver_version:-}"
 EOF
+
+# An AI target on a GPU host is a property of the target, not of the harness: the
+# checks assert the GPU contract there and the CPU contract everywhere else.
+[ -n "${ai_gpu:-}" ] && printf 'ai_gpu: %s\n' "${ai_gpu}" >> "$stage/ansible/group_vars/all/99-local.yml"
 
 inventory="$stage/ansible/inventory.ini"
 {
