@@ -346,13 +346,15 @@ func TestAIModelFitsVRAMWarnsButDoesNotBlock(t *testing.T) {
 }
 
 // The context labels must show a real cost, not a bare number: the whole point is
-// that 32768 is not free.
+// that 32768 is not free. Checked against the arithmetic, because an earlier
+// version shipped "28.0 GiB" for a 28 MiB cache — a unit slip the loose
+// "contains cache" assertion did not catch.
 func TestAIContextOptionsCarryTheirCost(t *testing.T) {
 	choices := AIContextOptions()
 	if len(choices) < 3 {
 		t.Fatalf("want a few choices, got %d", len(choices))
 	}
-	var sawLarge bool
+	labels := map[int]string{}
 	for _, c := range choices {
 		if c.Value <= 0 {
 			t.Errorf("context choice %+v has no value", c)
@@ -360,11 +362,25 @@ func TestAIContextOptionsCarryTheirCost(t *testing.T) {
 		if !strings.Contains(c.Label, "cache") {
 			t.Errorf("choice %d label %q does not mention its memory cost", c.Value, c.Label)
 		}
-		if c.Value >= 32768 {
-			sawLarge = true
+		labels[c.Value] = c.Label
+	}
+
+	// 2048 tokens is 28 MiB at this geometry: it must say MiB, and must not claim
+	// GiB for something a fraction of a GiB.
+	if got := labels[2048]; !strings.Contains(got, "28 MiB") {
+		t.Errorf("2048 tokens should label 28 MiB of cache, got %q", got)
+	}
+	// 32768 is 448 MiB: still MiB, still under a GiB.
+	if got := labels[32768]; !strings.Contains(got, "448 MiB") {
+		t.Errorf("32768 tokens should label 448 MiB of cache, got %q", got)
+	}
+	// No label may claim GiB at these sizes — the largest is 448 MiB.
+	for size, label := range labels {
+		if strings.Contains(label, "GiB") {
+			t.Errorf("choice %d claims GiB of cache, which is off by 1024x: %q", size, label)
 		}
 	}
-	if !sawLarge {
+	if _, ok := labels[32768]; !ok {
 		t.Error("expected a large context option so the cost is visible")
 	}
 }

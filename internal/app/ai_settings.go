@@ -117,14 +117,17 @@ func aiKVBytesPerToken() int64 { return 28 * 2 * 128 * 2 }
 func aiContextChoices() []AIContextChoice {
 	out := make([]AIContextChoice, 0, 5)
 	for _, size := range []int{2048, 4096, 8192, 16384, 32768} {
-		kib := (int64(size) * aiKVBytesPerToken()) / 1024
-		// MiB below a GiB, so two adjacent choices never round to the same label:
+		// Work in BYTES and convert once at the end: an earlier version kept KiB
+		// in a variable named for bytes and printed "28.0 GiB" for 28 MiB.
+		bytes := int64(size) * aiKVBytesPerToken()
+		mib := float64(bytes) / (1 << 20)
+		// MiB below a GiB, so adjacent choices never round to the same label:
 		// "0.1 GiB" for both 4096 and 8192 tells a person nothing.
 		var cost string
-		if kib < 1024 {
-			cost = fmt.Sprintf("%d MiB", kib)
+		if mib < 1024 {
+			cost = fmt.Sprintf("%.0f MiB", mib)
 		} else {
-			cost = fmt.Sprintf("%.1f GiB", float64(kib)/1024)
+			cost = fmt.Sprintf("%.1f GiB", mib/1024)
 		}
 		label := fmt.Sprintf("%d tokens (%s of cache)", size, cost)
 		hint := "Larger contexts remember more of a conversation and cost memory per request."
