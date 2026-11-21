@@ -5,6 +5,21 @@
   hosts: server
   become: true
   gather_facts: true
+  # The GPU driver runs before the roles, and before k3s: it needs a reboot, and
+  # a reboot is an outage. Doing it first means the single-node outage happens
+  # while there is no cluster and no app to take down.
+  #
+  # `include_role` in pre_tasks rather than a `roles:` entry: the same role has a
+  # second entry point (the device plugin, in the platform play) and `tasks_from`
+  # is only honoured by include_role/import_role. As a `roles:` entry it is
+  # silently ignored and the role's main.yml runs instead — which is how the
+  # device plugin half was first written and never executed.
+  pre_tasks:
+    - include_role:
+        name: gpu_node
+        tasks_from: main
+      tags: [gpu]
+      when: gpu_enabled | default(false) | bool
   roles:
     - role: common
       tags: [common]
@@ -16,14 +31,6 @@
     - role: longhorn_host
       tags: [longhorn]
       when: storage_backend | default('') == 'longhorn'
-    # The GPU driver comes before k3s on purpose: it needs a reboot, and a reboot
-    # is an outage. Doing it first means the one-node outage happens while there
-    # is no cluster and no app to take down. The role is a no-op unless the env
-    # sets gpu_enabled.
-    - role: gpu_node
-      tags: [gpu]
-      tasks_from: main
-      when: gpu_enabled | default(false) | bool
     - role: k3s
       tags: [k3s]
 
@@ -42,12 +49,6 @@
     - role: longhorn
       tags: [longhorn]
       when: storage_backend | default('') == 'longhorn'
-    # The device plugin cannot register anything until kubelet is up, so it runs
-    # here rather than with the driver. Same role, different entry point.
-    - role: gpu_node
-      tags: [gpu]
-      tasks_from: device_plugin
-      when: gpu_enabled | default(false) | bool
     - role: identity
       tags: [identity]
     - role: traefik
@@ -57,3 +58,11 @@
     - role: netpol
       tags: [netpol]
       when: enable_network_policies | default(true)
+  post_tasks:
+    # The device plugin cannot register anything until kubelet is up and the CNI
+    # can schedule its pod, so this half runs last rather than with the driver.
+    - include_role:
+        name: gpu_node
+        tasks_from: device_plugin
+      tags: [gpu]
+      when: gpu_enabled | default(false) | bool
