@@ -125,6 +125,38 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   changed_when: false
 
+# A card that is already allocated (an app's backend holds it) cannot host the
+# probe: a pod asking for nvidia.com/gpu: 1 stays Pending with "Insufficient
+# nvidia.com/gpu" and the assertion fails on a perfectly healthy node. The probe
+# is a check, not a workload, so it only runs when the card is free; otherwise the
+# device plugin's own registration is the evidence, and it is checked above.
+- name: gpu | is the card free for a probe?
+  ansible.builtin.shell: |
+    set -o pipefail
+    /usr/local/bin/kubectl get pods --all-namespaces -o json \
+      | grep -c '"nvidia.com/gpu"' || true
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: gpu_in_use
+  changed_when: false
+
+- name: gpu | note that the probe is skipped while an app holds the card
+  ansible.builtin.debug:
+    msg: >-
+      Skipping the pod-level GPU probe: a running pod already requests
+      nvidia.com/gpu, so a probe pod could not schedule. Run this tag again when
+      nothing is using the card to exercise the probe.
+  when: gpu_in_use.stdout | trim | int > 0
+
+- name: gpu | render the probe pod
+  ansible.builtin.template:
+    src: gpu-probe.yaml.j2
+    dest: /tmp/gpu-probe.yaml
+    mode: '0644'
+  when: gpu_in_use.stdout | trim | int == 0
+
 - name: gpu | render the probe pod
   ansible.builtin.template:
     src: gpu-probe.yaml.j2
@@ -140,6 +172,7 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   changed_when: false
+  when: gpu_in_use.stdout | trim | int == 0
 
 - name: gpu | wait for the probe to finish
   ansible.builtin.command:
@@ -151,6 +184,7 @@
   register: gpu_probe_wait
   changed_when: false
   failed_when: false
+  when: gpu_in_use.stdout | trim | int == 0
 
 - name: gpu | read the probe output
   ansible.builtin.command:
@@ -160,6 +194,7 @@
   register: gpu_probe_logs
   changed_when: false
   failed_when: false
+  when: gpu_in_use.stdout | trim | int == 0
 
 - name: gpu | the card must be visible inside a pod
   ansible.builtin.assert:
@@ -172,6 +207,7 @@
       {{ gpu_containerd_runtime }} is the default runtime in
       /etc/rancher/k3s/config.yaml and that the device plugin pod is Running.
     success_msg: "{{ gpu_probe_logs.stdout_lines | select('search', 'GPU') | list | join(' ') }}"
+  when: gpu_in_use.stdout | trim | int == 0
 
 - name: gpu | clean up the probe
   ansible.builtin.command:
