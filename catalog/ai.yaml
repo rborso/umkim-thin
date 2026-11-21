@@ -33,6 +33,30 @@ route:
     allowed: [public, authelia, vpn]
   serviceName: ai-webui
   servicePort: 8080
+  # The OpenAI-compatible API surface must reach Open WebUI without the portal
+  # session, because a per-user API key is for CLIENT SOFTWARE: an editor plugin,
+  # a CLI, a phone app. Those send `Authorization: Bearer sk-...` and have no
+  # browser session, so Authelia's forward-auth challenge makes the key useless -
+  # verified: a minted key got a 302 to the portal, never reaching the app.
+  #
+  # Open WebUI still authenticates every one of these requests itself (the key is
+  # checked against its own database), so this exempts the portal layer, not the
+  # app's auth. Same reasoning as Nextcloud's client endpoints.
+  #
+  # Only the endpoints a bearer-token client uses are listed. The path patterns
+  # are exact, not a blanket ^/api/v1/: /api/v1/auths/ returns the signed-in
+  # user's profile and is only meaningful with a browser session, so it stays
+  # behind the portal.
+  publicPaths:
+    - "^/api/v1/models$"
+    - "^/api/v1/models/"
+    - "^/api/v1/chat/completions$"
+    - "^/api/v1/completions$"
+    - "^/api/v1/embeddings$"
+    - "^/api/v1/audio/"
+    - "^/api/v1/images/"
+    - "^/api/v1/auths/api_key$"
+    - "^/ollama/"
   trusted:
     management: true
     vpn: true

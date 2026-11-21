@@ -375,3 +375,49 @@ func TestRenderExternalProxyManualCertIsIgnored(t *testing.T) {
 		t.Fatalf("an external-proxy route still mounts a TLS secret:\n%s", out)
 	}
 }
+
+// The AI stack's OpenAI-compatible surface must be reachable with a bearer token
+// and no portal session. A per-user API key exists for client software — an
+// editor plugin, a CLI, a phone app — and those cannot complete Authelia's
+// forward-auth. Verified on the GPU host before this rule existed: a freshly
+// minted key got a 302 to the portal and never reached Open WebUI.
+//
+// Read from the real catalog rather than a hand-built route, so a catalog edit
+// that drops the exemption fails here.
+func TestAICatalogExposesTheAPIToBearerClients(t *testing.T) {
+	entries, err := catalog.Load("../../catalog")
+	if err != nil {
+		t.Fatalf("loading the catalog: %v", err)
+	}
+	var ai catalog.Entry
+	for _, e := range entries {
+		if e.Name == "ai" {
+			ai = e
+		}
+	}
+	if ai.Name == "" {
+		t.Fatal("the catalog has no ai entry")
+	}
+
+	out, err := AutheliaRule(ai, *ai.Route, Context{Zone: "example.com", Tenant: "default-tenant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The endpoints a client actually calls.
+	for _, p := range []string{
+		`- "^/api/v1/models$"`,
+		`- "^/api/v1/chat/completions$"`,
+		`- "^/api/v1/auths/api_key$"`,
+	} {
+		if !strings.Contains(out, p) {
+			t.Errorf("the AI route must exempt %s for bearer clients:\n%s", p, out)
+		}
+	}
+	// The profile endpoint must stay behind the portal: it is a browser-session
+	// view, and exempting it would hand out user records unauthenticated.
+	for _, forbidden := range []string{`- "^/api/v1/"`, `- "^/api/v1$"`, `- "^/api/v1/auths/$"`} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("the AI route must not exempt %s wholesale:\n%s", forbidden, out)
+		}
+	}
+}
