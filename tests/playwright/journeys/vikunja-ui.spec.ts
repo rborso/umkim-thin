@@ -25,11 +25,16 @@ async function loginThroughPortal(page: Page, user: string, pass: string): Promi
   await page.waitForLoadState('domcontentloaded');
 }
 
-// enterApp follows an app URL through the portal and lands inside the app. It
-// returns whatever the app session looks like, so the caller can assert on it.
+// enterApp walks the path a person actually takes: portal sign-in, then Vikunja's
+// own login page, then its "Log in with Authelia" button.
+//
+// Vikunja does NOT auto-login on an OIDC provider: it has no single-provider
+// shortcut, so it always shows /login first with the provider as a button. A test
+// that expects to land inside the app after the portal therefore fails on a
+// perfectly working install - and, worse, passes only if it never looks at the UI.
 async function enterApp(page: Page, host: string, user: string, pass: string): Promise<string> {
   await page.goto(`https://${host}/`, { waitUntil: 'domcontentloaded' });
-  // A first visit is challenged by the portal; a returning one is not.
+  // The portal intercepts the first visit; every app hostname is behind it.
   if (page.url().includes(AUTH_HOST) || page.url().includes('/?rd=')) {
     await page.locator('#username-textfield').fill(user);
     await page.locator('#password-textfield').fill(pass);
@@ -37,6 +42,15 @@ async function enterApp(page: Page, host: string, user: string, pass: string): P
     await page.waitForLoadState('domcontentloaded');
   }
   await page.waitForURL((u) => u.hostname === host, { timeout: 30_000 }).catch(() => undefined);
+  await page.waitForTimeout(1500);
+
+  // Vikunja's login page: hand off to the provider.
+  const sso = page.getByRole('button', { name: /log in with/i }).first();
+  if (await sso.count()) {
+    await sso.click();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2500);
+  }
   return page.url();
 }
 
