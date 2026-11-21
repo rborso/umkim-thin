@@ -13,9 +13,9 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/ai
-  version: 0.1.6
+  version: 0.1.7
   versions:
-    - version: 0.1.6
+    - version: 0.1.7
       appVersion: 1.83.7
       channel: stable
 
