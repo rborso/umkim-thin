@@ -372,6 +372,51 @@ app stays installed and the Applications section shows `failed` with a retry. A
 successful run records the image tag, so clicking setup again with the same
 image is a no-op (the chart's Jellyfin wizard step cannot be re-run).
 
+## AI stack: models, context and GPU
+
+The Local AI install panel is a real form, not a values editor, because the chart
+makes a values editor dangerous: a `backends[]` list item **replaces** the chart's
+own item rather than merging into it, so a partial edit silently drops whatever it
+omits. Omitting `models` once produced a stack that came up answering for no model
+at all.
+
+The form offers the four decisions an operator actually has:
+
+| Field | What it does | Why it is a choice rather than a constant |
+|---|---|---|
+| **Models** | The GGUF files this backend serves. The first is preloaded. | Speed vs quality is a per-household call. The panel shows each model's download size. |
+| **Context window** | `--ctx-size`, the conversation the model can consider at once. | Each option is labelled with the memory it costs (e.g. `32768 tokens (448 MiB of cache)`), computed from the KV-cache geometry, so a bigger window does not look free. |
+| **Concurrent requests** | `--parallel`; each request gets a share of the same memory. | One user is the normal case; a household may want more. |
+| **Compute** | CPU only, or GPU (CUDA image + one `nvidia.com/gpu`). | The GPU option is disabled with an explanation when no node advertises a card, instead of offering a toggle that produces a Pending pod. |
+
+**Both halves are written together.** `backends[].models[].name` is the id
+llama.cpp answers to, and the gateway's `models[].upstreamModel` must be that same
+string or every request 404s against a name the backend does not know. The console
+derives both from one list; the user never types either.
+
+**The memory warning is a warning.** When the chosen models plus the context cache
+exceed the card's reported VRAM, the panel says so and suggests reducing the
+context or the model. It does not refuse: the estimate is an approximation and the
+operator may know better. The server repeats the check before installing, so a
+request that skipped the panel cannot slip a bad choice through silently.
+
+VRAM comes from the `nvidia.com/gpu.memory` node label, which the `gpu_node` role
+publishes from `nvidia-smi` (the same label NVIDIA's feature discovery would set).
+Without it the console sees a card of unknown size and can only stay silent.
+
+**Changing settings reinstalls.** The stack is a Helm release, so applying a new
+model or context runs an upgrade; the volume is kept, so a model already on disk is
+not downloaded again. On an installed stack the button reads **Apply and reinstall**.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/apps/ai/settings` | `{installed, current, defaults, models, contexts, gpu, warning}` — the options and what is running, in one call |
+| `POST /api/apps` with `aiSettings` | Install or reinstall with those choices; `gpuVramBytes` lets the server warn |
+
+`current` is read from the live release (`helm get values`), not from the catalog:
+a panel that reopened on catalog defaults would revert the operator's choice on the
+next save.
+
 ## Optional Mealie → SparkyFitness integration
 
 When both Mealie and SparkyFitness are installed, the SparkyFitness row in
@@ -426,6 +471,7 @@ and backup code, so a feature cannot exist in only one of them.
 | Applications → Connect Mealie | `umkim-thin app integrate mealie` |
 | Installed apps → Uninstall | `umkim-thin app uninstall <name> [--purge]` |
 | Media stack settings | `umkim-thin servarr settings [--media-language L] [--quality-cutoff Q]` |
+| AI stack settings | `umkim-thin ai settings [--model M] [--context N] [--parallel N] [--gpu|--no-gpu]`; `umkim-thin ai models` lists the offered models |
 | Media stack indexers | `umkim-thin servarr indexers list\|search <q>\|add --definition D` |
 | Media stack profiles | `umkim-thin servarr profiles list\|add --language L\|delete --profile P` |
 | Access → Invitations | `umkim-thin invite create\|list\|revoke\|redeem` |
@@ -489,7 +535,8 @@ to poll; a long install or upgrade blocks the terminal instead.
 | POST | `/api/backups/{name}/restore` | `{confirm:true,data,platform}`; restores state and seed after writing a safety archive; `data` extracts the volume copies (stops workloads), `platform` applies the object export |
 | DELETE | `/api/backups/{name}` | delete an archive and the snapshots it recorded |
 | GET | `/api/apps` | installed catalog releases (chart, app version, helm status, routes, licence, upstream links) |
-| POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, `mediaAccessMode`, per-PVC `pvcs`, and per-container `resources` overrides (async job) |
+| POST | `/api/apps` | install with `version`, per-route `exposure`/`certificate`, optional `namespace`, `mediaAccessMode`, per-PVC `pvcs`, per-container `resources` overrides, and `aiSettings` for the AI stack (`{models,contextSize,parallel,useGpu,gpusPerBackend,splitMode}`, plus optional `gpuVramBytes`) (async job) |
+| GET | `/api/apps/ai/settings` | the AI stack's options and its current model/context/GPU choice, read from the live release, with the GPU the cluster advertises and a fit warning |
 | GET | `/api/apps/{name}` | one app's health, chart/app version and routes |
 | GET | `/api/apps/{name}/release` | Helm metadata plus user-supplied values, with secret-looking values redacted |
 | GET | `/api/apps/{name}/storage` | render the chart and list its PVCs/classes/sizes |

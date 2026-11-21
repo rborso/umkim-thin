@@ -734,6 +734,43 @@ than shipped: the gateway currently has **one** identity. Giving each household
 member their own key is a provisioning problem across two user databases that
 know nothing about each other.
 
+### Model, context and GPU are settable from the console
+
+The first GPU install had to be done by hand: edit `catalog/ai.yaml`, copy it into
+the console pod's `/data/catalog`, restart the console, and install from the CLI
+with `--catalog /data/catalog`. That is not a path to give an operator, and the
+three values it was setting — the model, the context window, whether to use the
+card — are the three things anyone actually wants to change.
+
+The console now has an install panel for them (`docs/console.md` → *AI stack:
+models, context and GPU*), the CLI has `umkim-thin ai settings|models`, and both
+write through `app.AISettings`.
+
+**Why not a general values editor.** The chart's `backends[]` list item REPLACES
+its counterpart in `values.yaml` rather than merging, so a partial edit drops
+whatever it omits. A free-form editor makes that the user's problem; a form that
+can only express complete, validated choices cannot. The one bug this shape
+prevents is the one that already happened: an entry without `models` produced a
+stack that answered for no model at all.
+
+**What a settings change costs.** It is a Helm upgrade, not a live edit: the
+backend pod restarts, and a model that is not already on the volume downloads at
+install time. The volume is kept across the change, so switching back does not
+re-download. On the lab GPU host a 1.5B model (1.0 GiB) pulled at ~104 MB/s and the
+whole upgrade took about two minutes.
+
+**The memory estimate is calibrated, not invented.** The KV-cache cost uses
+Qwen2.5's geometry (28 layers x 2 K/V heads x 128 dim, f16) — 14336 bytes per
+token — which predicted 28 MiB for a 2048-token window. Measured on the real card,
+0.5B q4 at 2048 context was 491 MiB resident: about 400 MiB of weights, 28 MiB of
+cache and the rest overhead. That is why the panel's warning is treated as advice
+rather than a gate.
+
+**Still not settable, deliberately:** the gateway's session-affinity settings and
+backend list. One backend per host is the model today; multi-backend pooling works
+in the chart (Phase B) but has no console surface, because the lab has one card and
+a UI for an untested topology would be a guess.
+
 ## 5. Considered and declined
 
 Recorded so the same ground is not re-covered later. Each of these was evaluated
