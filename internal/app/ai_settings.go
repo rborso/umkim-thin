@@ -118,13 +118,18 @@ func aiContextChoices() []AIContextChoice {
 	out := make([]AIContextChoice, 0, 5)
 	for _, size := range []int{2048, 4096, 8192, 16384, 32768} {
 		kib := (int64(size) * aiKVBytesPerToken()) / 1024
-		label := fmt.Sprintf("%d tokens (%.1f GiB of cache)", size, float64(kib)/1024/1024)
-		if size <= 2048 {
-			label = fmt.Sprintf("%d tokens (%.0f MiB of cache, smallest)", size, float64(kib)/1024)
+		// MiB below a GiB, so two adjacent choices never round to the same label:
+		// "0.1 GiB" for both 4096 and 8192 tells a person nothing.
+		var cost string
+		if kib < 1024 {
+			cost = fmt.Sprintf("%d MiB", kib)
+		} else {
+			cost = fmt.Sprintf("%.1f GiB", float64(kib)/1024)
 		}
+		label := fmt.Sprintf("%d tokens (%s of cache)", size, cost)
 		hint := "Larger contexts remember more of a conversation and cost memory per request."
 		if size >= 16384 {
-			hint = "Large contexts need a correspondingly large model window; most small models are trained far shorter."
+			hint = "Large contexts need a model trained for them; most small models are trained far shorter."
 		}
 		out = append(out, AIContextChoice{Value: size, Label: label, Hint: hint})
 	}

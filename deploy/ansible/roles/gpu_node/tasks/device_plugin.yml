@@ -89,6 +89,35 @@
   delay: 10
   changed_when: false
 
+# Publish the card's memory as a node label, which is what NVIDIA's own GPU
+# feature discovery does and what the console reads to warn about a context or
+# model that cannot fit. Without it the console sees a card of unknown size and
+# can only stay silent about a choice that will fail at model load. Only the
+# capacity is published: memory.total is the card, memory used is not the
+# cluster's business. With several cards the smallest is published, because the
+# console compares one model choice against one card and must not assume a big
+# one is available.
+- name: gpu | read the card's total memory
+  ansible.builtin.command:
+    cmd: nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits
+  register: gpu_memory_mib
+  changed_when: false
+  failed_when: false
+
+- name: gpu | publish the card's memory as a node label
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/kubectl label node {{ ansible_hostname }}
+      nvidia.com/gpu.memory={{ gpu_memory_mib.stdout_lines | map("trim") | map("int") | sort | first }}
+      --overwrite
+  register: gpu_memory_label
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: gpu_memory_mib.rc == 0 and gpu_memory_mib.stdout | trim | length > 0
+  # `--overwrite` prints "labeled" even when the value is unchanged, so a plain
+  # changed_when: true would report a change on every run of an idempotent role.
+  changed_when: "'not labeled' not in gpu_memory_label.stdout"
+
 - name: gpu | remove a probe left behind by an interrupted run
   ansible.builtin.command:
     cmd: /usr/local/bin/kubectl -n default delete pod gpu-probe --ignore-not-found --wait=true
