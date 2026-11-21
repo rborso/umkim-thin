@@ -172,6 +172,19 @@ first and reported plainly.
 
 ## Host-side: the Ansible role
 
+**Built:** `deploy/ansible/roles/gpu_node/`, gated on `gpu_enabled` (off by
+default, so a CPU-only node runs the playbook unchanged). It has two entry points
+because the two halves cannot run at the same point:
+
+| Entry point | Play | Why there |
+|---|---|---|
+| `main.yml` | `pre_tasks` of the host play, **before k3s** | The driver needs a reboot, and a reboot is an outage. Doing it first means a single-node install takes its one outage with no cluster and no app to lose. |
+| `device_plugin.yml` | `post_tasks` of the platform play | The DaemonSet cannot register anything until kubelet is up and the CNI can schedule its pod. |
+
+The plan below is kept as it was written, because the differences between it and
+what the hardware run produced are the useful part — see "Verified on real Pascal
+hardware" for each place the plan was wrong.
+
 A `gpu` role, modelled on `common`'s kernel handling. The relevant precedent
 already in the tree:
 
@@ -225,11 +238,17 @@ Two constraints from the existing tree that the role must respect:
 The host work does **not** create `nvidia.com/gpu`. That needs a device plugin:
 
 - **NVIDIA device plugin DaemonSet**, which publishes `nvidia.com/gpu` in
-  `status.allocatable`. The working configuration (from the prior art) is a small
-  ConfigMap + DaemonSet with `deviceDiscoveryStrategy: nvml`,
-  `failOnInitError: false`, tolerating `nvidia.com/gpu:NoSchedule`,
-  `priorityClassName: system-node-critical`, and a pinned image
-  (`nvcr.io/nvidia/k8s-device-plugin:v0.19.3`).
+  `status.allocatable`. **Implemented** as the upstream static manifest pinned to
+  `v0.17.0` (`gpu_device_plugin_version`), which already carries
+  `failOnInitError: false`, the `nvidia.com/gpu` toleration and
+  `system-node-critical`. The role applies it and then *waits for the resource to
+  appear* — a plugin that is Running but has not registered is the failure mode
+  worth catching, since it looks healthy from `kubectl get pods`.
+
+  The role does not stop at "the node advertises it": it runs a one-shot pod
+  requesting `nvidia.com/gpu: 1` and asserts `nvidia-smi -L` inside it. An
+  advertised-but-unusable resource is exactly what the AI stack trips over, as a
+  Pending llama.cpp pod with nothing in its logs.
 - **NFD is not required** if the cluster default runtime is already `nvidia` and the
   DaemonSet simply runs on every node — which is what the prior art does. Adding NFD
   only matters if workloads need `pci-10de.present` labels to select nodes.
@@ -682,6 +701,47 @@ and keeps the CPU contract everywhere else.
 
 **Still unproven:** multi-GPU splitting (`--split-mode`, `--tensor-split`) — the
 lab has one card, so that remains fixture-tested only.
+
+## What making the driver reproducible cost
+
+The first GPU install was done by hand. Encoding it as a role found four things
+that a one-off install hides, all of which are worth knowing before writing a
+similar role.
+
+**`nvidia-ctk --set-as-default` does not work with k3s.** The documented command
+writes `/etc/containerd/conf.d/99-nvidia.toml`, and k3s's generated
+`config.toml` does not import that directory — its `imports` line lists only
+`config-v3.toml.d`. The result is a runtime that *is* defined and *is not* the
+default, and the device plugin still says "Incompatible strategy detected auto".
+k3s's own `default-runtime` setting is the lever, and it belongs in
+`/etc/rancher/k3s/config.yaml` so a reinstall keeps it. The role refreshes the
+config template for exactly this reason.
+
+**A plain re-run must not upgrade the kernel.** DKMS builds against the running
+kernel, so the tempting step is "install `kernel` and `kernel-devel`", which on a
+maintained host pulls a newer point kernel and forces a reboot every time the role
+runs. On a node that is already serving, that is a self-inflicted outage. The role
+installs headers for `uname -r` and only moves the kernel when the repositories
+have dropped it — the case that made the first install fail, and the only case
+that justifies the reboot.
+
+**`tasks_from` is silently ignored in a `roles:` list.** Only
+`include_role`/`import_role` honour it. Written as a `roles:` entry, the "platform"
+entry point ran the role's `main.yml` again — a second full driver pass — and never
+installed the device plugin. `ansible-playbook --list-tasks` mostly hid it too,
+because both plays showed `gpu_node` tasks. It took a real run to see `ok=4,
+changed=0` and no DaemonSet.
+
+**A dynamic `include_role` does not pass its tag down.** With `--tags gpu` the
+playbook included the role and executed none of its tasks. `apply: tags` is what
+namespaces the included tasks.
+
+There is a fifth, in the checks rather than the role: a `jsonpath` for
+`nvidia.com/gpu` has to escape the dot, and that escape did not survive YAML,
+Jinja and the shell. The plugin was registering correctly and the node advertised
+the resource, while the assertion read nothing and reported a broken node for 30
+retries. Reading the resource with a `go-template` `index` and a quoted key needs
+no escaping.
 
 ## Tests for the hardware paths
 

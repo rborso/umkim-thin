@@ -233,6 +233,10 @@ The important fields:
 | `ci_apps` | only used by the maintainer e2e; harmless for a manual install |
 | `external_proxy` | `true` when a reverse proxy outside the cluster terminates TLS (see [TLS: pick one](#tls-pick-one)); Traefik then publishes plain HTTP and runs no ACME |
 | `external_proxy_trusted_ips` | Optional CSV of the proxy's source addresses. Empty means Traefik trusts forwarded headers from any source on `web`/`websecure`; set it when the proxy's address is stable |
+| `gpu_enabled` | `true` on a host with an NVIDIA card, to install the driver and advertise `nvidia.com/gpu`. **EL10 only.** The driver install reboots the host, so it runs before the cluster exists — on a single node that is the one reboot with nothing to take down. Leave unset everywhere else. |
+| `gpu_driver_flavor` | `proprietary` (default) or `open`. The open module is Turing and newer only; Pascal and older need proprietary. |
+| `gpu_driver_version` | Pin the branch, e.g. `580.196.07`. A pre-Turing card is dropped by later branches, so "newest" can be a driver that installs and cannot drive the card. |
+| `ai_gpu` | `true` on a GPU target so `ci/ai-check.sh` asserts the GPU contract (a card is requested, the node advertises one, the CUDA image runs) instead of the CPU one. |
 
 Keep the file out of git: `deploy/provision*.env` is ignored.
 
