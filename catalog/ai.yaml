@@ -128,8 +128,8 @@ verify:
     - llm_backends_are_separate
     - tenant_api_ai
   human:
-    date: "2026-11-20"
-    version: "0.1.5"
+    date: "2026-11-21"
+    version: "0.1.7"
     by: agent
     targets: [single, ha]
     did:
@@ -138,3 +138,5 @@ verify:
       - "signed in as an invited tenant through Authelia OIDC and got an answer from the model through Open WebUI"
       - "verified CPU mode requests no GPU: no backend has an nvidia.com/gpu limit, which is what ci/ai-check.sh enforces"
       - "switched the backend chart to the CUDA image and confirmed it requests a card and passes --n-gpu-layers (render only; no GPU hardware in the lab)"
+      - "as an invited non-admin, minted my own API key, listed models and completed a chat request through /api/v1, then revoked it and confirmed the key stopped authenticating"
+      - "confirmed a stale auth.enable_api_keys=false row from an earlier boot was cleared on upgrade, which is what had made every non-admin get 403"
