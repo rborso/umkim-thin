@@ -669,6 +669,71 @@ turns a wedge into a message: `assert.sh` should verify that a GPU node advertis
 device. Without it, "the AI app will not start" is indistinguishable from a broken
 image, a bad model path, or a missing driver.
 
+### Per-user API keys, for clients outside the chat UI
+
+Question that comes up once the stack works: can a user mint their own key and
+use it from a script, an editor plugin, or a phone app? **Yes, but it needs a
+database, which the shipped chart does not have.**
+
+All of this was verified against `main-v1.83.7-stable` in a container, not read
+off the docs.
+
+**What does not work.** With no `DATABASE_URL`, `POST /key/generate` answers:
+
+```
+500 {'error': 'DB not connected. See .../proxy/virtual_keys'}
+```
+
+Virtual keys are stored rows, so there is nothing to store them in. That is the
+whole reason the chart has no key management today.
+
+**What works once a database exists.**
+
+| Role | Can generate its own key |
+|---|---|
+| `proxy_admin` | yes |
+| `internal_user` | **yes** |
+| `internal_user_viewer` | no — 401 "Only proxy admin can be used to generate..." |
+
+The last one is the default trap: a user created as a viewer cannot self-serve,
+and the error names the requirement rather than the setting. `internal_user` is
+the role that grants key management without admin.
+
+**Verified behaviour with a database:**
+
+- `internal_user` → `POST /key/generate` → 200, and the returned key completes a
+  chat request for real (`200`, model answered).
+- `GET /key/list` as that user returned **only their own** keys — the admin's were
+  not in the list.
+- `GET /key/info?key=<someone else's>` as that user → **403** "You are not allowed
+  to access this key's info. Your role=internal_user". Scoping is enforced, not
+  just hidden in the UI.
+
+**Two ways to expose it, and they differ in what the user gets:**
+
+1. **LiteLLM virtual keys** (what the checks above exercise). Needs Postgres. The
+   user's key works against `https://<chat host>/v1/...` — the gateway speaks the
+   OpenAI API — and carries per-key budget, rate limits and spend tracking.
+2. **Open WebUI API keys** (`ENABLE_API_KEYS=true`). Needs nothing new: WebUI
+   already has a database. But the key is scoped to *Open WebUI's* API
+   (`/api/chat/completions`), not the gateway's OpenAI surface, so an editor
+   plugin pointed at `/v1` would not work. It is the cheaper option if the goal is
+   "let my phone app talk to my chat instance" rather than "let me point any
+   OpenAI client at my house".
+
+**What implementing option 1 costs:** a Postgres StatefulSet/Deployment plus a
+PVC in the `ai` chart, `DATABASE_URL` and `STORE_MODEL_IN_DB` on LiteLLM, a first
+boot that runs migrations (it took ~30 s here), and the users themselves — today
+nobody exists in LiteLLM's table, because WebUI authenticates its users and hands
+the gateway one master key. Granting SSO users their own virtual keys means
+provisioning a LiteLLM user per directory user, which is a real piece of work, not
+a chart flag.
+
+That last point is the honest blocker, and it is why this is written down rather
+than shipped: the gateway currently has **one** identity. Giving each household
+member their own key is a provisioning problem across two user databases that
+know nothing about each other.
+
 ## 5. Considered and declined
 
 Recorded so the same ground is not re-covered later. Each of these was evaluated
