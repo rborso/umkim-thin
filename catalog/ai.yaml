@@ -13,9 +13,9 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/ai
-  version: 0.1.7
+  version: 0.1.8
   versions:
-    - version: 0.1.7
+    - version: 0.1.8
       appVersion: 1.83.7
       channel: stable
 
@@ -83,8 +83,14 @@ values:
   # empty /models and a backend that answered for nothing.
   backends:
     - name: llama-a
-      # CPU-only: the CPU image, no device resource, no driver. `gpu.enabled`
-      # stays false so ci/ai-check.sh can enforce that CPU mode requests no GPU.
+      # CPU by default: the CPU image, no device resource, no driver.
+      #
+      # A GPU node opts in per backend with gpu.enabled, which is the only switch:
+      # the image moves to :server-cuda, nvidia.com/gpu is requested, and
+      # --n-gpu-layers is passed. On the lab GPU host (a Pascal GTX 1050 Ti,
+      # 4 GiB) the chart is installed with gpu.enabled=true by an operator
+      # override; this catalog default deliberately stays false so a CPU-only
+      # cluster installs and passes its checks unchanged.
       image: ghcr.io/ggml-org/llama.cpp:server
       imagePullPolicy: IfNotPresent
       gpu:
