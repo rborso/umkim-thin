@@ -175,14 +175,14 @@ verify:
     - tenant_api_ai
   human:
     date: "2026-11-21"
-    version: "0.1.7"
+    version: "0.1.9"
     by: agent
-    targets: [single, ha]
+    targets: [single]
     did:
-      - "installed from the console on dev-single and ha-dev; all three pods came up with 0 restarts, and the backend fetched its model into the volume"
-      - "confirmed the gateway lists the model and answered a real completion (200, non-empty content, token usage) on both targets"
-      - "signed in as an invited tenant through Authelia OIDC and got an answer from the model through Open WebUI"
-      - "verified CPU mode requests no GPU: no backend has an nvidia.com/gpu limit, which is what ci/ai-check.sh enforces"
-      - "switched the backend chart to the CUDA image and confirmed it requests a card and passes --n-gpu-layers (render only; no GPU hardware in the lab)"
-      - "as an invited non-admin, minted my own API key, listed models and completed a chat request through /api/v1, then revoked it and confirmed the key stopped authenticating"
-      - "confirmed a stale auth.enable_api_keys=false row from an earlier boot was cleared on upgrade, which is what had made every non-admin get 403"
+      - "the earlier 0.1.7 pass on dev-single and ha-dev still holds: install, OIDC tenant sign-in, CPU mode requesting no GPU, and a non-admin minting and revoking their own key"
+      - "0.1.9 on the GPU host (Pascal GTX 1050 Ti, 4 GiB): sampling defaults and the layer count reach the pod spec - --temp 0.2, --top-p 0.9, --top-k 20, --min-p 0.05, --n-gpu-layers 24 all verified in the running Deployment"
+      - "the server defaults actually apply and can still be overridden per request: six unseeded completions at the configured temp 0.2 gave 4 distinct answers, while the same six with temperature 1.9, top_p 1.0 and top_k 0 sent in the request gave 6 distinct"
+      - "a non-admin minted a key in a browser and used it from curl with only the bearer token - GET /api/v1/models returned the model list and a chat completion answered - then revoked it and the same key got 401"
+      - "found and fixed the reason that key could not work before: Authelia's forward-auth intercepted /api/v1/* and returned a 302 to the portal, so the token never reached Open WebUI. The catalog entry now exempts the bearer endpoints by exact path"
+      - "switched the model set through the console API (1.5B added alongside 0.5B, context 4096, parallel 1): both GGUFs landed on the volume, the gateway published both friendly names, and both answered through the gateway"
+      - "confirmed the memory warning is calibrated rather than decorative: 0.5B q4 at 2048 context reported 'about 28 MiB of cache' and the engine measured 491 MiB resident on the card"

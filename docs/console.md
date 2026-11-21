@@ -388,6 +388,8 @@ The form offers the four decisions an operator actually has:
 | **Context window** | `--ctx-size`, the conversation the model can consider at once. | Each option is labelled with the memory it costs (e.g. `32768 tokens (448 MiB of cache)`), computed from the KV-cache geometry, so a bigger window does not look free. |
 | **Concurrent requests** | `--parallel`; each request gets a share of the same memory. | One user is the normal case; a household may want more. |
 | **Compute** | CPU only, or GPU (CUDA image + one `nvidia.com/gpu`). | The GPU option is disabled with an explanation when no node advertises a card, instead of offering a toggle that produces a Pending pod. |
+| **Answer style** | *Precise* / *Balanced* / *Creative*, or Custom. Sets temperature, top-p, top-k and min-p together. | A household should not need to know what `top-p 0.95` means to decide whether answers should be repeatable. The numbers stay visible and editable; editing one switches the label to Custom, checked against the actual values. |
+| **Layers on the card** | `--n-gpu-layers`: all, ~3/4, ~1/2, ~1/4. | The offload knob, and the answer when a model is bigger than the VRAM: keep some layers on the CPU and accept the speed cost. Hidden on the CPU path, where it does nothing. |
 
 **Both halves are written together.** `backends[].models[].name` is the id
 llama.cpp answers to, and the gateway's `models[].upstreamModel` must be that same
@@ -395,8 +397,10 @@ string or every request 404s against a name the backend does not know. The conso
 derives both from one list; the user never types either.
 
 **The memory warning is a warning.** When the chosen models plus the context cache
-exceed the card's reported VRAM, the panel says so and suggests reducing the
-context or the model. It does not refuse: the estimate is an approximation and the
+exceed the card's reported VRAM, the panel says so and names the lever that fixes
+it: how many layers would fit if fewer were offloaded, reducing the context, or a
+smaller model. The estimate scales with the offloaded share, so lowering the layer
+count visibly reduces the figure. It does not refuse: the estimate is an approximation and the
 operator may know better. The server repeats the check before installing, so a
 request that skipped the panel cannot slip a bad choice through silently.
 
@@ -412,6 +416,12 @@ not downloaded again. On an installed stack the button reads **Apply and reinsta
 |---|---|
 | `GET /api/apps/ai/settings` | `{installed, current, defaults, models, contexts, gpu, warning}` — the options and what is running, in one call |
 | `POST /api/apps` with `aiSettings` | Install or reinstall with those choices; `gpuVramBytes` lets the server warn |
+
+`aiSettings` carries `{models, contextSize, parallel, useGpu, gpusPerBackend,
+splitMode, gpuLayers, temperature, topP, topK, minP}`. The sampling numbers are
+server-side defaults: a client may still override any of them per request, which
+is what the OpenAI schema allows and what a caller that wants a one-off
+temperature relies on.
 
 `current` is read from the live release (`helm get values`), not from the catalog:
 a panel that reopened on catalog defaults would revert the operator's choice on the

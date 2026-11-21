@@ -124,6 +124,58 @@ serially because OCR/indexing is sensitive to concurrent load.
 |---|---|
 | **SSO + client master key** | Signs in through Authelia as a fresh directory user, completes the first-time client-side master-password setup, creates an encrypted secure note, then re-authenticates with SSO, unlocks with the master password, and verifies the note decrypts. |
 
+### BookStack
+
+| Journey | What the user/client does |
+|---|---|
+| **Write and edit a page** (`journeys/bookstack-ui.spec.ts`) | Creates a book, adds a page inside it, reopens the editor and confirms it holds the text, replaces the body, then reloads: the edit renders and the original draft is gone. |
+| **API token write** (`journeys/bookstack.spec.ts`) | An API token writes a page and reads it back. |
+
+### Vikunja
+
+| Journey | What the user/client does |
+|---|---|
+| **A person's first use** (`journeys/vikunja-ui.spec.ts`) | Signs in through the portal and the app, makes a list, adds a task with a due date, ticks it off, then reloads and confirms all of it is still there. |
+| **Task round trip** (`journeys/vikunja.spec.ts`) | An API token creates a project and a task, completes it, and reads the due date back. |
+
+### The AI stack's per-user keys
+
+Two checks, and the second is the one that matters:
+
+| Check | What it proves |
+|---|---|
+| `llm_user_api_key_lifecycle` | A **non-admin** mints a key, lists models, completes a chat request, revokes the key, and the key then answers 401. An admin passes even when per-user keys are off, so this has to be an ordinary invited user. |
+| `llm_api_key_bearer_client` | The same key works from a **cookie-less** client. This is what an editor plugin, a CLI or a phone app is, and it is the check that exposed a real defect: Authelia's forward-auth intercepted `/api/v1/*` and answered the bearer token with a 302 to the portal, so the token never reached Open WebUI. Every call in the first check runs from the app's origin, where the portal cookie rides along - which is why it passed while no client could use a key at all. |
+
+When adding a check for a client-facing API, ask which session it carries. A test
+that runs inside the app's origin is not testing the API; it is testing the app.
+
+### Why two kinds of journey
+
+The API journeys prove the writes reach the server. The `-ui` journeys load the
+application, which is a different question: an app whose API works and whose front
+end does not - a redirect loop after login, a broken asset bundle, an editor that
+opens empty - passes the first and fails the second.
+
+Writing them surfaced six behaviours worth knowing, because each one failed as a
+hang or a *false pass* first:
+
+- Neither app auto-logs-in on OIDC. Vikunja needs its "Log in with …" button, and
+  BookStack needs `#oidc-login` **by id** - its text is only an icon, so a
+  role/name locator matches nothing.
+- BookStack follows a form POST with client-side JS, so a click that waits for the
+  navigation hangs even though the save worked. Use `noWaitAfter` and an explicit
+  URL wait.
+- A new BookStack page's first save stays at `/draft/<id>`; the slug appears on a
+  later save. Waiting for `/page/` hangs.
+- BookStack's page body is TinyMCE in an iframe. `fill()` on the hidden textarea
+  hangs, and setting `.value` saves an **empty page** rather than failing - only
+  the editor's own `setContent()` is correct.
+- A saved BookStack page still carries a hidden `html` textarea, so "is there a
+  textarea" is not "is the editor open". Check the iframe instead.
+- A saved page paints after its success banner, so a read-back assertion needs a
+  retry rather than one `innerText` call.
+
 ### Cross-app (opt-in)
 
 | Journey | What the user/client does |

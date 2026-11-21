@@ -29,7 +29,36 @@ trust a proxy identity header.
 | Vaultwarden | OIDC SSO via Authelia (LLDAP users); the master password remains client-side for vault encryption | no |
 | Console | own admin/breakglass login | no (deliberate) |
 | Home | Authelia forward-auth only | **yes** |
+| Local AI (Open WebUI) | OIDC (Authelia client) for the web UI; per-user API keys for clients | no |
 | WireGuard | keys | n/a |
+
+### The AI stack's API keys need a path exemption
+
+A per-user API key exists so that **client software** can use the stack: an editor
+plugin, a CLI, a phone app. Those send `Authorization: Bearer sk-...` and have no
+browser session.
+
+Forward-auth runs *before* the app, so an unexempted route answers the key with a
+302 to the portal and the token never reaches the code that checks it. Verified on
+the GPU host: a key minted by a non-admin was unusable from `curl` until the
+catalog entry listed the bearer endpoints under `publicPaths`.
+
+The exemption is by exact path, not `^/api/v1/`, because `/api/v1/auths/` returns
+the signed-in user's profile and is only meaningful with a browser session:
+
+```yaml
+publicPaths:
+  - "^/api/v1/models$"
+  - "^/api/v1/chat/completions$"
+  - "^/api/v1/auths/api_key$"
+  ...
+```
+
+Open WebUI still authenticates every exempted request itself — the key is checked
+against its own database — so this bypasses the portal layer, not the app's auth.
+The same reasoning as Nextcloud's desktop/mobile endpoints. `internal/route` has a
+test asserting both halves: the bearer endpoints are exempt and the profile
+endpoint is not.
 
 ## Trusted networks (management and VPN)
 
