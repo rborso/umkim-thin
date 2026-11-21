@@ -325,6 +325,12 @@ type Options struct {
 	Language string
 	// OCRLanguage is Paperless's Tesseract OCR language.
 	OCRLanguage string
+	// AISettings is the AI stack's model/context/GPU choice. Nil means "use the
+	// catalog's values". Only the ai app accepts it.
+	AISettings *AISettings
+	// GPUVRAMBytes is how much memory the target's card reports, used to warn
+	// before a context or model choice cannot fit. 0 means unknown (no warning).
+	GPUVRAMBytes int64
 }
 
 func (o Options) step(format string, a ...any) {
@@ -897,6 +903,22 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 		values["ocrLanguage"] = code
 		values["ocrLanguages"] = code
 		opts.OCRLanguage = code
+	}
+	// The AI stack's model, context and GPU choice. Applied as a complete backend
+	// entry (see ai_settings.go): a partial one would drop the models list, which
+	// is how a stack once came up answering for nothing.
+	if opts.AISettings != nil {
+		if e.Name != AIApp {
+			return Result{}, fmt.Errorf("%s does not take AI settings", e.Name)
+		}
+		merged, err := AIValuesForBackend(*opts.AISettings, values)
+		if err != nil {
+			return Result{}, err
+		}
+		if warn := AIModelFitsVRAM(*opts.AISettings, opts.GPUVRAMBytes); warn != "" {
+			opts.step("memory warning: %s", warn)
+		}
+		values = merged
 	}
 	// Preserve a bound PVC's immutable fields on any upgrade *or reinstall*. A
 	// plain `app install` against an existing release is a reinstall (the

@@ -1776,6 +1776,34 @@ function openInstall(e) {
     versions.map(v => `<option value="${esc(v.Version)}"${v.Version === chart.Version ? ' selected' : ''}>` +
       `${esc(v.Version)}${v.AppVersion ? ' · app ' + esc(v.AppVersion) : ''} · ${esc(v.Channel || 'stable')}</option>`).join('') +
     `</select></div>`;
+  // The AI stack gets a real settings form rather than a values editor: the three
+  // knobs that matter are the model, the context window and whether to use a GPU,
+  // and each one has a consequence the console can show (download size, memory
+  // cost, whether it fits the card).
+  const aiFields = e.Name === 'ai'
+    ? `<div id="ai-settings" style="margin-top:.75rem;border:1px solid var(--line);border-radius:.55rem;padding:.7rem .8rem">` +
+        `<div class="muted" id="ai-loading">Reading the current AI settings…</div>` +
+        `<div id="ai-form" style="display:none">` +
+          `<div class="row">` +
+            `<div><label>Models</label><div id="ai-models"></div>` +
+            `<span class="hint">Pick what this stack serves. The first is preloaded so the first question is fast; the others load on demand.</span></div>` +
+          `</div>` +
+          `<div class="row" style="margin-top:.6rem">` +
+            `<div><label>Context window</label><select id="ai-context"></select>` +
+            `<span class="hint">How much of a conversation the model can consider at once. The label shows the memory it costs, because a bigger window is not free.</span></div>` +
+            `<div><label>Concurrent requests</label><select id="ai-parallel">` +
+              [1,2,3,4].map(n => `<option value="${n}">${n}</option>`).join('') +
+            `</select><span class="hint">More at once means each gets a share of the same memory.</span></div>` +
+          `</div>` +
+          `<div class="row" style="margin-top:.6rem">` +
+            `<div><label>Compute</label><div id="ai-compute"></div>` +
+            `<span class="hint" id="ai-gpu-hint"></span></div>` +
+          `</div>` +
+          `<div id="ai-summary" class="muted" style="margin-top:.6rem;white-space:pre-wrap"></div>` +
+          `<div id="ai-warning" style="margin-top:.4rem;color:var(--err-ink);white-space:pre-wrap"></div>` +
+        `</div>` +
+      `</div>`
+    : '';
   const mediaFields = e.Name === 'servarr'
     ? `<div><label>Default media language</label><select id="install-media-language">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, 'en')}</select></div>` +
       `<div><label>Target resolution</label><select id="install-media-quality">${optionMarkup(MEDIA_QUALITY_OPTIONS, '720p')}</select></div>` +
@@ -1797,6 +1825,7 @@ function openInstall(e) {
   panel.innerHTML =
     `<h3>Install ${esc(e.DisplayName || e.Name)}</h3>` +
     `<div class="row">${versionField}${mediaFields}${hostFields}</div>` +
+    aiFields +
     `<div class="row">` +
       `<div><label>Config storage class (RWO)</label><select id="cfg-class"></select></div>` +
       `<div><label>Media storage class (RWX on HA)</label><select id="med-class"></select></div>` +
@@ -1860,7 +1889,169 @@ function openInstall(e) {
   document.getElementById('validate-install').onclick = () => validateInstall(e, panel);
   document.getElementById('cancel-install').onclick = () => { panel.style.display = 'none'; };
   document.getElementById('do-install').onclick = () => doInstall(e, panel);
+  // Each panel open starts clean: leaving a stale AI_STATE would let a later
+  // panel post the previous app's settings.
+  AI_STATE = null;
+  AI_ORIGINAL = null;
+  if (e.Name === 'ai') loadAISettings();
 }
+
+// --- AI settings panel -----------------------------------------------------
+//
+// The console must not offer a general values editor for this stack: the backend
+// list item REPLACES the chart's, so a partial edit drops the models list (that
+// happened once and produced a stack that answered for nothing). This form only
+// edits the four decisions a person actually has, and posts them as one
+// app.AISettings; the server renders the complete entry from that.
+
+let AI_STATE = null;
+let AI_ORIGINAL = null;
+
+async function loadAISettings() {
+  const loading = document.getElementById('ai-loading');
+  const form = document.getElementById('ai-form');
+  if (!loading || !form) return;
+  try {
+    const res = await fetch('/api/apps/ai/settings', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    AI_STATE = data;
+    AI_ORIGINAL = JSON.stringify(data.current);
+
+    // Models: a checkbox per catalogued model, showing size and a plain note.
+    const box = document.getElementById('ai-models');
+    box.innerHTML = (data.models || []).map(m => {
+      const chosen = (data.current.models || []).includes(m.name);
+      return `<label style="display:block;margin:.25rem 0" title="${esc(m.notes)}">` +
+        `<input type="checkbox" data-ai-model="${esc(m.name)}"${chosen ? ' checked' : ''}> ` +
+        `<strong>${esc(m.label)}</strong> ` +
+        `<span class="muted">${esc(mb(m.approxBytes))} download` +
+        `${m.minVramBytes ? ', needs about ' + esc(gib(m.minVramBytes)) + ' of VRAM' : ''}</span>` +
+        `<br><span class="muted" style="margin-left:1.4rem">${esc(m.notes)}</span></label>`;
+    }).join('');
+    for (const cb of box.querySelectorAll('input[data-ai-model]')) {
+      cb.onchange = recomputeAI;
+    }
+    if (!document.querySelector('input[data-ai-model]:checked')) {
+      // Never leave the form in a state that cannot be submitted.
+      const first = document.querySelector('input[data-ai-model]');
+      if (first) first.checked = true;
+    }
+
+    // Context: only the offered windows, each labelled with its memory cost.
+    const ctx = document.getElementById('ai-context');
+    ctx.innerHTML = (data.contexts || []).map(c =>
+      `<option value="${c.value}"${c.value === data.current.contextSize ? ' selected' : ''}>${esc(c.label)}</option>`
+    ).join('');
+    if (!ctx.value) ctx.options[0].selected = true;
+    ctx.onchange = recomputeAI;
+
+    const par = document.getElementById('ai-parallel');
+    par.value = String(data.current.parallel || 1);
+    par.onchange = recomputeAI;
+
+    // Compute: a real choice, not a free-text field, and it says why it is
+    // unavailable when there is no card.
+    const gpuAvailable = data.gpu && data.gpu.count > 0;
+    const compute = document.getElementById('ai-compute');
+    compute.innerHTML =
+      `<label style="display:block;margin:.15rem 0"><input type="radio" name="ai-compute" value="cpu"${data.current.useGpu ? '' : ' checked'}> CPU only</label>` +
+      `<label style="display:block;margin:.15rem 0"><input type="radio" name="ai-compute" value="gpu"${data.current.useGpu ? ' checked' : ''}${gpuAvailable ? '' : ' disabled'}> GPU` +
+      `${gpuAvailable ? ' <span class="muted">(' + data.gpu.count + ' card' + (data.gpu.count === 1 ? '' : 's') + ' on ' + esc((data.gpu.nodes || []).join(', ')) + (data.gpu.vramBytes ? ', ' + esc(gib(data.gpu.vramBytes)) + ' each' : '') + ')</span>' : ''}` +
+      `</label>`;
+    for (const r of compute.querySelectorAll('input[name="ai-compute"]')) r.onchange = recomputeAI;
+
+    const hint = document.getElementById('ai-gpu-hint');
+    if (!gpuAvailable) {
+      hint.textContent = 'No node advertises a GPU, so the stack will run on the CPU. Install the driver and device plugin first (docs/gpu-agent.md).';
+    } else if (!data.gpu.vramBytes) {
+      hint.textContent = 'The card is present but does not report its memory, so the size warning below cannot be checked.';
+    } else {
+      hint.textContent = 'GPU inference is much faster for the same model. It needs the CUDA backend image (a larger pull).';
+    }
+
+    loading.style.display = 'none';
+    form.style.display = 'block';
+    recomputeAI();
+  } catch (err) {
+    loading.textContent = 'Could not read the AI settings: ' + err.message +
+      ' — the install will use the catalog defaults.';
+  }
+}
+
+function aiChosen() {
+  const models = Array.from(document.querySelectorAll('input[data-ai-model]:checked'))
+    .map(cb => cb.dataset.aiModel);
+  const gpuRadio = document.querySelector('input[name="ai-compute"]:checked');
+  return {
+    models,
+    contextSize: Number(document.getElementById('ai-context').value || 2048),
+    parallel: Number(document.getElementById('ai-parallel').value || 1),
+    useGpu: !!gpuRadio && gpuRadio.value === 'gpu',
+    gpusPerBackend: (AI_STATE && AI_STATE.current.gpusPerBackend) || 1,
+    splitMode: (AI_STATE && AI_STATE.current.splitMode) || 'layer',
+  };
+}
+
+// recomputeAI explains the consequence of the current choice in one place: the
+// download, the memory it needs and, on a GPU, whether it fits the card. The
+// arithmetic mirrors app.AIModelFitsVRAM so the console and the install path
+// cannot disagree; the server re-checks before installing.
+function recomputeAI() {
+  if (!AI_STATE) return;
+  const s = aiChosen();
+  const options = AI_STATE.models || [];
+  const byName = Object.fromEntries(options.map(m => [m.name, m]));
+
+  let bytes = 0, weights = 0;
+  for (const name of s.models) {
+    const m = byName[name];
+    if (!m) continue;
+    bytes += m.approxBytes || 0;
+    weights += m.minVramBytes || 0;
+  }
+  const kvPerToken = 28 * 2 * 128 * 2;
+  const cache = s.contextSize * kvPerToken * s.parallel;
+
+  const lines = [];
+  if (s.models.length === 0) {
+    lines.push('Pick at least one model.');
+  } else {
+    lines.push(`${s.models.length} model${s.models.length === 1 ? '' : 's'} to download: ${mb(bytes)}.`);
+    // The first model is preloaded: say so, because it explains the first-request
+    // latency an operator will otherwise report as a bug.
+    lines.push(`Preloaded at start: ${byName[s.models[0]] ? byName[s.models[0]].label : s.models[0]}.`);
+    lines.push(`Context cache: about ${mb(cache)} for a ${s.contextSize}-token window.`);
+    lines.push(s.useGpu
+      ? `Estimate: about ${gib(weights + cache)} of VRAM (${gib(weights)} weights + ${mb(cache)} cache).`
+      : `Estimate: about ${gib(weights + cache)} of RAM.`);
+  }
+  document.getElementById('ai-summary').textContent = lines.join('\n');
+
+  // The warning is a warning: the operator may know better, and refusing here
+  // would block a working install on an estimate.
+  const warnBox = document.getElementById('ai-warning');
+  let warn = '';
+  if (s.useGpu && AI_STATE.gpu && AI_STATE.gpu.vramBytes > 0 && s.models.length) {
+    const need = weights + cache;
+    if (need > AI_STATE.gpu.vramBytes) {
+      warn = `This needs about ${gib(need)} but the card has ${gib(AI_STATE.gpu.vramBytes)}. ` +
+        `Reduce the context window or choose a smaller model, or the backend will fail while loading the model.`;
+    }
+  }
+  warnBox.textContent = warn;
+
+  // An installed stack being changed is a reinstall, and the button should say so.
+  const changed = JSON.stringify(s) !== AI_ORIGINAL;
+  const btn = document.getElementById('do-install');
+  if (btn && AI_STATE.installed) {
+    btn.textContent = changed ? 'Apply and reinstall' : 'Reinstall with these settings';
+  }
+}
+
+function mb(n) { return (n / (1024 * 1024)).toFixed(0) + ' MiB'; }
+function gib(n) { return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GiB'; }
+
 
 async function loadInstallPlan(e, panel) {
   const pvcBox = document.getElementById('pvc-plan');
@@ -1989,6 +2180,12 @@ function installRequestBody(e, panel) {
   if (e.Name === 'nextcloud') body.language = document.getElementById('install-language').value;
   if (e.Name === 'gitea') body.language = document.getElementById('install-gitea-language').value;
   if (e.Name === 'paperless') body.ocrLanguage = document.getElementById('install-ocr-language').value;
+  // The AI form posts one complete settings object; the server renders the
+  // backend entry and the gateway list from it together, so they cannot drift.
+  if (e.Name === 'ai' && AI_STATE && document.getElementById('ai-form').style.display !== 'none') {
+    body.aiSettings = aiChosen();
+    if (AI_STATE.gpu && AI_STATE.gpu.vramBytes) body.gpuVramBytes = AI_STATE.gpu.vramBytes;
+  }
   return body;
 }
 

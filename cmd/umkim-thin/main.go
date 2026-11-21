@@ -50,6 +50,7 @@ Usage:
   umkim-thin invite create|list|revoke|groups|redeem  invitations and directory groups
   umkim-thin wg client create <name>   create a WireGuard client config
   umkim-thin servarr settings|indexers|profiles  the media stack's settings
+  umkim-thin ai settings|models        the AI stack's model, context and GPU choice
   umkim-thin version                   running version and the latest release
   umkim-thin config                    effective configuration
   umkim-thin status                    every installed app, ready state and routes
@@ -97,6 +98,10 @@ func main() {
 		}
 	case "status":
 		if err := statusCmd(catalogDir, args[1:]); err != nil {
+			fatal(err)
+		}
+	case "ai":
+		if err := aiCmd(catalogDir, args[1:]); err != nil {
 			fatal(err)
 		}
 	case "servarr":

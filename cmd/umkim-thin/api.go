@@ -88,6 +88,13 @@ type installRequest struct {
 	ExtraLanguages  []string                          `json:"extraLanguages"`
 	Language        string                            `json:"language"`
 	OCRLanguage     string                            `json:"ocrLanguage"`
+	// AISettings is the AI stack's model/context/GPU choice. Absent means the
+	// catalog's values, so an existing install form keeps its behaviour.
+	AISettings *app.AISettings `json:"aiSettings"`
+	// GPUVRAMBytes lets the server warn about a choice that cannot fit the card.
+	// The console reads it from the cluster; a caller that omits it simply gets
+	// no warning.
+	GPUVRAMBytes int64 `json:"gpuVramBytes"`
 }
 
 func (r installRequest) options() app.Options {
@@ -99,6 +106,7 @@ func (r installRequest) options() app.Options {
 		Certificate: r.Certificate, MediaLanguage: r.MediaLanguage,
 		QualityCutoff: r.QualityCutoff, ExtraLanguages: r.ExtraLanguages,
 		Language: r.Language, OCRLanguage: r.OCRLanguage,
+		AISettings: r.AISettings, GPUVRAMBytes: r.GPUVRAMBytes,
 	}
 	if opts.Hosts == nil {
 		opts.Hosts = map[string]string{}
@@ -342,6 +350,41 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			}
 		}
 		writeJSON(w, out)
+	})
+	// The AI stack's install-time settings. The console needs the options and the
+	// current values in one call: a form that offers models without knowing what
+	// is running would propose the catalog default and revert an operator's
+	// choice on the next save.
+	mux.HandleFunc("GET /api/apps/ai/settings", func(w http.ResponseWriter, r *http.Request) {
+		current := app.DefaultAISettings()
+		installed := false
+		if e, ok := cat.Entry(app.AIApp); ok {
+			if st, err := installer.List(); err == nil {
+				for _, item := range st {
+					if item.Name != app.AIApp {
+						continue
+					}
+					installed = true
+					if cur, err := installer.AISettingsFor(item.Name, item.Namespace); err == nil {
+						current = cur
+					}
+					break
+				}
+			}
+			_ = e
+		}
+		gpu, _ := installer.GPUs()
+		writeJSON(w, map[string]any{
+			"installed": installed,
+			"current":   current,
+			"defaults":  app.DefaultAISettings(),
+			"models":    app.AIModelOptions(),
+			"contexts":  app.AIContextOptions(),
+			"gpu":       gpu,
+			// Evaluated server-side so the console cannot disagree with the
+			// install path about what fits.
+			"warning": app.AIModelFitsVRAM(current, gpu.VRAMBytes),
+		})
 	})
 	mux.HandleFunc("GET /api/apps/servarr/settings", func(w http.ResponseWriter, r *http.Request) {
 		settings, err := installer.ServarrSettings()
