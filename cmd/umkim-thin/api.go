@@ -374,12 +374,16 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			_ = e
 		}
 		gpu, _ := installer.GPUs()
+		preset, _ := app.AISamplingPresetFor(current)
 		writeJSON(w, map[string]any{
 			"installed": installed,
 			"current":   current,
 			"defaults":  app.DefaultAISettings(),
 			"models":    app.AIModelOptions(),
 			"contexts":  app.AIContextOptions(),
+			"presets":   app.AISamplingPresets(),
+			"preset":    preset,
+			"estimate":  app.AIEstimateVRAM(current, gpu.VRAMBytes),
 			"gpu":       gpu,
 			// Evaluated server-side so the console cannot disagree with the
 			// install path about what fits.

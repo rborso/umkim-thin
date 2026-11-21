@@ -1798,6 +1798,24 @@ function openInstall(e) {
           `<div class="row" style="margin-top:.6rem">` +
             `<div><label>Compute</label><div id="ai-compute"></div>` +
             `<span class="hint" id="ai-gpu-hint"></span></div>` +
+            `<div id="ai-layers-wrap"><label>Layers on the card</label><select id="ai-layers"></select>` +
+            `<span class="hint" id="ai-layers-hint"></span></div>` +
+          `</div>` +
+          `<div class="row" style="margin-top:.6rem">` +
+            `<div><label>Answer style</label><select id="ai-preset"></select>` +
+            `<span class="hint" id="ai-preset-hint"></span></div>` +
+            `<details style="flex:1"><summary class="muted">Sampling details</summary>` +
+              `<div class="row" style="margin-top:.4rem">` +
+                `<div><label>Temperature</label><input id="ai-temperature" type="number" min="0" max="2" step="0.05" style="width:6rem">` +
+                `<span class="hint">0 is repeatable, 0.8 is the default, above ~1.3 invents facts.</span></div>` +
+                `<div><label>top-p</label><input id="ai-topp" type="number" min="0" max="1" step="0.01" style="width:6rem">` +
+                `<span class="hint">Keep the likeliest tokens summing to this; 1.0 disables.</span></div>` +
+                `<div><label>top-k</label><input id="ai-topk" type="number" min="0" max="1000" step="1" style="width:6rem">` +
+                `<span class="hint">Candidate tokens per step; 0 disables.</span></div>` +
+                `<div><label>min-p</label><input id="ai-minp" type="number" min="0" max="1" step="0.01" style="width:6rem">` +
+                `<span class="hint">Drop tokens below this fraction of the best; 0 disables.</span></div>` +
+              `</div>` +
+            `</details>` +
           `</div>` +
           `<div id="ai-summary" class="muted" style="margin-top:.6rem;white-space:pre-wrap"></div>` +
           `<div id="ai-warning" style="margin-top:.4rem;color:var(--err-ink);white-space:pre-wrap"></div>` +
@@ -1950,6 +1968,37 @@ async function loadAISettings() {
     par.value = String(data.current.parallel || 1);
     par.onchange = recomputeAI;
 
+    // Answer style: a named preset, because asking a person for "top-p 0.95"
+    // is asking them to know llama.cpp. The numbers stay editable below.
+    const presetSel = document.getElementById('ai-preset');
+    presetSel.innerHTML = (data.presets || []).map(p =>
+      `<option value="${esc(p.name)}"${data.preset && data.preset.name === p.name ? ' selected' : ''}>${esc(p.label)}</option>`
+    ).join('') + `<option value="custom"${data.preset && !data.presetExact ? ' selected' : ''}>Custom</option>`;
+    // data.preset tells us closest-but-not-exact; surface that honestly.
+    if (data.preset && !exactPreset(data)) {
+      presetSel.value = 'custom';
+    }
+    setSamplingInputs(data.current);
+    presetSel.onchange = () => {
+      const chosen = (data.presets || []).find(p => p.name === presetSel.value);
+      if (chosen) setSamplingInputs(chosen);
+      recomputeAI();
+    };
+    document.getElementById('ai-preset-hint').textContent =
+      (data.presets || []).find(p => p.name === presetSel.value)?.hint || '';
+
+    // Layers: an explicit list rather than a free number, since the meaningful
+    // values are "all" and a rough share of the model.
+    const layers = document.getElementById('ai-layers');
+    layers.innerHTML = [
+      ['999', 'All layers (fastest)'],
+      ['24', 'About 3/4 of the model'],
+      ['16', 'About half'],
+      ['8', 'About a quarter (fits a big model on a small card)'],
+    ].map(([v, label]) => `<option value="${v}"${Number(v) === data.current.gpuLayers ? ' selected' : ''}>${esc(label)}</option>`
+    ).join('');
+    layers.onchange = recomputeAI;
+
     // Compute: a real choice, not a free-text field, and it says why it is
     // unavailable when there is no card.
     const gpuAvailable = data.gpu && data.gpu.count > 0;
@@ -1979,6 +2028,34 @@ async function loadAISettings() {
   }
 }
 
+// setSamplingInputs writes a preset (or the current values) into the four
+// number inputs, so the details view always shows what will actually be sent.
+function setSamplingInputs(src) {
+  document.getElementById('ai-temperature').value = Number(src.temperature).toFixed(2);
+  document.getElementById('ai-topp').value = Number(src.topP).toFixed(2);
+  document.getElementById('ai-topk').value = String(src.topK);
+  document.getElementById('ai-minp').value = Number(src.minP).toFixed(2);
+  for (const id of ['ai-temperature', 'ai-topp', 'ai-topk', 'ai-minp']) {
+    document.getElementById(id).onchange = () => {
+      // Any hand edit means the user is no longer on a preset.
+      document.getElementById('ai-preset').value = 'custom';
+      document.getElementById('ai-preset-hint').textContent =
+        'Custom sampling: the numbers below are used as given.';
+      recomputeAI();
+    };
+  }
+}
+
+// exactPreset reports whether the current values are a preset verbatim. The API
+// sends the closest preset either way, so the panel needs to know the difference
+// to avoid claiming "Balanced" while the numbers say otherwise.
+function exactPreset(data) {
+  const c = data.current || {};
+  return (data.presets || []).some(p =>
+    p.temperature === c.temperature && p.topP === c.topP &&
+    p.topK === c.topK && p.minP === c.minP);
+}
+
 function aiChosen() {
   const models = Array.from(document.querySelectorAll('input[data-ai-model]:checked'))
     .map(cb => cb.dataset.aiModel);
@@ -1990,6 +2067,11 @@ function aiChosen() {
     useGpu: !!gpuRadio && gpuRadio.value === 'gpu',
     gpusPerBackend: (AI_STATE && AI_STATE.current.gpusPerBackend) || 1,
     splitMode: (AI_STATE && AI_STATE.current.splitMode) || 'layer',
+    gpuLayers: Number(document.getElementById('ai-layers').value || 999),
+    temperature: Number(document.getElementById('ai-temperature').value),
+    topP: Number(document.getElementById('ai-topp').value),
+    topK: Number(document.getElementById('ai-topk').value),
+    minP: Number(document.getElementById('ai-minp').value),
   };
 }
 
@@ -2012,6 +2094,9 @@ function recomputeAI() {
   }
   const kvPerToken = 28 * 2 * 128 * 2;
   const cache = s.contextSize * kvPerToken * s.parallel;
+  // Only the offloaded share of the weights occupies the card.
+  const layerShare = (s.gpuLayers > 0 && s.gpuLayers < 999) ? Math.min(1, s.gpuLayers / 32) : 1;
+  const offloaded = weights * layerShare;
 
   const lines = [];
   if (s.models.length === 0) {
@@ -2022,18 +2107,28 @@ function recomputeAI() {
     // latency an operator will otherwise report as a bug.
     lines.push(`Preloaded at start: ${byName[s.models[0]] ? byName[s.models[0]].label : s.models[0]}.`);
     lines.push(`Context cache: about ${mb(cache)} for a ${s.contextSize}-token window.`);
-    lines.push(s.useGpu
-      ? `Estimate: about ${gib(weights + cache)} of VRAM (${gib(weights)} weights + ${mb(cache)} cache).`
-      : `Estimate: about ${gib(weights + cache)} of RAM.`);
+    if (s.useGpu) {
+      const where = layerShare >= 1
+        ? `all layers on the card`
+        : `${s.gpuLayers} of ~32 layers on the card, the rest on the CPU (slower)`;
+      lines.push(`Estimate: about ${gib(offloaded + cache)} of VRAM (${where}; ${gib(offloaded)} weights + ${mb(cache)} cache).`);
+    } else {
+      lines.push(`Estimate: about ${gib(weights + cache)} of RAM.`);
+    }
   }
   document.getElementById('ai-summary').textContent = lines.join('\n');
+
+  // Layers only mean something on a GPU; hiding it keeps the CPU path from
+  // showing a control that does nothing.
+  const layersWrap = document.getElementById('ai-layers-wrap');
+  if (layersWrap) layersWrap.style.display = s.useGpu ? '' : 'none';
 
   // The warning is a warning: the operator may know better, and refusing here
   // would block a working install on an estimate.
   const warnBox = document.getElementById('ai-warning');
   let warn = '';
   if (s.useGpu && AI_STATE.gpu && AI_STATE.gpu.vramBytes > 0 && s.models.length) {
-    const need = weights + cache;
+    const need = offloaded + cache;
     if (need > AI_STATE.gpu.vramBytes) {
       warn = `This needs about ${gib(need)} but the card has ${gib(AI_STATE.gpu.vramBytes)}. ` +
         `Reduce the context window or choose a smaller model, or the backend will fail while loading the model.`;

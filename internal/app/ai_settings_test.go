@@ -494,3 +494,216 @@ func TestAISettingsRefusedForOtherApps(t *testing.T) {
 		t.Fatalf("expected a refusal, got %v", err)
 	}
 }
+
+// Sampling defaults must reach the chart, because a catalog override that omits
+// them falls back to the chart silently while the console shows something else.
+func TestAISamplingIsRendered(t *testing.T) {
+	s := DefaultAISettings()
+	s.Temperature = 0.2
+	s.TopP = 0.9
+	s.TopK = 20
+	s.MinP = 0.05
+
+	values, err := AIValuesForBackend(s, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := values["backends"].([]any)[0].(map[string]any)
+	sampling, ok := backend["sampling"].(map[string]any)
+	if !ok {
+		t.Fatal("the backend entry must carry a sampling block")
+	}
+	for key, want := range map[string]float64{
+		"temperature": 0.2, "topP": 0.9, "topK": 20, "minP": 0.05,
+	} {
+		got, _ := toFloat(sampling[key])
+		if got != want {
+			t.Errorf("sampling.%s = %v, want %v", key, got, want)
+		}
+	}
+}
+
+// Every sampling field must survive the values -> JSON -> settings round trip, or
+// reopening the panel would show the defaults and quietly overwrite the choice.
+func TestAISamplingRoundTrips(t *testing.T) {
+	want := DefaultAISettings()
+	want.Temperature = 1.1
+	want.TopP = 0.98
+	want.TopK = 80
+	want.MinP = 0.02
+
+	values, err := AIValuesForBackend(want, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(values)
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NormalizeAISettings(AISettingsFromValues(decoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Temperature != want.Temperature || got.TopP != want.TopP ||
+		got.TopK != want.TopK || got.MinP != want.MinP {
+		t.Fatalf("sampling did not round-trip: got %+v want %+v", got, want)
+	}
+}
+
+// GPU layers is the offload knob. It must reach the chart, and it must change the
+// VRAM estimate - otherwise the warning ignores the one lever that fixes the
+// problem it is warning about.
+func TestAIGPULayersDriveOffloadAndEstimate(t *testing.T) {
+	full := DefaultAISettings()
+	full.UseGPU = true
+	full.Models = []string{"qwen2.5-3b-instruct-q4_k_m"}
+	full.ContextSize = 32768
+	full.GPULayers = 999
+
+	partial := full
+	partial.GPULayers = 8
+
+	vf, err := AIValuesForBackend(full, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vp, err := AIValuesForBackend(partial, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotFull, _ := toInt(vf["backends"].([]any)[0].(map[string]any)["gpuLayers"])
+	gotPartial, _ := toInt(vp["backends"].([]any)[0].(map[string]any)["gpuLayers"])
+	if gotFull != 999 || gotPartial != 8 {
+		t.Fatalf("gpuLayers = %d/%d, want 999/8", gotFull, gotPartial)
+	}
+
+	// The estimate must move with it, and by roughly the layer fraction.
+	const card = 4 << 30
+	ef := AIEstimateVRAM(full, card)
+	ep := AIEstimateVRAM(partial, card)
+	if ep.TotalBytes >= ef.TotalBytes {
+		t.Fatalf("offloading 8 layers (%d bytes) must need less VRAM than all (%d bytes)",
+			ep.TotalBytes, ef.TotalBytes)
+	}
+	// 8/32 of the weights, plus the cache. The weights are the dominant term.
+	if ep.WeightsBytes > ef.WeightsBytes/3 {
+		t.Fatalf("8 layers should be about a quarter of the weights, got %d of %d",
+			ep.WeightsBytes, ef.WeightsBytes)
+	}
+}
+
+// A CPU backend must not carry a layer count: llama.cpp ignores it there, and a
+// value in the values file invites the reader to think it matters.
+func TestAIGPULayersAbsentOnCPU(t *testing.T) {
+	s := DefaultAISettings()
+	s.UseGPU = false
+	values, err := AIValuesForBackend(s, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := values["backends"].([]any)[0].(map[string]any)
+	if _, ok := backend["gpuLayers"]; ok {
+		t.Error("a CPU backend must not carry gpuLayers")
+	}
+}
+
+// The presets must be usable as-is and must be distinguishable: three presets
+// that produce the same numbers would be a decoration.
+func TestAISamplingPresetsAreDistinctAndValid(t *testing.T) {
+	presets := AISamplingPresets()
+	if len(presets) < 2 {
+		t.Fatalf("want a few presets, got %d", len(presets))
+	}
+	seen := map[string]bool{}
+	for _, p := range presets {
+		if p.Name == "" || p.Label == "" || p.Hint == "" {
+			t.Errorf("preset %+v needs a name, label and hint", p)
+		}
+		if seen[p.Name] {
+			t.Errorf("duplicate preset %q", p.Name)
+		}
+		seen[p.Name] = true
+
+		// Applying the preset must produce settings that validate.
+		s := DefaultAISettings()
+		s.Temperature, s.TopP, s.TopK, s.MinP = p.Temperature, p.TopP, p.TopK, p.MinP
+		if _, err := NormalizeAISettings(s); err != nil {
+			t.Errorf("preset %q does not validate: %v", p.Name, err)
+		}
+	}
+
+	// "Precise" must actually be more deterministic than "creative".
+	byName := map[string]AISamplingPreset{}
+	for _, p := range presets {
+		byName[p.Name] = p
+	}
+	if byName["precise"].Temperature >= byName["creative"].Temperature {
+		t.Error("precise must have a lower temperature than creative")
+	}
+}
+
+// A hand-set value that matches no preset must still highlight the closest one,
+// rather than leaving the panel with nothing selected.
+func TestAISamplingPresetForFallsBackToClosest(t *testing.T) {
+	s := DefaultAISettings()
+	s.Temperature, s.TopP, s.TopK, s.MinP = 0.8, 0.95, 40, 0.05
+	if p, exact := AISamplingPresetFor(s); !exact || p.Name != "balanced" {
+		t.Errorf("the llama.cpp defaults must match the balanced preset, got %q exact=%v", p.Name, exact)
+	}
+
+	s.Temperature = 0.75
+	p, exact := AISamplingPresetFor(s)
+	if exact {
+		t.Error("a non-preset temperature must not report an exact match")
+	}
+	if p.Name != "balanced" {
+		t.Errorf("0.75 is closest to balanced, got %q", p.Name)
+	}
+}
+
+// The new ranges must reject what would produce a broken or useless backend.
+func TestAINormalizeRejectsBadSampling(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*AISettings)
+		wantErr string
+	}{
+		{"temperature too high", func(s *AISettings) { s.Temperature = 3 }, "temperature"},
+		{"negative temperature", func(s *AISettings) { s.Temperature = -0.5 }, "temperature"},
+		{"top-p above one", func(s *AISettings) { s.TopP = 1.5 }, "top-p"},
+		{"negative top-p", func(s *AISettings) { s.TopP = -0.1 }, "top-p"},
+		{"top-k negative", func(s *AISettings) { s.TopK = -5 }, "top-k"},
+		{"min-p above one", func(s *AISettings) { s.MinP = 2 }, "min-p"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := DefaultAISettings()
+			tc.mutate(&s)
+			_, err := NormalizeAISettings(s)
+			if err == nil {
+				t.Fatalf("expected an error mentioning %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Boundary values must be accepted: temperature 0 (deterministic) and top-k 0
+// (disabled) are legitimate, not typos.
+func TestAINormalizeAcceptsSamplingBoundaries(t *testing.T) {
+	s := DefaultAISettings()
+	s.Temperature = 0
+	s.TopK = 0
+	s.MinP = 0
+	s.TopP = 1.0
+	got, err := NormalizeAISettings(s)
+	if err != nil {
+		t.Fatalf("boundary sampling values must be accepted: %v", err)
+	}
+	if got.Temperature != 0 || got.TopK != 0 {
+		t.Fatalf("boundaries were rewritten: %+v", got)
+	}
+}

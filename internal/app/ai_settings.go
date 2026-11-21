@@ -69,6 +69,20 @@ type AISettings struct {
 	GPUsPerBackend int `json:"gpusPerBackend"`
 	// SplitMode is `gpu.splitMode`, for a host with more than one card.
 	SplitMode string `json:"splitMode"`
+	// GPULayers is `gpuLayers`: how many model layers go to the card. 999 means
+	// all of them. Lowering it is how a model bigger than the VRAM is made to
+	// fit, at the cost of speed.
+	GPULayers int `json:"gpuLayers"`
+	// Temperature is `sampling.temperature`: 0 is deterministic, 0.8 is
+	// llama.cpp's default, above about 1.3 small models start inventing facts.
+	Temperature float64 `json:"temperature"`
+	// TopP is `sampling.topP`: nucleus sampling, 1.0 disables it.
+	TopP float64 `json:"topP"`
+	// TopK is `sampling.topK`: candidate tokens per step, 0 disables it.
+	TopK int `json:"topK"`
+	// MinP is `sampling.minP`: drop tokens below this fraction of the most
+	// likely one, 0 disables it.
+	MinP float64 `json:"minP"`
 }
 
 // aiModelCatalogue is the built-in set the console offers. It is deliberately
@@ -139,6 +153,70 @@ func aiContextChoices() []AIContextChoice {
 	return out
 }
 
+// AISamplingPreset is a named sampling configuration. A form that asks for
+// "temperature 0.8, top-p 0.95, top-k 40" is asking a person to know llama.cpp's
+// internals; a preset says what the resulting behaviour is instead, and the
+// numbers stay visible for anyone who wants them.
+type AISamplingPreset struct {
+	// Name is the preset's id, stable across releases.
+	Name string `json:"name"`
+	// Label is what the console shows.
+	Label string `json:"label"`
+	// Hint explains the trade in one sentence.
+	Hint string `json:"hint"`
+	// Temperature, TopP, TopK and MinP are the values it sets.
+	Temperature float64 `json:"temperature"`
+	TopP        float64 `json:"topP"`
+	TopK        int     `json:"topK"`
+	MinP        float64 `json:"minP"`
+}
+
+// AISamplingPresets are the offered presets. The numbers are llama.cpp's own
+// defaults for "balanced", so a household that never touches this gets exactly
+// what upstream ships.
+func AISamplingPresets() []AISamplingPreset {
+	return []AISamplingPreset{
+		{
+			Name: "precise", Label: "Precise (repeatable)",
+			Hint:        "Nearly deterministic: the same question gives the same answer. Best for extracting facts, translating, or anything you will check.",
+			Temperature: 0.2, TopP: 0.9, TopK: 20, MinP: 0.05,
+		},
+		{
+			Name: "balanced", Label: "Balanced (default)",
+			Hint:        "The model's own defaults. A good general-purpose setting for chat.",
+			Temperature: 0.8, TopP: 0.95, TopK: 40, MinP: 0.05,
+		},
+		{
+			Name: "creative", Label: "Creative (varied)",
+			Hint:        "More varied wording. Better for brainstorming and writing; more willing to invent plausible-sounding detail.",
+			Temperature: 1.1, TopP: 0.98, TopK: 80, MinP: 0.02,
+		},
+	}
+}
+
+// AISamplingPresetFor finds the preset matching a settings value. It returns the
+// closest by temperature when no preset matches exactly, so a hand-set value
+// still highlights something in the console rather than nothing.
+func AISamplingPresetFor(s AISettings) (AISamplingPreset, bool) {
+	presets := AISamplingPresets()
+	for _, p := range presets {
+		if p.Temperature == s.Temperature && p.TopP == s.TopP && p.TopK == s.TopK && p.MinP == s.MinP {
+			return p, true
+		}
+	}
+	best, bestDiff := presets[0], 1e9
+	for _, p := range presets {
+		d := p.Temperature - s.Temperature
+		if d < 0 {
+			d = -d
+		}
+		if d < bestDiff {
+			best, bestDiff = p, d
+		}
+	}
+	return best, false
+}
+
 // AIContextOptions returns the selectable context windows.
 func AIContextOptions() []AIContextChoice { return aiContextChoices() }
 
@@ -152,6 +230,13 @@ func DefaultAISettings() AISettings {
 		UseGPU:         false,
 		GPUsPerBackend: 1,
 		SplitMode:      "layer",
+		// llama.cpp's own defaults, so an untouched install behaves exactly as
+		// the upstream server would.
+		GPULayers:   999,
+		Temperature: 0.8,
+		TopP:        0.95,
+		TopK:        40,
+		MinP:        0.05,
 	}
 }
 
@@ -223,6 +308,32 @@ func NormalizeAISettings(s AISettings) (AISettings, error) {
 	}
 	if !aiSplitModes[s.SplitMode] {
 		return AISettings{}, fmt.Errorf("split mode %q must be one of layer, row, tensor", s.SplitMode)
+	}
+
+	// Sampling. Zero means "unset" for the float fields, because JSON omits a
+	// missing key as 0 and temperature 0 is a legitimate (deterministic) choice -
+	// so a caller that wants determinism must say so explicitly via aiZeroOK.
+	if s.GPULayers == 0 {
+		s.GPULayers = def.GPULayers
+	}
+	// A negative layer count would make llama.cpp offload nothing while the pod
+	// still requests a card: a GPU pod doing CPU work, which is the confusing
+	// state this whole feature exists to avoid.
+	if s.GPULayers < 1 {
+		return AISettings{}, fmt.Errorf("GPU layers %d is out of range (1-999, 999 = all)", s.GPULayers)
+	}
+
+	if s.Temperature < 0 || s.Temperature > 2 {
+		return AISettings{}, fmt.Errorf("temperature %.2f is out of range (0-2)", s.Temperature)
+	}
+	if s.TopP < 0 || s.TopP > 1 {
+		return AISettings{}, fmt.Errorf("top-p %.2f is out of range (0-1, 1.0 disables it)", s.TopP)
+	}
+	if s.TopK < 0 || s.TopK > 1000 {
+		return AISettings{}, fmt.Errorf("top-k %d is out of range (0-1000, 0 disables it)", s.TopK)
+	}
+	if s.MinP < 0 || s.MinP > 1 {
+		return AISettings{}, fmt.Errorf("min-p %.2f is out of range (0-1, 0 disables it)", s.MinP)
 	}
 	return s, nil
 }
@@ -346,6 +457,24 @@ func toInt(v any) (int, bool) {
 	return 0, false
 }
 
+// toFloat reads a decimal from decoded YAML/JSON.
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case string:
+		var parsed float64
+		if _, err := fmt.Sscanf(strings.TrimSpace(n), "%g", &parsed); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
 // aiModelByName resolves a catalogued model.
 func aiModelByName(name string) (AIModelOption, bool) {
 	for _, m := range aiModelCatalogue() {
@@ -378,6 +507,25 @@ func AISettingsFromValues(values map[string]any) AISettings {
 	if n, ok := first["parallel"]; ok {
 		if v, ok := toInt(n); ok && v > 0 {
 			s.Parallel = v
+		}
+	}
+	if n, ok := first["gpuLayers"]; ok {
+		if v, ok := toInt(n); ok && v > 0 {
+			s.GPULayers = v
+		}
+	}
+	if sampling, ok := first["sampling"].(map[string]any); ok {
+		if v, ok := toFloat(sampling["temperature"]); ok {
+			s.Temperature = v
+		}
+		if v, ok := toFloat(sampling["topP"]); ok {
+			s.TopP = v
+		}
+		if v, ok := toInt(sampling["topK"]); ok {
+			s.TopK = v
+		}
+		if v, ok := toFloat(sampling["minP"]); ok {
+			s.MinP = v
 		}
 	}
 	if gpu, ok := first["gpu"].(map[string]any); ok {
@@ -442,6 +590,15 @@ func AIValuesForBackend(s AISettings, base map[string]any) (map[string]any, erro
 		"ctxSize":            s.ContextSize,
 		"parallel":           s.Parallel,
 		"threads":            0,
+		// Sampling defaults for requests that carry none. Always written, so a
+		// catalog override that omits them does not silently fall back to the
+		// chart while the console shows a different value.
+		"sampling": map[string]any{
+			"temperature": s.Temperature,
+			"topP":        s.TopP,
+			"topK":        s.TopK,
+			"minP":        s.MinP,
+		},
 		"persistence": map[string]any{
 			"size":         aiModelStorageSize(s.Models),
 			"storageClass": "{{ .storage.configClass }}",
@@ -479,6 +636,9 @@ func AIValuesForBackend(s AISettings, base map[string]any) (map[string]any, erro
 			"splitMode":   s.SplitMode,
 			"tensorSplit": "",
 		}
+		// Outside the gpu block, because llama.cpp takes --n-gpu-layers as a
+		// server flag and the chart reads it as a backend field.
+		backend["gpuLayers"] = s.GPULayers
 		// A GPU backend loads the model into VRAM; the pod's memory limit must
 		// cover the tokenizer and the host-side buffer, not the weights.
 		backend["resources"] = map[string]any{
@@ -543,20 +703,86 @@ func AIModelFitsVRAM(s AISettings, vramBytes int64) string {
 	if !s.UseGPU || vramBytes <= 0 {
 		return ""
 	}
-	var weights int64
+	weights, cache := aiVRAMNeed(s)
+
+	// Only the layers that are offloaded occupy the card. gpuLayers is a count of
+	// transformer layers, so the VRAM share is linear in it up to the model's own
+	// layer count (which this estimate cannot know), capped at "everything".
+	share := 1.0
+	if s.GPULayers > 0 && s.GPULayers < 999 {
+		// 32 layers is the shape of the models offered here; a prompt answer that
+		// is 10% off is more useful than a silent no-estimate.
+		share = float64(s.GPULayers) / 32.0
+		if share > 1 {
+			share = 1
+		}
+	}
+	// The KV cache always lives on the card unless --no-kv-offload is used, which
+	// this does not expose, so it is not scaled with the layer count.
+	need := int64(float64(weights)*share) + cache
+	if need <= vramBytes {
+		return ""
+	}
+	// Name the lever that actually applies: if offloading fewer layers would fit,
+	// say so instead of telling the operator to shrink their context.
+	advice := "reduce the context size, or choose a smaller model"
+	if s.GPULayers >= 999 {
+		partial := vramBytes - cache
+		if partial > 0 && weights > 0 {
+			layers := int(float64(partial) / float64(weights) * 32)
+			if layers >= 1 && layers < 32 {
+				advice = fmt.Sprintf(
+					"offload fewer layers (about %d fits, at the cost of speed), reduce the context size, or choose a smaller model",
+					layers)
+			}
+		}
+	}
+	return fmt.Sprintf(
+		"this needs about %.1f GiB but the card has %.1f GiB: %s",
+		float64(need)/(1<<30), float64(vramBytes)/(1<<30), advice)
+}
+
+// aiVRAMNeed is the weights and KV-cache estimate the console shows and the
+// install path warns with.
+func aiVRAMNeed(s AISettings) (weights, cache int64) {
 	for _, name := range s.Models {
 		if opt, ok := aiModelByName(name); ok {
 			weights += opt.MinVRAMBytes
 		}
 	}
-	cache := int64(s.ContextSize) * aiKVBytesPerToken() * int64(s.Parallel)
-	need := weights + cache
-	if need <= vramBytes {
-		return ""
+	cache = int64(s.ContextSize) * aiKVBytesPerToken() * int64(s.Parallel)
+	return weights, cache
+}
+
+// AIVRAMEstimate reports the numbers the console displays, so the panel and the
+// warning cannot drift apart.
+type AIVRAMEstimate struct {
+	WeightsBytes int64 `json:"weightsBytes"`
+	CacheBytes   int64 `json:"cacheBytes"`
+	TotalBytes   int64 `json:"totalBytes"`
+	// CardBytes is the VRAM the estimate was measured against, 0 when unknown.
+	CardBytes int64 `json:"cardBytes"`
+	Fits      bool  `json:"fits"`
+}
+
+// AIEstimateVRAM is the exported view of the same arithmetic the warning uses.
+func AIEstimateVRAM(s AISettings, vramBytes int64) AIVRAMEstimate {
+	weights, cache := aiVRAMNeed(s)
+	share := 1.0
+	if s.GPULayers > 0 && s.GPULayers < 999 {
+		share = float64(s.GPULayers) / 32.0
+		if share > 1 {
+			share = 1
+		}
 	}
-	return fmt.Sprintf(
-		"this needs about %.1f GiB but the card has %.1f GiB: reduce the context size or choose a smaller model",
-		float64(need)/(1<<30), float64(vramBytes)/(1<<30))
+	total := int64(float64(weights)*share) + cache
+	return AIVRAMEstimate{
+		WeightsBytes: int64(float64(weights) * share),
+		CacheBytes:   cache,
+		TotalBytes:   total,
+		CardBytes:    vramBytes,
+		Fits:         vramBytes <= 0 || total <= vramBytes,
+	}
 }
 
 // AIDefaultHostPath is a small helper for the console's model URL preview.

@@ -26,6 +26,13 @@ func aiCmd(dir string, args []string) error {
   settings --parallel N          concurrent requests per backend (1-8)
   settings --gpu | --no-gpu      use the GPU (CUDA image + a card), or not
   settings --gpus-per-backend N  cards per backend with --gpu
+  settings --gpu-layers N        layers to offload (999 = all; fewer fits a bigger model)
+  settings --preset P            sampling preset: precise | balanced | creative
+  settings --temperature N       sampling temperature (0-2)
+  settings --top-p N             nucleus sampling (0-1, 1.0 disables)
+  settings --top-k N             candidate tokens per step (0-1000, 0 disables)
+  settings --min-p N             drop tokens below this fraction (0-1, 0 disables)
+  presets                        list the sampling presets
   models                         list the models this console offers
 
 Changing settings reinstalls the stack with the new values. The model list and the
@@ -34,11 +41,20 @@ gateway entries are rewritten together, because they have to agree.
 		return nil
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("ai needs a subcommand: settings | models")
+		return fmt.Errorf("ai needs a subcommand: settings | models | presets")
 	}
 
 	in := app.New(app.ConfigFromEnv())
 	switch args[0] {
+	case "presets":
+		fmt.Printf("%-10s %-24s %-6s %-6s %-5s %-6s\n", "NAME", "LABEL", "TEMP", "TOP-P", "TOP-K", "MIN-P")
+		for _, p := range app.AISamplingPresets() {
+			fmt.Printf("%-10s %-24s %-6.2f %-6.2f %-5d %-6.2f\n",
+				p.Name, p.Label, p.Temperature, p.TopP, p.TopK, p.MinP)
+			fmt.Printf("  %s\n", p.Hint)
+		}
+		return nil
+
 	case "models":
 		fmt.Printf("%-34s %-24s %8s %10s\n", "NAME", "LABEL", "DOWNLOAD", "MIN VRAM")
 		for _, m := range app.AIModelOptions() {
@@ -66,7 +82,13 @@ func aiSettingsCmd(dir string, in *app.Installer, args []string) error {
 		contextSize    int
 		parallel       int
 		gpusPerBackend int
+		gpuLayers      int
 		useGPU         *bool
+		preset         string
+		temperature    float64
+		topP           float64
+		minP           float64
+		topK           int
 		changed        bool
 	)
 	fs := flag.NewFlagSet("ai settings", flag.ContinueOnError)
@@ -74,6 +96,12 @@ func aiSettingsCmd(dir string, in *app.Installer, args []string) error {
 	fs.IntVar(&contextSize, "context", 0, "context window in tokens (a power of two)")
 	fs.IntVar(&parallel, "parallel", 0, "concurrent requests per backend (1-8)")
 	fs.IntVar(&gpusPerBackend, "gpus-per-backend", 0, "cards per backend (with --gpu)")
+	fs.IntVar(&gpuLayers, "gpu-layers", 0, "layers to offload to the GPU (999 = all)")
+	fs.StringVar(&preset, "preset", "", "sampling preset: precise|balanced|creative")
+	fs.Float64Var(&temperature, "temperature", -1, "sampling temperature (0-2)")
+	fs.Float64Var(&topP, "top-p", -1, "nucleus sampling (0-1)")
+	fs.IntVar(&topK, "top-k", -1, "candidate tokens per step (0-1000)")
+	fs.Float64Var(&minP, "min-p", -1, "drop tokens below this fraction (0-1)")
 	fs.BoolFunc("gpu", "use the GPU (CUDA image, requests a card)", func(v string) error {
 		b, err := parseBoolFlag(v)
 		if err != nil {
@@ -121,6 +149,41 @@ func aiSettingsCmd(dir string, in *app.Installer, args []string) error {
 	}
 	if gpusPerBackend > 0 {
 		current.GPUsPerBackend = gpusPerBackend
+	}
+	if gpuLayers > 0 {
+		current.GPULayers = gpuLayers
+	}
+	// A preset is shorthand for the four sampling numbers; explicit flags win,
+	// because someone who typed both meant the specific value.
+	if preset != "" {
+		found := false
+		for _, p := range app.AISamplingPresets() {
+			if p.Name == preset {
+				current.Temperature, current.TopP, current.TopK, current.MinP =
+					p.Temperature, p.TopP, p.TopK, p.MinP
+				found = true
+				break
+			}
+		}
+		if !found {
+			names := make([]string, 0, len(app.AISamplingPresets()))
+			for _, p := range app.AISamplingPresets() {
+				names = append(names, p.Name)
+			}
+			return fmt.Errorf("unknown preset %q: %s", preset, strings.Join(names, ", "))
+		}
+	}
+	if temperature >= 0 {
+		current.Temperature = temperature
+	}
+	if topP >= 0 {
+		current.TopP = topP
+	}
+	if topK >= 0 {
+		current.TopK = topK
+	}
+	if minP >= 0 {
+		current.MinP = minP
 	}
 	if useGPU != nil {
 		current.UseGPU = *useGPU
@@ -183,9 +246,21 @@ func printAISettings(in *app.Installer, installed bool, s app.AISettings) error 
 	}
 	fmt.Printf("  context:   %d tokens\n", s.ContextSize)
 	fmt.Printf("  parallel:  %d request(s)\n", s.Parallel)
+	presetName, exact := app.AISamplingPresetFor(s)
+	label := presetName.Label
+	if !exact {
+		label = fmt.Sprintf("custom (closest preset: %s)", presetName.Label)
+	}
+	fmt.Printf("  sampling:  %s — temp %.2f, top-p %.2f, top-k %d, min-p %.2f\n",
+		label, s.Temperature, s.TopP, s.TopK, s.MinP)
 	if s.UseGPU {
 		gpu, _ := in.GPUs()
-		fmt.Printf("  compute:   GPU x%d per backend (split %s)", s.GPUsPerBackend, s.SplitMode)
+		layers := "all"
+		if s.GPULayers > 0 && s.GPULayers < 999 {
+			layers = fmt.Sprintf("%d", s.GPULayers)
+		}
+		fmt.Printf("  compute:   GPU x%d per backend (split %s, %s layers offloaded)",
+			s.GPUsPerBackend, s.SplitMode, layers)
 		if gpu.Available() {
 			fmt.Printf(", %d card(s) on %s", gpu.Count, strings.Join(gpu.Nodes, ","))
 		} else {
