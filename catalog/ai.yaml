@@ -13,9 +13,9 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/ai
-  version: 0.1.5
+  version: 0.1.6
   versions:
-    - version: 0.1.5
+    - version: 0.1.6
       appVersion: 1.83.7
       channel: stable
 
@@ -60,6 +60,17 @@ values:
     admin:
       email: "ai-admin@{{ .zone }}"
       name: "Admin"
+    # Per-user API keys, so each household member can point a CLI (opencode,
+    # aider), an editor plugin or a phone app at the stack:
+    #
+    #   client -> https://chat.<zone>/api/v1 -> Open WebUI -> LiteLLM -> backend
+    #
+    # They mint and revoke their own key under Settings -> Account -> API Keys;
+    # the gateway keeps its own key. /api/v1 is Open WebUI's OpenAI-compatibility
+    # surface, which upstream marks experimental - it covers chat completions and
+    # model listing, not every OpenAI endpoint.
+    apiKeys:
+      enabled: true
     persistence:
       size: 2Gi
       storageClass: "{{ .storage.configClass }}"
@@ -107,6 +118,10 @@ verify:
     - oidc_sso_completes
     - llm_models_listed
     - llm_completion_answers
+    # The per-user key option, proven by a NON-admin: mint, use through /api/v1,
+    # then revoke and confirm the key stops working. An admin passes even when
+    # the per-user permission is off, so an admin-only test would prove nothing.
+    - llm_user_api_key_lifecycle
     # Tagged in ci/ai-check.sh, not the browser gate: a pod spec is not visible
     # to Playwright.
     - llm_cpu_mode_requests_no_gpu

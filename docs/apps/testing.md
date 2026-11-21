@@ -22,7 +22,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | App | Auto | Chart | Human |
 |---|---|---|---|
 | actualbudget | auto-tested | 0.1.3 | - |
-| ai | auto-tested | 0.1.5 | 2026-11-20 (agent) |
+| ai | auto-tested | 0.1.6 | 2026-11-20 (agent) **stale** - verified on 0.1.5 |
 | bookstack | auto-tested | 0.1.4 | 2026-11-20 (agent) |
 | gitea | auto-tested | 0.1.23 | 2026-11-19 (agent) |
 | homebox | auto-tested | 0.1.2 | 2026-11-19 (agent) |
@@ -54,6 +54,7 @@ No human pass is recorded for this app.
 - `oidc_sso_completes` - auth.spec.ts
 - `llm_models_listed` - ai.spec.ts
 - `llm_completion_answers` - ai.spec.ts
+- `llm_user_api_key_lifecycle` - ai.spec.ts
 - `llm_cpu_mode_requests_no_gpu` - ci/ai-check.sh
 - `llm_backends_are_separate` - ci/ai-check.sh
 - `tenant_api_ai` - ai.spec.ts

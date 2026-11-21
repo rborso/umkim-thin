@@ -156,3 +156,96 @@ test.describe('tenant can use the ai stack', () => {
     await context.close();
   });
 });
+
+test.describe('ai per-user api keys', () => {
+  test.skip(!installed('ai'), 'the ai stack is not installed');
+
+  test('a regular user mints their own key and revokes it @check:llm_user_api_key_lifecycle', async ({ browser }) => {
+    test.setTimeout(240_000);
+    const host = hostOf('ai');
+
+    // The whole point of the option: a NON-ADMIN mints, uses and revokes a key.
+    // An admin passes even when per-user permission is off, so this has to be an
+    // ordinary invited user or the check proves nothing.
+    const user = `ci-aikey-${Date.now()}`;
+    const pass = `Pw${Math.random().toString(36).slice(2, 18)}`;
+    await createUser(user, pass, { displayName: user });
+
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username: user, password: pass },
+      ready: async (p) =>
+        p
+          .evaluate(async () => (await fetch('/api/models', { credentials: 'same-origin' })).status)
+          .then((s) => s === 200)
+          .catch(() => false),
+    });
+
+    // Mint a key and check the OpenAI-compatible surface answers with it. Both
+    // calls run from the app's origin so the portal cookie rides along; the key
+    // is what identifies the user to Open WebUI.
+    const created = await page.evaluate(async () => {
+      const r = await fetch('/api/v1/auths/api_key', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await r.json().catch(() => ({}));
+      return { status: r.status, key: body?.api_key ?? '' };
+    });
+
+    // 403 here means USER_PERMISSIONS_FEATURES_API_KEYS is off: the admin works
+    // without it, so this is the check that catches the default.
+    expect(
+      created.status,
+      `a regular user must be allowed to create an API key (403 = features.api_keys is off)`,
+    ).toBe(200);
+    expect(created.key, 'the key is returned once, on creation').toMatch(/^sk-/);
+
+    // The key must actually work against the OpenAI-compatible surface, or the
+    // CLI story is a lie even though the key was minted.
+    const used = await page.evaluate(async (key: string) => {
+      const auth = { Authorization: `Bearer ${key}` };
+      const models = await fetch('/api/v1/models', { headers: auth });
+      if (models.status !== 200) return { models: models.status, completion: 0, chat: 0 };
+      const list = await models.json().catch(() => null);
+      const ids: string[] = (list?.data ?? []).map((m: any) => m.id ?? '');
+      if (!ids.length) return { models: 200, completion: 0, chat: ids.length };
+      const chat = await fetch('/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: ids[0],
+          messages: [{ role: 'user', content: 'Reply with one word' }],
+          max_tokens: 8,
+        }),
+      });
+      const body = await chat.json().catch(() => null);
+      return {
+        models: 200,
+        chat: chat.status,
+        completion: (body?.choices?.[0]?.message?.content ?? '').length,
+        modelsSeen: ids.length,
+      };
+    }, created.key);
+
+    expect(used.models, 'the key lists models through /api/v1').toBe(200);
+    expect(used.modelsSeen, 'the key sees at least one model').toBeGreaterThan(0);
+    expect(used.chat, 'the key completes a chat request through /api/v1').toBe(200);
+    expect(used.completion, 'the completion has content').toBeGreaterThan(0);
+
+    // Revoking must be immediate: a key that survives its own deletion is worse
+    // than no revocation at all.
+    const revoked = await page.evaluate(async (key: string) => {
+      const del = await fetch('/api/v1/auths/api_key', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      const after = await fetch('/api/v1/models', { headers: { Authorization: `Bearer ${key}` } });
+      return { status: del.status, after: after.status };
+    }, created.key);
+
+    expect([200, 204], `the user revokes their own key -> ${revoked.status}`).toContain(revoked.status);
+    expect(revoked.after, 'the revoked key no longer authenticates').toBe(401);
+    await context.close();
+  });
+});
