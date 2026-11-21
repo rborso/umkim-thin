@@ -64,15 +64,25 @@
 # resource, so its absence is the failure this role exists to prevent. The node
 # advertises the resource only once the plugin has registered with the kubelet,
 # a few seconds after the pod becomes Ready — hence polling rather than a sleep.
+#
+# `index` with a quoted key, not jsonpath: a jsonpath for nvidia.com/gpu has to
+# escape the dot, and that escaping survives YAML, Jinja and the shell badly
+# enough that the check silently reads nothing and reports "no GPU" on a node
+# that advertises one. `get node` returns a List, hence the .items[0] hop.
 - name: gpu | wait for the node to advertise a GPU
   ansible.builtin.command:
     cmd: >-
-      /usr/local/bin/kubectl get node {{ ansible_hostname }}
-      -o jsonpath={.status.allocatable.nvidia\.com/gpu}
+      /usr/local/bin/kubectl get node
+      -o go-template={{ '{{' }}index (index .items 0).status.allocatable "nvidia.com/gpu"{{ '}}' }}
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   register: gpu_allocatable
-  until: gpu_allocatable.stdout | trim | length > 0 and gpu_allocatable.stdout | trim != '0'
+  until:
+    - gpu_allocatable.rc == 0
+    # An absent key renders as "<no value>" with rc 0, and a node advertising 0
+    # means the plugin is running but found no card. Neither may pass: the AI
+    # stack would then fail to schedule with "Insufficient nvidia.com/gpu".
+    - gpu_allocatable.stdout | trim not in ['', '0', '<no value>']
   retries: 30
   delay: 10
   changed_when: false
