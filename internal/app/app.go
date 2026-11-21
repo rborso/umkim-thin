@@ -908,15 +908,9 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 	// entry (see ai_settings.go): a partial one would drop the models list, which
 	// is how a stack once came up answering for nothing.
 	if opts.AISettings != nil {
-		if e.Name != AIApp {
-			return Result{}, fmt.Errorf("%s does not take AI settings", e.Name)
-		}
-		merged, err := AIValuesForBackend(*opts.AISettings, values)
+		merged, err := in.mergeAISettings(e, ctx, values, opts)
 		if err != nil {
 			return Result{}, err
-		}
-		if warn := AIModelFitsVRAM(*opts.AISettings, opts.GPUVRAMBytes); warn != "" {
-			opts.step("memory warning: %s", warn)
 		}
 		values = merged
 	}
@@ -1713,7 +1707,38 @@ func (in *Installer) runStream(name string, args []string, log func(string)) (st
 // renderValues applies the site templating context to the entry's values.
 //
 // It must not touch the entry's own maps: Store.Entries/Entry hand out shallow
-// copies, so the nested maps are shared with the live catalog snapshot. Callers
+// mergeAISettings applies the console's AI choices to already-rendered values.
+//
+// It is a named step rather than inline code because it is the ONE place where a
+// unit test can be sure the placeholder rendering happens: doing the merge inline
+// in Install let a real reinstall fail with 'spec.storageClassName: Invalid value:
+// "{{ .storage.configClass }}"' while every test passed, because the tests called
+// the merge themselves and rendered by hand.
+func (in *Installer) mergeAISettings(e catalog.Entry, ctx siteContext, values map[string]any, opts Options) (map[string]any, error) {
+	if e.Name != AIApp {
+		return nil, fmt.Errorf("%s does not take AI settings", e.Name)
+	}
+	merged, err := AIValuesForBackend(*opts.AISettings, values)
+	if err != nil {
+		return nil, err
+	}
+	if warn := AIModelFitsVRAM(*opts.AISettings, opts.GPUVRAMBytes); warn != "" {
+		opts.step("memory warning: %s", warn)
+	}
+	// The settings carry storage-class placeholders so a reinstall keeps the
+	// site's class rather than the chart default. The catalog's values were
+	// rendered earlier, before this merge, so these have to be rendered too —
+	// otherwise Helm receives the literal template string and rejects it.
+	rendered, ok := renderAny(merged, in.repl(e, ctx)).(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("internal: AI values did not render to a map")
+	}
+	return rendered, nil
+}
+
+// renderValues applies the templating placeholders to a catalog entry's values.
+//
+// It deep-copies, so the nested maps are shared with the live catalog snapshot. Callers
 // then add generated secrets (sso.clientSecret, postgres passwords) with set(),
 // which would write them back into the snapshot and serve them from
 // GET /api/catalog. Deep-copy first so an install can only mutate its own tree.

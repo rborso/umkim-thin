@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/rborso/umkim-thin/internal/catalog"
 )
 
 // The rule this file enforces: a settings edit produces a COMPLETE backend entry
@@ -417,5 +419,78 @@ func TestAIFriendlyModelName(t *testing.T) {
 		if got := aiFriendlyModelName(in); got != want {
 			t.Errorf("aiFriendlyModelName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The install path renders the catalog's values through {{ .storage.configClass }}
+// and friends, and the AI merge happens AFTER that. So the merge's own
+// placeholders have to be rendered too — a real reinstall failed with
+// 'spec.storageClassName: Invalid value: "{{ .storage.configClass }}"' because
+// they were not.
+//
+// This calls mergeAISettings, the same function Install calls, so deleting the
+// render step inside it fails here. An earlier version of this test made the
+// render call itself and therefore passed against the bug.
+func TestAISettingsPlaceholdersAreRenderedByTheInstallPath(t *testing.T) {
+	store, err := catalog.NewStore("../../catalog", t.TempDir())
+	if err != nil {
+		t.Fatalf("loading the catalog: %v", err)
+	}
+	e, ok := store.Entry(AIApp)
+	if !ok {
+		t.Fatal("the catalog has no ai entry")
+	}
+
+	in := testInstaller()
+	ctx, err := in.context(e, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly what Install does around the AI merge.
+	s := DefaultAISettings()
+	rendered, err := in.mergeAISettings(e, ctx, in.renderValues(e, ctx), Options{AISettings: &s})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backend := rendered["backends"].([]any)[0].(map[string]any)
+	class, _ := backend["persistence"].(map[string]any)["storageClass"].(string)
+	// testInstaller's site class; the point is that it is a real class and not the
+	// template string Helm rejected.
+	if class != in.cfg.ConfigClass {
+		t.Errorf("storageClass = %q, want the site class %q", class, in.cfg.ConfigClass)
+	}
+
+	// A recursive sweep, so a placeholder added later cannot slip through.
+	var walk func(any)
+	walk = func(v any) {
+		switch vv := v.(type) {
+		case string:
+			if strings.Contains(vv, "{{") {
+				t.Errorf("unrendered placeholder in the values: %q", vv)
+			}
+		case map[string]any:
+			for _, x := range vv {
+				walk(x)
+			}
+		case []any:
+			for _, x := range vv {
+				walk(x)
+			}
+		}
+	}
+	walk(rendered)
+}
+
+// A release that is not the AI stack must be refused, not silently given AI
+// values that its chart does not understand.
+func TestAISettingsRefusedForOtherApps(t *testing.T) {
+	in := testInstaller()
+	s := DefaultAISettings()
+	_, err := in.mergeAISettings(
+		catalog.Entry{Name: "nextcloud"}, siteContext{}, map[string]any{}, Options{AISettings: &s})
+	if err == nil || !strings.Contains(err.Error(), "does not take AI settings") {
+		t.Fatalf("expected a refusal, got %v", err)
 	}
 }
