@@ -1603,6 +1603,15 @@ func homeAPIHandler(installer *app.Installer, entries func() []catalog.Entry, di
 			<-store.ready
 		}
 		apps := store.snapshot()
+		// `apps` must be a JSON array even when it is empty. append([]homeApp(nil),
+		// ...) over an empty snapshot yields a nil slice, and nil marshals to
+		// `null` — so a transient helm/kubectl failure inside the background
+		// refresh turned the response into {"apps":null} and the home page's
+		// Array.isArray check failed on a correct deployment. The empty case is a
+		// valid state (nothing installed yet), not an error shape.
+		if apps == nil {
+			apps = []homeApp{}
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, homeResponse{
 			User:         strings.TrimSpace(r.Header.Get("Remote-User")),
@@ -1656,6 +1665,12 @@ func (s *homeStore) snapshot() []homeApp {
 		}()
 	}
 	apps := append([]homeApp(nil), s.apps...)
+	if apps == nil {
+		// Keep the invariant that a snapshot is always a (possibly empty) slice:
+		// a nil one marshals to `null` instead of `[]`, and every consumer expects
+		// an array.
+		apps = []homeApp{}
+	}
 	s.mu.Unlock()
 	return apps
 }

@@ -181,3 +181,33 @@ func TestVersionHandlerServesTheCachedCheck(t *testing.T) {
 		t.Fatalf("response = %+v", got)
 	}
 }
+
+// The home API must answer with a JSON array even when nothing is installed or a
+// refresh failed: `null` is not an array, and a real deployment failed its gate
+// because a transient helm error produced exactly that.
+func TestHomeSnapshotIsAlwaysAnArray(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func() []homeApp
+	}{
+		{"nothing installed", func() []homeApp { return []homeApp{} }},
+		{"build returned nil", func() []homeApp { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &homeStore{build: tc.build, ready: make(chan struct{})}
+			store.start()
+
+			snap := store.snapshot()
+			if snap == nil {
+				t.Fatal("snapshot must be a non-nil slice so it marshals as []")
+			}
+			body, err := json.Marshal(homeResponse{Apps: snap})
+			if err != nil {
+				t.Fatalf("marshalling: %v", err)
+			}
+			if !strings.Contains(string(body), `"apps":[]`) {
+				t.Fatalf("apps must marshal as an array, got %s", body)
+			}
+		})
+	}
+}
