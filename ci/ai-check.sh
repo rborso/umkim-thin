@@ -26,6 +26,12 @@ source ci/lib.sh
 
 ns="${AI_NAMESPACE:-ai}"
 release="${AI_RELEASE:-ai}"
+# Which inference mode this target is meant to run. The CPU check asserts a
+# backend requests NO GPU; on a GPU target that is exactly wrong, so the
+# expectation has to be a property of the target, not of the script.
+#
+#   ai_gpu=true  in the provision env (or AI_GPU=1) -> assert a card IS used
+ai_gpu="${AI_GPU:-${ai_gpu:-false}}"
 
 # kube <args...> : run kubectl on the target node as root.
 #
@@ -70,12 +76,51 @@ while read -r name gpu reps _; do
   esac
 done <<<"$spec"
 
-if [ -n "$gpu_requested" ]; then
-  bad "@check:llm_cpu_mode_requests_no_gpu backends request nvidia.com/gpu:$gpu_requested"
-  echo "  CPU mode must not need a device plugin; set backends[].gpu.enabled=false"
-  fails=$((fails + 1))
+if [ "$ai_gpu" = "true" ]; then
+  # GPU target: the backend must request a card, use the CUDA image, and the node
+  # must actually advertise one. Requesting without advertising is the failure
+  # that looks like "the app will not start".
+  if [ -z "$gpu_requested" ]; then
+    bad "@check:llm_gpu_mode_requests_a_card this target is a GPU target but no backend requests nvidia.com/gpu"
+    echo "  set backends[].gpu.enabled=true in the catalog override for this host"
+    fails=$((fails + 1))
+  else
+    ok "@check:llm_gpu_mode_requests_a_card backends request nvidia.com/gpu:$gpu_requested"
+  fi
+  allocated="$(node_root <<EOS 2>/dev/null
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+/usr/local/bin/kubectl get node -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}' 2>/dev/null \
+  || true
+EOS
+)"
+  allocated="$(printf '%s' "$allocated" | tr -d '\r\n ')"
+  if [ -z "$allocated" ] || [ "$allocated" = "0" ]; then
+    bad "@check:llm_gpu_mode_requests_a_card the node advertises no nvidia.com/gpu"
+    echo "  the device plugin is not registering a card; check the driver and runtime"
+    fails=$((fails + 1))
+  else
+    ok "node advertises nvidia.com/gpu=$allocated"
+  fi
+  imgs="$(node_root <<EOS 2>/dev/null
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+/usr/local/bin/kubectl -n $ns get deploy -l app.kubernetes.io/name=llamacpp \
+  -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].image}{"\n"}{end}'
+EOS
+)"
+  if printf '%s' "$imgs" | grep -q "server-cuda"; then
+    ok "backend runs the CUDA image"
+  else
+    bad "a GPU target must use llama.cpp:server-cuda; got: $(printf '%s' "$imgs" | tr '\n' ' ')"
+    fails=$((fails + 1))
+  fi
 else
-  ok "@check:llm_cpu_mode_requests_no_gpu no backend requests a GPU"
+  if [ -n "$gpu_requested" ]; then
+    bad "@check:llm_cpu_mode_requests_no_gpu backends request nvidia.com/gpu:$gpu_requested"
+    echo "  CPU mode must not need a device plugin; set backends[].gpu.enabled=false"
+    fails=$((fails + 1))
+  else
+    ok "@check:llm_cpu_mode_requests_no_gpu no backend requests a GPU"
+  fi
 fi
 
 if [ -n "$multi" ]; then
