@@ -18,6 +18,11 @@
     - include_role:
         name: gpu_node
         tasks_from: main
+        # A dynamic include does not pass the enclosing tag down, so `--tags gpu`
+        # would include the role and execute none of its tasks. `apply` is what
+        # namespaces the included tasks.
+        apply:
+          tags: [gpu]
       tags: [gpu]
       when: gpu_enabled | default(false) | bool
   roles:
@@ -64,5 +69,7 @@
     - include_role:
         name: gpu_node
         tasks_from: device_plugin
+        apply:
+          tags: [gpu]
       tags: [gpu]
       when: gpu_enabled | default(false) | bool
