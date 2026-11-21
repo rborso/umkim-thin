@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, request } from '@playwright/test';
 import { installed, hostOf, createUser, oidcLogin } from './lib/session';
 
 // Gating checks for the AI stack.
@@ -246,6 +246,97 @@ test.describe('ai per-user api keys', () => {
 
     expect([200, 204], `the user revokes their own key -> ${revoked.status}`).toContain(revoked.status);
     expect(revoked.after, 'the revoked key no longer authenticates').toBe(401);
+    await context.close();
+  });
+});
+
+// The test above runs every call from the app's origin, so the portal cookie rides
+// along. That is why it passed while a real client could not use the key at all:
+// curl with only `Authorization: Bearer sk-...` got a 302 to the portal, because
+// Authelia's forward-auth ran before Open WebUI and the token never reached the
+// app that checks it.
+//
+// This case is deliberately cookie-less. It is the shape of every real consumer
+// of a per-user key - an editor plugin, a CLI, a phone app - and it is the check
+// that would have caught the catalog's missing publicPaths.
+test.describe('ai stack: a bearer client with no browser session', () => {
+  test.skip(!installed('ai'), 'the ai stack is not installed');
+
+  test('an API key works from a token-only client @check:llm_api_key_bearer_client', async ({
+    browser,
+  }) => {
+    test.setTimeout(240_000);
+    const host = hostOf('ai');
+
+    const user = `ci-aibearer-${Date.now()}`;
+    const pass = `Pw${Math.random().toString(36).slice(2, 18)}`;
+    await createUser(user, pass, { displayName: user });
+
+    // Sign in through the browser once, purely to mint the key: a key is created
+    // by a signed-in user, and that part legitimately needs a session.
+    const { context, page } = await oidcLogin(browser, host, {
+      credentials: { username: user, password: pass },
+      ready: async (p) =>
+        p
+          .evaluate(async () => (await fetch('/api/models', { credentials: 'same-origin' })).status)
+          .then((s) => s === 200)
+          .catch(() => false),
+    });
+
+    const key = await page.evaluate(async () => {
+      const r = await fetch('/api/v1/auths/api_key', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await r.json().catch(() => ({}));
+      return body?.api_key ?? '';
+    });
+    expect(key, 'a regular user mints a key').toMatch(/^sk-/);
+
+    // From here on, no cookies at all: a fresh request context, exactly like curl.
+    const client = await request.newContext({ ignoreHTTPSErrors: true });
+    const models = await client.get(`https://${host}/api/v1/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+      maxRedirects: 0,
+    });
+    // A 302 is the specific failure this guards against: it means the portal
+    // intercepted the request and the app never saw the token.
+    expect(
+      models.status(),
+      'a token-only request must reach Open WebUI, not be redirected to the portal',
+    ).toBe(200);
+
+    const list = await models.json().catch(() => null);
+    const ids: string[] = (list?.data ?? []).map((m: any) => m.id ?? '');
+    expect(ids.length, 'the key lists models').toBeGreaterThan(0);
+
+    const chat = await client.post(`https://${host}/api/v1/chat/completions`, {
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      data: {
+        model: ids[0],
+        messages: [{ role: 'user', content: 'Reply with the single word: pong' }],
+        max_tokens: 12,
+      },
+    });
+    expect(chat.status(), 'the key completes a request with no session cookie').toBe(200);
+    const body = await chat.json().catch(() => null);
+    expect(
+      (body?.choices?.[0]?.message?.content ?? '').length,
+      'the completion has content',
+    ).toBeGreaterThan(0);
+
+    // Revoke with the browser context, then confirm the token-only client dies.
+    await page.evaluate(async () => {
+      await fetch('/api/v1/auths/api_key', { method: 'DELETE', credentials: 'same-origin' });
+    });
+    const after = await client.get(`https://${host}/api/v1/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+      maxRedirects: 0,
+    });
+    expect(after.status(), 'the revoked key no longer authenticates').toBe(401);
+
+    await client.dispose();
     await context.close();
   });
 });

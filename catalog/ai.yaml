@@ -160,6 +160,12 @@ verify:
     # then revoke and confirm the key stops working. An admin passes even when
     # the per-user permission is off, so an admin-only test would prove nothing.
     - llm_user_api_key_lifecycle
+    # And the part that actually broke: the same key used by a CLIENT with no
+    # browser session. The lifecycle check above runs from the app's origin, so the
+    # portal cookie rides along and it passed while curl got a 302. This one uses a
+    # cookie-less request context, which is what an editor plugin or a phone app
+    # does - and it is what caught the catalog's missing publicPaths.
+    - llm_api_key_bearer_client
     # Tagged in ci/ai-check.sh, not the browser gate: a pod spec is not visible
     # to Playwright. The harness asserts CPU-mode on a normal target and the GPU
     # path on one that sets ai_gpu=true (the lab GPU host), so both contracts are
