@@ -9,6 +9,11 @@
   is a pod IP — so it is set to the pod CIDR, the narrowest stable range there is.
   It is empty by default because the SSO flow is off unless an operator enables it.
 
+  whitelistMode must stay ON. Turning it off makes SillyTavern refuse to start
+  ("configuration is insecure: listening to non-localhost") and it also tries to
+  write ./config.yaml, which is a read-only mount here. So the whitelist is the
+  inbound guard, and enableForwardedWhitelist is what makes it proxy-friendly.
+
   privateAddressWhitelist is SillyTavern's SSRF guard. It is meant for OUTBOUND
   requests but is also applied to the inbound Host header, so behind a reverse
   proxy it rejects every request with "Rejected request from RFC1918 IP to public
