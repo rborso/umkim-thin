@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,46 +39,129 @@ func writeCatalog(t *testing.T, dir, name, body string) {
 	}
 }
 
-func TestStoreExternalWinsAndKeepsLastGoodSnapshot(t *testing.T) {
+// The external catalog is ADDITIVE: a custom app joins the bundled set instead of
+// replacing it. This is the whole point of the feature — before it, uploading a
+// bundle containing one app left the console with exactly that one app.
+func TestStoreMergesCustomEntriesIntoTheBundledCatalog(t *testing.T) {
 	bundled := t.TempDir()
 	external := t.TempDir()
-	writeCatalog(t, bundled, "demo.yaml", testEntry)
-	writeCatalog(t, external, "demo.yaml", testEntry)
+	writeCatalog(t, bundled, "official.yaml", strings.Replace(testEntry, "name: demo", "name: official", 1))
+	writeCatalog(t, external, "custom.yaml", strings.Replace(testEntry, "name: demo", "name: custom", 1))
 	writeCatalog(t, external, "VERSION", "7.1.0\n")
 
 	s, err := NewStore(bundled, external)
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := s.Info()
-	if info.Source != "external" || info.Version != "7.1.0" || info.Revision == "" {
-		t.Fatalf("info = %+v, want external version 7.1.0", info)
+	// Both are present. This is what "add a custom app" means.
+	if _, ok := s.Entry("official"); !ok {
+		t.Error("the bundled entry disappeared when a custom entry was added")
 	}
-	if _, ok := s.Entry("demo"); !ok {
-		t.Fatal("external entry is missing")
+	if _, ok := s.Entry("custom"); !ok {
+		t.Fatal("the custom entry is missing")
+	}
+	if n := len(s.Entries()); n != 2 {
+		t.Fatalf("entries = %d, want 2 (bundled + custom)", n)
+	}
+	if info := s.Info(); info.Source != "mixed" || info.Version != "7.1.0" {
+		t.Fatalf("info = %+v, want mixed version 7.1.0", info)
 	}
 
-	// A malformed external refresh must not replace the working snapshot.
+	// Provenance is set by the loader, so the console can mark a custom app.
+	if e, _ := s.Entry("custom"); !e.IsExternal() || e.Origin != OriginExternal {
+		t.Errorf("custom entry origin = %q, want %q", e.Origin, OriginExternal)
+	}
+	if e, _ := s.Entry("official"); e.IsExternal() || e.Origin != OriginBundled {
+		t.Errorf("bundled entry origin = %q, want %q", e.Origin, OriginBundled)
+	}
+
+	// A malformed custom entry must not take the platform's catalog down with it:
+	// the bundled set is still serviceable, and the error is reported.
 	writeCatalog(t, external, "broken.yaml", "not: [a catalog\n")
 	if err := s.Reload(); err == nil {
-		t.Fatal("malformed external catalog was accepted")
+		t.Fatal("a malformed custom catalog was accepted")
 	}
-	if info := s.Info(); info.Source != "external" || info.Version != "7.1.0" || info.Error == "" {
-		t.Fatalf("after failed refresh = %+v, want the previous external snapshot", info)
+	if info := s.Info(); info.Error == "" {
+		t.Errorf("info = %+v, want the error surfaced", info)
+	}
+	if _, ok := s.Entry("official"); !ok {
+		t.Error("the bundled catalog was lost because a custom entry was malformed")
 	}
 
-	// Removing the external entries falls back to the bundled catalog.
-	if err := os.Remove(filepath.Join(external, "demo.yaml")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(external, "broken.yaml")); err != nil {
-		t.Fatal(err)
+	// Removing the custom entries returns to the bundled catalog alone.
+	for _, f := range []string{"custom.yaml", "broken.yaml"} {
+		if err := os.Remove(filepath.Join(external, f)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.Info().Source; got != "bundled" {
-		t.Fatalf("source = %q, want bundled fallback", got)
+		t.Fatalf("source = %q, want bundled", got)
+	}
+	if n := len(s.Entries()); n != 1 {
+		t.Fatalf("entries = %d after removing the custom entry, want 1", n)
+	}
+}
+
+// A name collision is refused, not silently resolved. Two apps called "gitea" is
+// either a mistake or an attempt to substitute a chart the platform ships, and
+// picking one quietly is how an operator runs something they did not choose.
+func TestStoreRefusesACustomNameCollision(t *testing.T) {
+	bundled := t.TempDir()
+	external := t.TempDir()
+	writeCatalog(t, bundled, "demo.yaml", testEntry)
+	writeCatalog(t, external, "demo.yaml", testEntry)
+
+	// Reload reports it; NewStore must still start, because a bad custom entry
+	// cannot be allowed to stop the console from serving the platform catalog.
+	s := &Store{bundled: bundled, external: external}
+	err := s.Reload()
+	if err == nil {
+		t.Fatal("a colliding custom entry was accepted")
+	}
+	if !strings.Contains(err.Error(), "collides") {
+		t.Fatalf("error %q does not explain the collision", err)
+	}
+
+	started, err := NewStore(bundled, external)
+	if err != nil {
+		t.Fatalf("the console must start with a bad custom entry: %v", err)
+	}
+	if started.Info().Error == "" {
+		t.Error("the collision was not surfaced in Info().Error")
+	}
+	if _, ok := started.Entry("demo"); !ok {
+		t.Error("the bundled entry is missing after a refused collision")
+	}
+}
+
+// ...and an operator who means it can say so, which is the deliberate path to
+// replacing a bundled entry.
+func TestStoreHonoursAnExplicitOverride(t *testing.T) {
+	bundled := t.TempDir()
+	external := t.TempDir()
+	writeCatalog(t, bundled, "demo.yaml", testEntry)
+	overridden := strings.Replace(testEntry, "version: 0.1.0", "version: 9.9.9", 1) + "overrides: true\n"
+	writeCatalog(t, external, "demo.yaml", overridden)
+
+	s, err := NewStore(bundled, external)
+	if err != nil {
+		t.Fatalf("an explicit override was refused: %v", err)
+	}
+	e, ok := s.Entry("demo")
+	if !ok {
+		t.Fatal("entry missing")
+	}
+	if e.Chart.Version != "9.9.9" {
+		t.Errorf("chart version = %q, want the override's 9.9.9", e.Chart.Version)
+	}
+	if e.Origin != OriginExternal {
+		t.Errorf("origin = %q, want external — an override is the operator's entry now", e.Origin)
+	}
+	if n := len(s.Entries()); n != 1 {
+		t.Errorf("entries = %d, want 1: an override replaces rather than duplicates", n)
 	}
 }
 

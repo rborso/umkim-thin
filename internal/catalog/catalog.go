@@ -244,7 +244,28 @@ type Entry struct {
 	Exposure map[string]any `yaml:"exposure,omitempty"`
 	Values   map[string]any `yaml:"values,omitempty"`
 	Verify   Verify         `yaml:"verify"`
+	// Origin is set by the loader, never by the YAML: "bundled" for an entry that
+	// shipped with the platform, "external" for one an operator added. The console
+	// uses it to mark private apps, and so that an unverified custom app is not
+	// mistaken for a tested one.
+	Origin string `yaml:"-" json:"origin,omitempty"`
+	// Override lets a custom entry replace a bundled one of the same name on
+	// purpose. Without it a collision is refused, because silently shadowing a
+	// platform entry is how an operator ends up running a chart they did not
+	// choose.
+	Override bool `yaml:"overrides,omitempty" json:"overrides,omitempty"`
 }
+
+// OriginBundled and OriginExternal are the values Entry.Origin can hold.
+const (
+	OriginBundled  = "bundled"
+	OriginExternal = "external"
+)
+
+// IsExternal reports whether this entry came from an operator's own catalog
+// rather than the platform's. A private app is not worse, it is just not the
+// platform's to guarantee.
+func (e Entry) IsExternal() bool { return e.Origin == OriginExternal }
 
 // HomeLink is one user-facing entry on the household home page. It lets a
 // multi-route app (the Servarr stack) present its movie player and request UI

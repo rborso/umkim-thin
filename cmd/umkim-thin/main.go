@@ -428,9 +428,19 @@ func catalogCmd(dir string, args []string) error {
                              suites and show its auto-tested/verified category
   package [--out FILE]       build the uploadable catalog .tar.gz (YAML + VERSION)
 
-The package can be uploaded on the console's Catalog tab; it does not require a
-new console image. Chart versions are still pulled from their OCI refs (or the
-local mirror when present).
+A custom app is a normal catalog entry. Put it in a directory of its own, then:
+
+  umkim-thin catalog package --dir ./my-apps --out custom.tgz
+
+and upload that on the console's Catalog tab. The upload is ADDITIVE: the entry
+joins the platform's catalog instead of replacing it, so a bundle with one app
+does not remove the others. A name that collides with a bundled entry is refused
+unless the entry sets 'overrides: true'.
+
+The chart still has to be reachable: the chart ref may point at an OCI registry, or
+the chart is packaged into the mirror from chart_repos in provision.env. A
+custom entry installs with a Private badge and is never part of the platform's own
+CI gate.
 `)
 		return nil
 	}

@@ -1676,7 +1676,13 @@ async function loadCatalog() {
       const tr = document.createElement('tr');
       const auth = e.Auth.Kind + (e.Auth.LDAP ? ' + ldap' : '');
       const appLinks = linksMarkup(e);
-      tr.innerHTML = `<td>${esc(e.DisplayName || e.Name)}${appLinks ? '<br>' + appLinks : ''}</td><td>${esc(auth)}</td><td><code>${esc(e.Chart.Version)}</code></td><td>${licenseMarkup(e)}</td>`;
+      // A custom app is labelled, not disguised. It came from the operator rather
+      // than the platform, so nobody should read its presence here as "tested by
+      // this project".
+      const priv = e.origin === 'external'
+        ? ' <span title="Added from your own catalog; not tested by the platform" style="font-size:.75em;border:1px solid var(--line);border-radius:.35rem;padding:.05rem .3rem">Private</span>'
+        : '';
+      tr.innerHTML = `<td>${esc(e.DisplayName || e.Name)}${priv}${appLinks ? '<br>' + appLinks : ''}</td><td>${esc(auth)}</td><td><code>${esc(e.Chart.Version)}</code></td><td>${licenseMarkup(e)}</td>`;
       const td = document.createElement('td');
       const btn = document.createElement('button');
       btn.textContent = 'Install';

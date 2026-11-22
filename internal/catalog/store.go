@@ -60,47 +60,102 @@ func NewStore(bundled, external string) (*Store, error) {
 	return s, nil
 }
 
-// Reload re-reads the external catalog (or the bundled fallback when there is
-// no external YAML) and swaps the snapshot only after validation.
-func (s *Store) Reload() error {
-	path, source := s.bundled, "bundled"
-	if hasYAML(s.external) {
-		path, source = s.external, "external"
+// mergeEntries overlays an operator's catalog onto the platform's.
+//
+// The external source is ADDITIVE: an app an operator adds joins the bundled set
+// instead of replacing it. That is the difference between "manage a catalog" and
+// "add a custom app", and it is why an upload carrying a single entry no longer
+// wipes the other fourteen from the console.
+//
+// A name collision is an error rather than a silent shadow. Two apps called
+// "gitea" is either a mistake or an attempt to substitute a chart the platform
+// ships, and quietly picking one of them is how an operator ends up running
+// something they did not choose. An operator who really wants to override a
+// bundled entry can do it explicitly with the same name and `overrides: true`.
+func mergeEntries(bundled, external []Entry) ([]Entry, error) {
+	out := make([]Entry, 0, len(bundled)+len(external))
+	seen := make(map[string]string, len(bundled)+len(external))
+	for _, e := range bundled {
+		e.Origin = OriginBundled
+		seen[e.Name] = OriginBundled
+		out = append(out, e)
 	}
-	entries, err := Load(path)
-	if err != nil {
-		if source == "external" {
-			// A bad refresh never replaces a working external snapshot. Only a
-			// first load (no in-memory entries) falls back to the bundled copy.
-			s.mu.RLock()
-			haveSnapshot := len(s.entries) > 0
-			s.mu.RUnlock()
-			if haveSnapshot {
-				s.mu.Lock()
-				s.lastErr = err
-				s.mu.Unlock()
-				return fmt.Errorf("external catalog %s: %w (keeping the previous snapshot)", s.external, err)
+	for _, e := range external {
+		e.Origin = OriginExternal
+		if origin, dup := seen[e.Name]; dup {
+			if !e.Override {
+				return nil, fmt.Errorf(
+					"custom catalog entry %q collides with the %s entry of the same name; "+
+						"rename it, or set `overrides: true` in the entry to replace the bundled one deliberately",
+					e.Name, origin)
 			}
-			fallback, ferr := Load(s.bundled)
-			if ferr != nil {
-				return fmt.Errorf("external catalog: %w; bundled fallback: %v", err, ferr)
+			// Deliberate override: replace in place, keeping the position stable.
+			for i := range out {
+				if out[i].Name == e.Name {
+					out[i] = e
+					break
+				}
 			}
-			s.set(fallback, "bundled", s.bundled, err)
-			return fmt.Errorf("external catalog %s: %w (using the bundled fallback)", s.external, err)
+			continue
 		}
-		return err
+		seen[e.Name] = OriginExternal
+		out = append(out, e)
 	}
-	s.set(entries, source, path, nil)
-	return nil
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
-func (s *Store) set(entries []Entry, source, path string, lastErr error) {
+// Reload re-reads the bundled catalog and, when present, the operator's own
+// entries on top of it, swapping the snapshot only after validation.
+func (s *Store) Reload() error {
+	bundled, err := Load(s.bundled)
+	if err != nil {
+		return err
+	}
+
+	// No external entries means the bundled catalog alone: a normal install.
+	if !hasYAML(s.external) {
+		if err := s.set(bundled, "bundled", s.bundled, nil); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	external, err := Load(s.external)
+	if err != nil {
+		// A bad custom entry never takes the platform's catalog down with it. The
+		// bundled set is still valid, so serve that and report the error, which is
+		// what the Catalog tab shows.
+		if serr := s.set(bundled, "bundled", s.bundled, err); serr != nil {
+			return serr
+		}
+		return fmt.Errorf("custom catalog %s: %w (using the bundled entries only)", s.external, err)
+	}
+
+	merged, err := mergeEntries(bundled, external)
+	if err != nil {
+		if serr := s.set(bundled, "bundled", s.bundled, err); serr != nil {
+			return serr
+		}
+		return fmt.Errorf("custom catalog %s: %w (using the bundled entries only)", s.external, err)
+	}
+
+	// "mixed" is the honest label: the snapshot is the platform's entries plus the
+	// operator's, and a reader should be able to tell that from Info() alone.
+	source := "mixed"
+	if len(external) == 0 {
+		source = "bundled"
+	}
+	return s.set(merged, source, s.external, nil)
+}
+
+func (s *Store) set(entries []Entry, source, path string, lastErr error) error {
 	byName := make(map[string]Entry, len(entries))
 	for _, e := range entries {
 		byName[e.Name] = e
 	}
 	version := readVersion(path)
-	if source == "external" && version == "" {
+	if (source == "external" || source == "mixed") && version == "" {
 		version = readVersion(s.bundled)
 	}
 	rev := revisionOf(path)
@@ -116,6 +171,7 @@ func (s *Store) set(entries []Entry, source, path string, lastErr error) {
 	s.loadedAt = time.Now()
 	s.lastErr = lastErr
 	s.mu.Unlock()
+	return nil
 }
 
 // Entries returns a copy of the current catalog, sorted by name.
