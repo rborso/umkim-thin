@@ -138,23 +138,30 @@ esac
 # An actual completion is opt-in: it costs money and needs egress. Enable it with
 # VERIFY_MODEL=1 on a target that has both.
 if [ "${VERIFY_MODEL:-0}" = "1" ] && [ "${keyout#present:}" != "$keyout" ]; then
-  model=$(k exec deploy/sillytavern-sillytavern -- node -e '
-    const fs = require("fs");
-    const s = JSON.parse(fs.readFileSync("/home/node/app/data/default-user/settings.json", "utf8"));
-    const o = s.oai_settings || {};
-    console.log(o.openrouter_model || o.custom_model || "");
-  ' 2>/dev/null | tr -d '\r')
+  # Use the profile the app is actually configured with, not a hardcoded vendor:
+  # a Custom OpenAI profile (CommandCode) uses custom_url/custom_model, and an
+  # OpenRouter one uses the OpenRouter host.
   answer=$(k exec deploy/sillytavern-sillytavern -- node -e '
     const fs = require("fs");
-    const k = (JSON.parse(fs.readFileSync("/home/node/app/data/default-user/secrets.json", "utf8")).api_key_custom || []).find(x => x.active).value;
-    fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const read = p => JSON.parse(fs.readFileSync("/home/node/app/data/default-user/" + p, "utf8"));
+    const k = (read("secrets.json").api_key_custom || []).find(x => x.active).value;
+    const o = read("settings.json").oai_settings || {};
+    let url, model;
+    if (o.chat_completion_source === "custom" && o.custom_url) {
+      url = o.custom_url.replace(/\/$/, "") + "/chat/completions";
+      model = o.custom_model;
+    } else {
+      url = "https://openrouter.ai/api/v1/chat/completions";
+      model = o.openrouter_model;
+    }
+    fetch(url, {
       method: "POST",
-      headers: { Authorization: "Bearer " + k, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: process.argv[1], messages: [{ role: "user", content: "Reply with the single word pong" }], max_tokens: 64 }),
+      headers: { Authorization: "Bearer " + k, "Content-Type": "application/json", "User-Agent": "st-magus/1.0" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: "Reply with the single word pong" }], max_tokens: 32 }),
     }).then(r => r.json()).then(j => console.log((j.choices?.[0]?.message?.content || "").trim())).catch(() => console.log(""));
-  ' "$model" 2>/dev/null | tr -d '\r')
+  ' 2>/dev/null | tr -d '\r')
   [ -n "$answer" ] && ok "a real completion answered: $answer" \
-                  || bad "the model did not answer (check the key and egress)"
+                  || bad "the model did not answer (check the key, the base URL and egress)"
 else
   skip "a live completion (set VERIFY_MODEL=1 to run one)"
 fi

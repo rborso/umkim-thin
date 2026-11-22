@@ -68,11 +68,11 @@ values:
     #     --from-literal=api-key=<key>
     # The chart only references it; the key never appears in a ConfigMap.
     #
-    # OpenRouter is the working provider here. The OpenCode Go key tested first
-    # was rejected by the API on every endpoint (401 on /usage, /models and
-    # /chat/completions, identical to a fabricated key), so it is not usable.
+    # CommandCode's Provider API. The key is a user_... token and is only valid
+    # against https://api.commandcode.ai/provider/v1 — the same key returns 401
+    # from opencode.ai, which is a different service.
     model:
-      provider: openrouter
+      provider: commandcode
       existingSecret: sillytavern-model-key
     config:
       whitelist:

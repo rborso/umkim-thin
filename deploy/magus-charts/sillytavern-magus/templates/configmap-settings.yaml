@@ -12,7 +12,16 @@
 */ -}}
 {{- $provider := .Values.sillytavern.model.provider -}}
 {{- $oai := dict -}}
-{{- if eq $provider "opencode-go" -}}
+{{- if eq $provider "commandcode" -}}
+{{- $o := .Values.sillytavern.model.commandcode -}}
+{{- $_ := set $oai "chat_completion_source" "custom" -}}
+{{- $_ := set $oai "custom_url" $o.baseUrl -}}
+{{- $_ := set $oai "custom_model" $o.model -}}
+{{- $_ := set $oai "custom_include_headers" "User-Agent: st-magus/1.0" -}}
+{{- $_ := set $oai "openai_max_tokens" 2000 -}}
+{{- /* 1M-token context on the provider side; 32k keeps prompts and RAM sane. */ -}}
+{{- $_ := set $oai "openai_max_context" 32768 -}}
+{{- else if eq $provider "opencode-go" -}}
 {{- $o := .Values.sillytavern.model.opencodeGo -}}
 {{- $_ := set $oai "chat_completion_source" "custom" -}}
 {{- $_ := set $oai "custom_url" $o.baseUrl -}}
