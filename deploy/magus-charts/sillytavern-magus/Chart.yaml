@@ -1,0 +1,20 @@
+apiVersion: v2
+name: sillytavern-magus
+description: >-
+  SillyTavern with the M.A.G.U.S. ÚTK pack and its two tool servers: a rules MCP
+  (utk-combat) and a character builder (utk-alkoto). Private, single-user.
+type: application
+version: 0.1.0
+appVersion: "1.19.1"
+
+home: https://github.com/rborso/magus-st
+sources:
+  - https://github.com/rborso/magus-st
+  - https://github.com/SillyTavern/SillyTavern
+maintainers:
+  - name: Robert Borso
+    url: https://github.com/rborso
+annotations:
+  # SillyTavern is AGPL-3.0; the pack and tools are the operator's own. This is a
+  # private chart, not a platform app.
+  artifacthub.io/license: AGPL-3.0

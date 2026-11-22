@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: sillytavern
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    # Keep the campaign across an uninstall, the way every other app's data is
+    # kept: chats and characters are the one thing here nobody can regenerate.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.sillytavern.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.sillytavern.persistence.size }}
+{{- if .Values.combat.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-combat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: utk-combat
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.combat.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.combat.persistence.size }}
+{{- end }}
+{{- if .Values.alkoto.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-alkoto
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: utk-alkoto
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.alkoto.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.alkoto.persistence.size }}
+{{- end }}

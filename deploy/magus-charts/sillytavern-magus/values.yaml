@@ -1,0 +1,125 @@
+# SillyTavern + M.A.G.U.S. ÚTK pack, single-user and private.
+#
+# Each of the three pieces is independently selectable: a household that only
+# wants the chat UI turns `combat.enabled` and `alkoto.enabled` off and gets
+# SillyTavern alone. The MCP wiring follows, so there is never a dangling
+# reference to a Service that was not installed.
+#
+# Content that is too big for a ConfigMap (the pack is 4.2 MB, the MCP plugin
+# 2.1 MB) ships in a small OCI image built from the magus-st repo. That is the
+# same delivery path the platform uses for its own bootstrap images.
+
+# --- SillyTavern ----------------------------------------------------------
+sillytavern:
+  enabled: true
+  image: ghcr.io/sillytavern/sillytavern
+  # Pinned, never :latest. 1.18.0 is the floor: earlier builds carry the 2026 auth
+  # bypasses (CVE-2026-44648/44649/44650). Nothing here is internet-facing, but a
+  # private instance should not run a known-bypassed build either.
+  tag: "1.19.1"
+  imagePullPolicy: IfNotPresent
+
+  service:
+    port: 8000
+
+  persistence:
+    # /home/node/app/data — chats, characters, worlds, settings, vectors.
+    size: 20Gi
+    # Empty means the site's config class.
+    storageClass: ""
+
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { memory: 2Gi }
+
+  # The model connection. "opencode-go" and "openrouter" write a Custom OpenAI
+  # profile into settings.json on first boot; "none" leaves SillyTavern's own
+  # Connection tab to the operator.
+  model:
+    provider: opencode-go
+    opencodeGo:
+      baseUrl: https://opencode.ai/zen/go/v1
+      model: deepseek-v4-flash
+      # Fixed client label sent as x-opencode-session. Not an ST session id.
+      session: st-magus-ynevi
+    openrouter:
+      baseUrl: https://openrouter.ai/api/v1
+      model: deepseek/deepseek-v4.1-flash
+    # An existing Secret holding the key (key: api-key). Empty means the key comes
+    # from `.Values.model.apiKey`, which is for a lab only.
+    existingSecret: ""
+    apiKey: ""
+
+  # SillyTavern settings, merged over the chart's defaults, so an operator can
+  # override one key without replacing the file.
+  config:
+    # Behind Authelia: the app needs no identity of its own, and enabling both
+    # would double-prompt.
+    basicAuthMode: false
+    enableUserAccounts: false
+    # SillyTavern's IP whitelist is an SSRF guard, so it is narrowed from the
+    # upstream 10.0.0.0/8 to the ranges that actually reach this pod:
+    #
+    #   the pod CIDR      Traefik and in-cluster clients
+    #   the node network  the kubelet's health probes. Without it the probe comes
+    #                     from the node address and is REFUSED, so the pod never
+    #                     becomes Ready while the app itself works.
+    #
+    # The node CIDR is set at install from the site's lab_cidr.
+    whitelist:
+      - ::1
+      - 127.0.0.1
+      - 10.244.0.0/16
+      - 172.16.10.0/24
+    # The probe request carries no session; this is what lets the readiness check
+    # through without disabling the guard.
+    enableForwardedWhitelist: true
+    # Nothing is fetched at boot: the plugin and extensions are mounted.
+    enableServerPlugins: true
+    enableServerPluginsAutoUpdate: false
+    extensions:
+      enabled: true
+      autoUpdate: false
+
+# The OCI image carrying the pack, the MCP plugin and the extensions. Built from
+# the magus-st repo (`deploy/Dockerfile.pack`).
+pack:
+  image: localhost/magus-st-pack
+  tag: "1.0.0"
+  imagePullPolicy: Never
+
+# --- utk-combat: the rules engine behind tool calls -----------------------
+combat:
+  enabled: true
+  image: localhost/magus-utk-combat
+  tag: "0.5.0"
+  imagePullPolicy: Never
+  service:
+    port: 3921
+  # Characters, encounters and the chronicle. Losing this loses the campaign, so
+  # it is a PVC rather than an emptyDir.
+  persistence:
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+# --- utk-alkoto: the character builder ------------------------------------
+alkoto:
+  enabled: true
+  image: localhost/magus-utk-alkoto
+  tag: "0.1.0"
+  imagePullPolicy: Never
+  service:
+    port: 8765
+  persistence:
+    # Exported character sheets (characters/jk).
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+busybox:
+  image: busybox:1.36.1

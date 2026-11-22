@@ -1,0 +1,78 @@
+name: sillytavern
+displayName: SillyTavern (ÚTK)
+description: >-
+  M.A.G.U.S. ÚTK play: a chat frontend with the rulebook pack loaded, a rules MCP
+  for dice and combat, and a character builder. Private.
+chart:
+  # The console installs from a packaged .tgz in its chart mirror, so a private
+  # chart ships the same way the platform's do: `helm package` it and put the
+  # tarball in /data/chart-mirror. The ref is only documentary once the package
+  # is there — the installer resolves <name>-<version>.tgz from the mirror first.
+  ref: /data/chart-mirror/sillytavern-magus
+  version: 0.1.0
+  versions:
+    - version: 0.1.0
+      appVersion: 1.19.1
+      channel: stable
+namespace: sillytavern
+route:
+  mode: site
+  host: "st.{{ .zone }}"
+  requireAuth: true
+  # VPN only: two routes, neither of them published to the internet. The stack has
+  # no internet-facing surface by design.
+  exposure:
+    default: vpn
+    allowed: [vpn]
+  serviceName: sillytavern-sillytavern
+  servicePort: 8000
+routes:
+  - key: site
+    host: "st.{{ .zone }}"
+    mode: site
+    requireAuth: true
+    serviceName: sillytavern-sillytavern
+    servicePort: 8000
+    exposure:
+      default: vpn
+      allowed: [vpn]
+  - key: alkoto
+    host: "alkoto.{{ .zone }}"
+    mode: site
+    requireAuth: true
+    serviceName: sillytavern-alkoto
+    servicePort: 8765
+    exposure:
+      default: vpn
+      allowed: [vpn]
+auth:
+  # Authelia handles identity; SillyTavern itself runs single-user.
+  kind: none
+license:
+  chart: AGPL-3.0
+  application: AGPL-3.0
+  url: https://github.com/SillyTavern/SillyTavern/blob/release/LICENSE
+links:
+  source: https://github.com/rborso/magus-st
+values:
+  # Whitelist the actual pod CIDR rather than 10.0.0.0/8: the whitelist is an SSRF
+  # guard, and a wide range defeats it.
+  sillytavern:
+    config:
+      whitelist:
+        - ::1
+        - 127.0.0.1
+        - 10.244.0.0/16
+        # The kubelet probes from the node address, so the node network is here
+        # too; without it the pod never reports Ready.
+        - 172.16.10.0/24
+verify:
+  # A private app: the harness is the operator's, and it is not part of the
+  # platform's own CI gate.
+  harness: deploy/magus-charts/sillytavern-magus/verify.sh
+  checks:
+    - route_reachable
+    - auth_challenge
+    - st_ui_loads
+    - mcp_tools_listed
+    - alkoto_ui_loads

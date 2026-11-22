@@ -1,0 +1,99 @@
+{{- if .Values.alkoto.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-alkoto
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: utk-alkoto
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: utk-alkoto
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: utk-alkoto
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        # The builder reads the character store over the combat service's REST
+        # API, so it must not start before that exists.
+        - name: wait-for-combat
+          image: {{ .Values.busybox.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              {{- if .Values.combat.enabled }}
+              i=0
+              until wget -q -T 2 -O /dev/null "http://{{ .Release.Name }}-combat:{{ .Values.combat.service.port }}/health" 2>/dev/null; do
+                i=$((i+1)); [ "$i" -ge 60 ] && { echo "utk-combat did not become ready"; exit 1; }
+                sleep 2
+              done
+              {{- else }}
+              echo "combat disabled; starting without it"
+              {{- end }}
+      containers:
+        - name: utk-alkoto
+          image: "{{ .Values.alkoto.image }}:{{ .Values.alkoto.tag }}"
+          imagePullPolicy: {{ .Values.alkoto.imagePullPolicy }}
+          ports:
+            - { name: http, containerPort: {{ .Values.alkoto.service.port }} }
+          env:
+            - { name: UTK_ALKOTO_HOST, value: "0.0.0.0" }
+            - { name: UTK_ALKOTO_PORT, value: {{ .Values.alkoto.service.port | quote }} }
+            # Serve mode: the builder saves sheets into the shared volume rather
+            # than trying to write into SillyTavern's data directory, which this
+            # pod does not mount.
+            - { name: UTK_JK_EXPORT_DIR, value: /export }
+            {{- if .Values.combat.enabled }}
+            - { name: UTK_COMBAT_SHEET_API, value: "http://{{ .Release.Name }}-combat:{{ .Values.combat.service.port }}/api/sheet" }
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.alkoto.resources | nindent 12 }}
+          volumeMounts:
+            - { name: export, mountPath: /export }
+      volumes:
+        - name: export
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-alkoto
+{{- end }}
+---
+{{- if .Values.alkoto.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-alkoto
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: utk-alkoto
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    app.kubernetes.io/name: utk-alkoto
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: http, port: {{ .Values.alkoto.service.port }}, targetPort: http }
+{{- end }}

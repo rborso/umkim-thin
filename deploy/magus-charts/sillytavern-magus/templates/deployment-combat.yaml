@@ -1,0 +1,74 @@
+{{- if .Values.combat.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-combat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: utk-combat
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: utk-combat
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: utk-combat
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: utk-combat
+          image: "{{ .Values.combat.image }}:{{ .Values.combat.tag }}"
+          imagePullPolicy: {{ .Values.combat.imagePullPolicy }}
+          ports:
+            - { name: http, containerPort: {{ .Values.combat.service.port }} }
+          env:
+            # Bind on the pod address, not loopback: SillyTavern reaches this over
+            # the Service, which is the whole reason the container exists.
+            - { name: UTK_COMBAT_HTTP_HOST, value: "0.0.0.0" }
+            - { name: UTK_COMBAT_HTTP_PORT, value: {{ .Values.combat.service.port | quote }} }
+            - { name: UTK_COMBAT_DATA, value: /data }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            # /health is the endpoint the systemd unit's docs point at.
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.combat.resources | nindent 12 }}
+          volumeMounts:
+            - { name: store, mountPath: /data }
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-combat
+{{- end }}
+---
+{{- if .Values.combat.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-combat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: utk-combat
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    app.kubernetes.io/name: utk-combat
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: http, port: {{ .Values.combat.service.port }}, targetPort: http }
+{{- end }}

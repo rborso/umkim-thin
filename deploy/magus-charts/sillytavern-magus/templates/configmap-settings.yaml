@@ -1,0 +1,60 @@
+{{- /*
+  SillyTavern's user state: settings.json and mcp_settings.json.
+
+  These are USER state, not chart state: the init container writes them once and
+  never again, so an operator's in-app changes survive an upgrade. The chart's job
+  is only to make the first boot usable — a correct model profile and the MCP
+  server pointing at the right Service.
+
+  Only the keys this chart owns are set. SillyTavern fills the rest from its own
+  defaults at boot, which is why this file is small rather than a copy of the
+  operator's 61 KB of live settings.
+*/ -}}
+{{- $provider := .Values.sillytavern.model.provider -}}
+{{- $oai := dict -}}
+{{- if eq $provider "opencode-go" -}}
+{{- $o := .Values.sillytavern.model.opencodeGo -}}
+{{- $_ := set $oai "chat_completion_source" "custom" -}}
+{{- $_ := set $oai "custom_url" $o.baseUrl -}}
+{{- $_ := set $oai "custom_model" $o.model -}}
+{{- $_ := set $oai "custom_include_headers" (printf "User-Agent: st-magus/1.0\nx-opencode-session: %s" $o.session) -}}
+{{- $_ := set $oai "openai_max_tokens" 2000 -}}
+{{- $_ := set $oai "openai_max_context" 32768 -}}
+{{- else if eq $provider "openrouter" -}}
+{{- $o := .Values.sillytavern.model.openrouter -}}
+{{- $_ := set $oai "chat_completion_source" "openrouter" -}}
+{{- $_ := set $oai "openrouter_model" $o.model -}}
+{{- $_ := set $oai "openai_max_tokens" 2000 -}}
+{{- $_ := set $oai "openai_max_context" 32768 -}}
+{{- end -}}
+{{- $settings := dict "main_api" "openai" -}}
+{{- if $oai -}}
+{{- $_ := set $settings "oai_settings" $oai -}}
+{{- end -}}
+{{- /* The MCP block exists only when the server it points at is installed. */ -}}
+{{- $mcp := dict "mcpServers" dict "disabledTools" dict "disabledServers" list -}}
+{{- if .Values.combat.enabled -}}
+{{- $url := printf "http://%s-combat:%d/mcp" .Release.Name (int .Values.combat.service.port) -}}
+{{- $_ := set $mcp "mcpServers" (dict "utk-combat" (dict "type" "streamableHttp" "url" $url)) -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-settings
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: sillytavern
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  settings.json: |
+    {{- toYaml $settings | nindent 4 }}
+  mcp_settings.json: |
+    {{- toYaml $mcp | nindent 4 }}
+  {{- if not .Values.sillytavern.model.existingSecret }}
+  {{- if .Values.sillytavern.model.apiKey }}
+  # Written into the user data by the init container as secrets.json, in the shape
+  # SillyTavern expects. Present here only because no Secret was given.
+  secrets.json: |
+    {{- toYaml (dict "api_key_custom" (list (dict "id" "magus" "value" .Values.sillytavern.model.apiKey "label" (printf "%s-magus" .Values.sillytavern.model.provider) "active" true))) | nindent 4 }}
+  {{- end }}
+  {{- end }}

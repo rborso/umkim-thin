@@ -1,0 +1,163 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-sillytavern
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: sillytavern
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  # The data PVC is ReadWriteOnce: a rolling update would schedule the new pod
+  # before the old one releases the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sillytavern
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sillytavern
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-config.yaml") . | sha256sum }}
+        checksum/settings: {{ include (print $.Template.BasePath "/configmap-settings.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        # SillyTavern's image runs as node/1000 and must own its data.
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        # The pack image carries 6 MB of content that does not fit a ConfigMap
+        # (1 MiB object cap): the world books, the character card, the MCP server
+        # plugin and the client extensions. Copying it into an emptyDir works on
+        # any cluster — an `image:` volume needs an opt-in feature gate that a
+        # managed or older cluster may not have enabled.
+        - name: stage-pack
+          image: "{{ .Values.pack.image }}:{{ .Values.pack.tag }}"
+          imagePullPolicy: {{ .Values.pack.imagePullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              # /pack is the image's own content; /out is the shared volume.
+              cp -R /pack/. /out/
+          volumeMounts:
+            - { name: content, mountPath: /out }
+        # Seed the data directory, ONCE. Every copy is guarded by a `-f` test: a
+        # restart must never overwrite chats, characters or settings the household
+        # has since edited. This is deploy/install-pack.sh without the podman
+        # unshare, because inside a pod the volume is already ours.
+        - name: seed-data
+          image: {{ .Values.busybox.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              D=/data/default-user
+              mkdir -p "$D"/characters "$D"/worlds "$D"/QuickReplies \
+                       "$D"/MagusPack/jk "$D"/MagusPack/kaland
+
+              copy_once() {
+                src=$1; dst=$2
+                [ -e "$src" ] || return 0
+                [ -e "$dst" ] || cp "$src" "$dst"
+              }
+
+              # The pack. ST flat-imports worlds/*.json, so the JK packs and the
+              # L1 adventure bibles land beside the core books.
+              for f in /pack/worlds/*.json /pack/worlds/jk/*.json /pack/worlds/kaland/*.json; do
+                copy_once "$f" "$D/worlds/$(basename "$f")"
+              done
+              # characters/ holds the KM card plus a jk/ directory of exports;
+              # cp without -r refuses a directory, so only files are copied here
+              # and the exports are seeded from their own path below.
+              for f in /pack/characters/*; do
+                [ -f "$f" ] || continue
+                copy_once "$f" "$D/characters/$(basename "$f")"
+              done
+              mkdir -p "$D/characters/jk"
+              for f in /pack/characters/jk/*; do
+                [ -f "$f" ] || continue
+                copy_once "$f" "$D/characters/jk/$(basename "$f")"
+              done
+              for f in /pack/quick-replies/*.json; do
+                copy_once "$f" "$D/QuickReplies/$(basename "$f")"
+              done
+              for d in /pack/maguspack /pack/maguspack/jk /pack/maguspack/kaland; do
+                for f in "$d"/*; do
+                  [ -e "$f" ] || continue
+                  copy_once "$f" "$D/MagusPack/$(basename "$f")"
+                done
+              done
+
+              # config.yaml is NOT copied here: the app container mounts it with
+              # subPath, so it is always the chart's current version and a values
+              # change takes effect on the next rollout. /app is the image's own
+              # read-only content and has no config/ directory.
+
+              # settings.json and mcp_settings.json are user state: written once.
+              copy_once /settings/settings.json     "$D/settings.json"
+              copy_once /settings/mcp_settings.json "$D/mcp_settings.json"
+
+              chown -R 1000:1000 /data || true
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: content, mountPath: /pack, readOnly: true }
+            - { name: settings, mountPath: /settings, readOnly: true }
+      containers:
+        - name: sillytavern
+          image: "{{ .Values.sillytavern.image }}:{{ .Values.sillytavern.tag }}"
+          imagePullPolicy: {{ .Values.sillytavern.imagePullPolicy }}
+          ports:
+            - { name: http, containerPort: {{ .Values.sillytavern.service.port }} }
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: SILLYTAVERN_HEARTBEATINTERVAL, value: "30" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            # A cold boot with a 20 GiB volume takes a while.
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.sillytavern.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /home/node/app/data }
+            - name: config
+              mountPath: /home/node/app/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            # Mounted, not fetched: auto-update is off, so the pod never reaches
+            # out for code.
+            - { name: content, mountPath: /home/node/app/plugins, subPath: plugins, readOnly: true }
+            - { name: content, mountPath: /home/node/app/public/scripts/extensions/third-party, subPath: extensions, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-data
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-config
+        - name: settings
+          configMap:
+            name: {{ .Release.Name }}-settings
+        # One emptyDir, populated from the pack image by stage-pack above.
+        - name: content
+          emptyDir: {}

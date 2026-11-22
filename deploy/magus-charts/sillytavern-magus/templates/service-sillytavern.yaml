@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-sillytavern
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: sillytavern
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    app.kubernetes.io/name: sillytavern
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: http, port: {{ .Values.sillytavern.service.port }}, targetPort: http }
