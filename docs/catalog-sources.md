@@ -1,11 +1,12 @@
 # Catalog sources
 
-**Status:** the **runtime external catalog** part is implemented (see
-[`release-trains.md`](release-trains.md)): the console can load
-`/data/catalog`, refresh it, and accept a validated `catalog-*.tgz` upload
-without rebuilding the image. The bundled catalog remains the fallback. The
-multi-source manifest, trust levels and override rules below are still a
-proposal. See [`catalog.md`](catalog.md) for the entry format.
+**Status:** the **runtime external catalog** is implemented and **additive**.
+The console loads `/data/catalog`, refreshes it, and accepts a validated
+`catalog-*.tgz` upload without rebuilding the image. An entry there JOINS the
+bundled catalog rather than replacing it, so adding one private app no longer
+removes the other entries — see "Adding a custom app" below. Still a proposal:
+the multi-source manifest with explicit trust levels, `oci` sources and per-source
+priority. See [`catalog.md`](catalog.md) for the entry format.
 
 ## Goal
 
@@ -60,6 +61,43 @@ spec:
 
 The entry file format does not change. The source manifest is only an index and
 a trust/policy boundary.
+
+## Adding a custom app
+
+A custom app is a normal catalog entry in `/data/catalog` (the console PVC). The
+load is **additive**: bundled entries plus the operator's, labelled `mixed` in
+`GET /api/catalog/info`. Verified on a live console: 14 bundled entries plus one
+custom entry served as 15.
+
+```bash
+mkdir my-apps && cp your-entry.yaml my-apps/
+umkim-thin catalog package --dir my-apps --out custom.tgz
+# then upload custom.tgz on the console's Catalog tab
+```
+
+or drop the YAML straight into the directory and POST `/api/catalog/refresh`.
+
+Three rules, each of which exists because the alternative fails quietly:
+
+| Rule | Why |
+|---|---|
+| A name that collides with a bundled entry is **refused** | Two apps called `gitea` is either a mistake or an attempt to substitute a platform chart; picking one silently is how an operator runs something they did not choose. |
+| An entry that really means it sets `overrides: true` | The deliberate path to replacing a bundled entry. |
+| A malformed custom entry never takes the catalog down | The bundled set is still served and the problem appears in `info.error`, which the Catalog tab shows. A typo in one private app must not hide every app. |
+
+The entry appears with a **Private** badge (`origin: external`, set by the loader
+and never by the YAML). It is the operator's to maintain, not the platform's to
+guarantee — and it is never part of this project's own CI gate, because
+`catalog verify` reads the repo's `catalog/` directory.
+
+Nothing else about an entry changes: routes, exposure, auth, backups and uninstall
+all work the same, so a private app is not a second-class install.
+
+**The chart still has to be reachable.** `chart.ref` may be an OCI registry, or the
+chart can be packaged into the mirror from `chart_repos` in `provision.env` (a
+private git repo over SSH). Note that the chart mirror is recreated on every
+provision, so a hand-copied tarball does not survive a reinstall — that is what
+`chart_repos` is for.
 
 ## Source kinds
 
