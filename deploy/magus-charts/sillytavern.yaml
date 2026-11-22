@@ -62,9 +62,18 @@ license:
 links:
   source: https://github.com/rborso/magus-st
 values:
-  # Whitelist the actual pod CIDR rather than 10.0.0.0/8: the whitelist is an SSRF
-  # guard, and a wide range defeats it.
   sillytavern:
+    # The model key is a Secret, created out of band:
+    #   kubectl -n sillytavern create secret generic sillytavern-model-key \
+    #     --from-literal=api-key=<key>
+    # The chart only references it; the key never appears in a ConfigMap.
+    #
+    # OpenRouter is the working provider here. The OpenCode Go key tested first
+    # was rejected by the API on every endpoint (401 on /usage, /models and
+    # /chat/completions, identical to a fabricated key), so it is not usable.
+    model:
+      provider: openrouter
+      existingSecret: sillytavern-model-key
     config:
       whitelist:
         - ::1

@@ -122,6 +122,43 @@ if k get deploy sillytavern-alkoto >/dev/null 2>&1; then
   esac
 fi
 
+echo "== a model key is present and works =="
+keyout=$(k exec deploy/sillytavern-sillytavern -- node -e '
+  const fs = require("fs");
+  try {
+    const s = JSON.parse(fs.readFileSync("/home/node/app/data/default-user/secrets.json", "utf8"));
+    const k = (s.api_key_custom || []).find(x => x.active);
+    console.log(k ? "present:" + k.value.length : "MISSING");
+  } catch { console.log("MISSING"); }
+' 2>/dev/null | tr -d '\r')
+case "$keyout" in
+  present:*) ok "the model key is in secrets.json (${keyout#present:} chars)" ;;
+  *)         bad "no model key in secrets.json: a completion will fail" ;;
+esac
+# An actual completion is opt-in: it costs money and needs egress. Enable it with
+# VERIFY_MODEL=1 on a target that has both.
+if [ "${VERIFY_MODEL:-0}" = "1" ] && [ "${keyout#present:}" != "$keyout" ]; then
+  model=$(k exec deploy/sillytavern-sillytavern -- node -e '
+    const fs = require("fs");
+    const s = JSON.parse(fs.readFileSync("/home/node/app/data/default-user/settings.json", "utf8"));
+    const o = s.oai_settings || {};
+    console.log(o.openrouter_model || o.custom_model || "");
+  ' 2>/dev/null | tr -d '\r')
+  answer=$(k exec deploy/sillytavern-sillytavern -- node -e '
+    const fs = require("fs");
+    const k = (JSON.parse(fs.readFileSync("/home/node/app/data/default-user/secrets.json", "utf8")).api_key_custom || []).find(x => x.active).value;
+    fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + k, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: process.argv[1], messages: [{ role: "user", content: "Reply with the single word pong" }], max_tokens: 64 }),
+    }).then(r => r.json()).then(j => console.log((j.choices?.[0]?.message?.content || "").trim())).catch(() => console.log(""));
+  ' "$model" 2>/dev/null | tr -d '\r')
+  [ -n "$answer" ] && ok "a real completion answered: $answer" \
+                  || bad "the model did not answer (check the key and egress)"
+else
+  skip "a live completion (set VERIFY_MODEL=1 to run one)"
+fi
+
 echo "== routes are behind Authelia =="
 hosts=$(k get ingress -o jsonpath='{range .items[*]}{.spec.rules[*].host}{"\n"}{end}' 2>/dev/null | tr -d '\r')
 if [ -z "$hosts" ]; then
@@ -149,7 +186,7 @@ fi
 echo
 if [ "$fails" -eq 0 ]; then
   echo "RESULT: the stack answers as a user would expect."
-  echo "Not covered here: a real model completion, which needs your API key."
+  [ "${VERIFY_MODEL:-0}" = "1" ] || echo "A live completion was not run: set VERIFY_MODEL=1 to include it."
 else
   echo "RESULT: $fails check(s) failed."
 fi

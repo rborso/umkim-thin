@@ -36,7 +36,10 @@ sillytavern:
   # profile into settings.json on first boot; "none" leaves SillyTavern's own
   # Connection tab to the operator.
   model:
-    provider: opencode-go
+    # OpenRouter is the default because it is the one that works here: the
+    # OpenCode Go key was rejected by the API on every endpoint (401 on /usage,
+    # /models and /chat/completions — identical to a fabricated key).
+    provider: openrouter
     opencodeGo:
       baseUrl: https://opencode.ai/zen/go/v1
       model: deepseek-v4-flash
@@ -47,7 +50,10 @@ sillytavern:
       model: deepseek/deepseek-v4.1-flash
     # An existing Secret holding the key (key: api-key). Empty means the key comes
     # from `.Values.model.apiKey`, which is for a lab only.
-    existingSecret: ""
+    #
+    #   kubectl -n sillytavern create secret generic sillytavern-model-key \
+    #     --from-literal=api-key=<key>
+    existingSecret: sillytavern-model-key
     apiKey: ""
 
   # SillyTavern settings, merged over the chart's defaults, so an operator can

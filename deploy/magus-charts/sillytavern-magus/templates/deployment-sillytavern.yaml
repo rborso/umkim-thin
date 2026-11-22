@@ -109,11 +109,28 @@ spec:
               copy_once /settings/settings.json     "$D/settings.json"
               copy_once /settings/mcp_settings.json "$D/mcp_settings.json"
 
+              # The model key lives in a Secret, never in a ConfigMap. Written in
+              # the shape SillyTavern stores it (secrets.json -> api_key_custom),
+              # and rewritten whenever the Secret's value changes, so rotating a
+              # key takes effect on the next rollout rather than never.
+              if [ -f /modelkey/api-key ]; then
+                KEY=$(tr -d '\r\n' < /modelkey/api-key)
+                LABEL="{{ .Values.sillytavern.model.provider }}-magus"
+                if [ -n "$KEY" ]; then
+                  printf '{"api_key_custom":[{"id":"magus","value":"%s","label":"%s","active":true}]}\n' \
+                    "$KEY" "$LABEL" > "$D/secrets.json"
+                  chmod 600 "$D/secrets.json"
+                fi
+              fi
+
               chown -R 1000:1000 /data || true
           volumeMounts:
             - { name: data, mountPath: /data }
             - { name: content, mountPath: /pack, readOnly: true }
             - { name: settings, mountPath: /settings, readOnly: true }
+            {{- with .Values.sillytavern.model.existingSecret }}
+            - { name: modelkey, mountPath: /modelkey, readOnly: true }
+            {{- end }}
       containers:
         - name: sillytavern
           image: "{{ .Values.sillytavern.image }}:{{ .Values.sillytavern.tag }}"
@@ -163,3 +180,8 @@ spec:
         # One emptyDir, populated from the pack image by stage-pack above.
         - name: content
           emptyDir: {}
+        {{- with .Values.sillytavern.model.existingSecret }}
+        - name: modelkey
+          secret:
+            secretName: {{ . | quote }}
+        {{- end }}
