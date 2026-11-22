@@ -166,6 +166,22 @@ else
   skip "a live completion (set VERIFY_MODEL=1 to run one)"
 fi
 
+echo "== the GM loop: engine rolls, model narrates =="
+if [ "${VERIFY_MODEL:-0}" = "1" ]; then
+  # Copied into the pod because /home/node/app is read-only and the script needs
+  # the app's own modules.
+  POD=$(k get pods -l app.kubernetes.io/name=sillytavern -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  k cp "$(dirname "$0")/verify-loop.mjs" "sillytavern/$POD:/tmp/verify-loop.mjs" >/dev/null 2>&1 || true
+  loop=$(k exec "$POD" -- node /tmp/verify-loop.mjs 2>/dev/null | tr -d '\r')
+  case "$loop" in
+    ""|ROLL_FAILED|EMPTY)            bad "the GM loop did not complete (${loop:-no output})" ;;
+    TRUNCATED:*)                   bad "the model was cut off before answering ($loop): the token budget went on reasoning" ;;
+    *) ok "the engine rolled and the model narrated: $loop" ;;
+  esac
+else
+  skip "the GM loop (set VERIFY_MODEL=1 to run it)"
+fi
+
 echo "== routes are behind Authelia =="
 hosts=$(k get ingress -o jsonpath='{range .items[*]}{.spec.rules[*].host}{"\n"}{end}' 2>/dev/null | tr -d '\r')
 if [ -z "$hosts" ]; then
