@@ -42,8 +42,10 @@ spec:
           args:
             - |
               set -eu
-              # /pack is the image's own content; /out is the shared volume.
-              cp -R /pack/. /out/
+              # /content is the image's own root; /out is the shared volume.
+              # One copy, and the layout under /out is exactly what the seed
+              # container and the app's subPath mounts expect.
+              cp -R /content/. /out/
           volumeMounts:
             - { name: content, mountPath: /out }
         # Seed the data directory, ONCE. Every copy is guarded by a `-f` test: a

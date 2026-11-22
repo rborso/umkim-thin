@@ -46,15 +46,17 @@ metadata:
     app.kubernetes.io/name: sillytavern
     app.kubernetes.io/instance: {{ .Release.Name }}
 data:
+  # JSON, not YAML: SillyTavern reads these with JSON.parse, and a YAML body
+  # makes it fall back to its own defaults without an obvious error.
   settings.json: |
-    {{- toYaml $settings | nindent 4 }}
+    {{- toJson $settings | nindent 4 }}
   mcp_settings.json: |
-    {{- toYaml $mcp | nindent 4 }}
+    {{- toJson $mcp | nindent 4 }}
   {{- if not .Values.sillytavern.model.existingSecret }}
   {{- if .Values.sillytavern.model.apiKey }}
   # Written into the user data by the init container as secrets.json, in the shape
   # SillyTavern expects. Present here only because no Secret was given.
   secrets.json: |
-    {{- toYaml (dict "api_key_custom" (list (dict "id" "magus" "value" .Values.sillytavern.model.apiKey "label" (printf "%s-magus" .Values.sillytavern.model.provider) "active" true))) | nindent 4 }}
+    {{- toJson (dict "api_key_custom" (list (dict "id" "magus" "value" .Values.sillytavern.model.apiKey "label" (printf "%s-magus" .Values.sillytavern.model.provider) "active" true))) | nindent 4 }}
   {{- end }}
   {{- end }}
