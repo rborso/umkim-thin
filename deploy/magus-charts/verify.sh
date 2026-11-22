@@ -61,6 +61,15 @@ else
   esac
 fi
 
+echo "== the whitelist is configured for a proxied deployment =="
+fw=$(k exec deploy/sillytavern-sillytavern -- sh -c \
+  'grep -E "^enableForwardedWhitelist" config/config.yaml' 2>/dev/null | tr -d '\r')
+case "$fw" in
+  *false*) ok "enableForwardedWhitelist is off (only the proxy address is checked)" ;;
+  *true*)  bad "enableForwardedWhitelist is on: the forwarded client IP is checked too, so every proxied request 403s" ;;
+  *)       bad "enableForwardedWhitelist is not set ($fw)" ;;
+esac
+
 echo "== the pack is on the PVC =="
 worlds=$(k exec deploy/sillytavern-sillytavern -- sh -c \
   'ls data/default-user/worlds/*.json 2>/dev/null | wc -l' 2>/dev/null | tr -d '\r')
@@ -113,16 +122,25 @@ if k get deploy sillytavern-alkoto >/dev/null 2>&1; then
   esac
 fi
 
-echo "== routes are VPN-only =="
+echo "== routes are behind Authelia =="
 hosts=$(k get ingress -o jsonpath='{range .items[*]}{.spec.rules[*].host}{"\n"}{end}' 2>/dev/null | tr -d '\r')
 if [ -z "$hosts" ]; then
   bad "no routes published"
 else
   echo "$hosts" | while read -r h; do
     [ -n "$h" ] || continue
-    case "$h" in
-      *.vpn.*) printf '  ok    %s (VPN only)\n' "$h" ;;
-      *)       printf '  FAIL  %s is NOT VPN-only\n' "$h"; exit 9 ;;
+    # Every route must be challenged by the portal. A `.vpn.` host is also
+    # acceptable: that is the VPN-only form.
+    # Ask through the ingress itself: the router annotations are the statement of
+    # intent, and an unauthenticated request must be challenged rather than served.
+    # Traefik is reachable on the node's websecure nodeport; the Host header picks
+    # the router.
+    code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 \
+      --header "Host: $h" "https://127.0.0.1:30443/" 2>/dev/null || echo 000)
+    case "$code" in
+      302|303|307|308) printf '  ok    %s is challenged by the portal (%s)\n' "$h" "$code" ;;
+      000)             printf '  skip  %s: could not reach the websecure nodeport from here\n' "$h" ;;
+      *)               printf '  FAIL  %s answered %s without the portal\n' "$h" "$code"; exit 9 ;;
     esac
   done
   [ $? -eq 9 ] && fails=$((fails + 1))

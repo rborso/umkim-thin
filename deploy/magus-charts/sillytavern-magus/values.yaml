@@ -71,9 +71,16 @@ sillytavern:
       - 127.0.0.1
       - 10.244.0.0/16
       - 172.16.10.0/24
-    # The probe request carries no session; this is what lets the readiness check
-    # through without disabling the guard.
-    enableForwardedWhitelist: true
+    # OFF, and this is what makes a public route work. With it on, the whitelist
+    # middleware requires BOTH the proxy's socket address and the forwarded client
+    # address to be whitelisted:
+    #
+    #   if (!inWhitelist(clientIp) || (forwardedIp && !inWhitelist(forwardedIp))) 403
+    #
+    # Behind a public proxy the forwarded address is a real visitor's public IP,
+    # which is never in the whitelist, so every request 403s. With it off only the
+    # proxy is checked, and the proxy is whitelisted above.
+    enableForwardedWhitelist: false
     # Nothing is fetched at boot: the plugin and extensions are mounted.
     enableServerPlugins: true
     enableServerPluginsAutoUpdate: false

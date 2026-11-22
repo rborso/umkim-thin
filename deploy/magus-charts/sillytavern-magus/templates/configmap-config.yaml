@@ -8,6 +8,24 @@
   sso.trustedProxies is the TCP source address the app sees, which in Kubernetes
   is a pod IP — so it is set to the pod CIDR, the narrowest stable range there is.
   It is empty by default because the SSO flow is off unless an operator enables it.
+
+  privateAddressWhitelist is SillyTavern's SSRF guard. It is meant for OUTBOUND
+  requests but is also applied to the inbound Host header, so behind a reverse
+  proxy it rejects every request with "Rejected request from RFC1918 IP to public
+  server address" — the proxy's source is a pod address. It is therefore off; the
+  IP whitelist above and the portal are the inbound controls.
+
+  enableForwardedWhitelist is off, and that is what makes a public route work.
+  With it on, the whitelist middleware requires BOTH the proxy's socket address
+  and the forwarded client address to be whitelisted:
+
+      if (!inWhitelist(clientIp) || (forwardedIp && !inWhitelist(forwardedIp))) 403
+
+  Behind a public proxy the forwarded address is a real visitor's, which is never
+  in the whitelist, so every request 403s with "Rejected request from RFC1918 IP
+  to public server address". With it off, only the proxy is checked, and the proxy
+  is whitelisted. Enabling it does not
+  harden a proxied deployment, it breaks it.
 */ -}}
 {{- $base := dict
   "dataRoot" "./data"
@@ -20,7 +38,7 @@
   "enableKeepAlive" false
   "ssl" (dict "enabled" false)
   "whitelistMode" true
-  "enableForwardedWhitelist" true
+  "enableForwardedWhitelist" false
   "whitelistDockerHosts" true
   "basicAuthUser" (dict "username" "user" "password" "password")
   "enableCorsProxy" false
@@ -49,7 +67,7 @@
     "authentikAuth" false
     "trustedProxies" (list "::1" "127.0.0.1"))
   "privateAddressWhitelist" (dict
-    "enabled" true
+    "enabled" false
     "allowUnresolvedHosts" false
     "log" (dict "blockedRequests" true "allowedRequests" false)
     "allowedRanges" (list "127.0.0.0/8" "::1/128"))

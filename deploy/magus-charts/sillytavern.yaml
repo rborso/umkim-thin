@@ -19,11 +19,18 @@ route:
   mode: site
   host: "st.{{ .zone }}"
   requireAuth: true
-  # VPN only: two routes, neither of them published to the internet. The stack has
-  # no internet-facing surface by design.
+  # Authelia forward-auth on the public hostname.
+  #
+  # This works because the chart sets enableForwardedWhitelist=false: with it on,
+  # SillyTavern's whitelist middleware also checks the FORWARDED client address,
+  # which is a visitor's public IP and never whitelisted, so every request got a
+  # 403. Authelia still runs first, so no unauthenticated request reaches the app.
+  #
+  # `vpn` stays allowed so an operator can restrict it again without editing the
+  # entry.
   exposure:
-    default: vpn
-    allowed: [vpn]
+    default: authelia
+    allowed: [authelia, vpn]
   serviceName: sillytavern-sillytavern
   servicePort: 8000
 routes:
@@ -34,8 +41,8 @@ routes:
     serviceName: sillytavern-sillytavern
     servicePort: 8000
     exposure:
-      default: vpn
-      allowed: [vpn]
+      default: authelia
+      allowed: [authelia, vpn]
   - key: alkoto
     host: "alkoto.{{ .zone }}"
     mode: site
@@ -43,8 +50,8 @@ routes:
     serviceName: sillytavern-alkoto
     servicePort: 8765
     exposure:
-      default: vpn
-      allowed: [vpn]
+      default: authelia
+      allowed: [authelia, vpn]
 auth:
   # Authelia handles identity; SillyTavern itself runs single-user.
   kind: none
