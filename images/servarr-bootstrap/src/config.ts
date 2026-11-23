@@ -9,9 +9,25 @@ export interface BootstrapComponents {
   flaresolverr: boolean;
 }
 
+// The qBittorrent connection limits. They default to the values the chart has
+// always implied, so a bootstrap run that is not given them keeps the previous
+// behaviour. Setting the active limits too low is what wedges the queue: a
+// handful of dead torrents (no seeders) then holds every slot for ever and new
+// requests never start, which is exactly how a requested movie sits at 0 %
+// while qBittorrent reports it "queued".
+export interface QBittorrentLimits {
+  maxActiveTorrents: number;
+  maxActiveDownloads: number;
+  maxActiveUploads: number;
+  // Never let a stalled torrent hold a slot: qBittorrent otherwise counts it
+  // against maxActiveTorrents even when it is transferring nothing.
+  dontCountSlowTorrents: boolean;
+}
+
 export interface BootstrapConfig {
   qbtUsername: string;
   qbtPassword: string;
+  qbtLimits: QBittorrentLimits;
   jellyfinAdminUser: string;
   jellyfinAdminPassword: string;
   jellyfinLanguage: string;
@@ -71,6 +87,33 @@ function parseBool(name: string, defaultValue: boolean): boolean {
   return value === 'true' || value === '1' || value === 'yes';
 }
 
+// parsePositiveInt reads a count that must be a positive integer. An unset or
+// malformed value falls back to the default instead of failing the whole
+// bootstrap: a bad limit is a tuning problem, not a reason to leave the stack
+// unconfigured. Zero is rejected because qBittorrent reads it as "no torrents
+// active at all", which would silently stop every download.
+function parsePositiveInt(name: string, defaultValue: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return defaultValue;
+  }
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    console.warn(`==> qBittorrent: ignoring invalid ${name}=${raw}; using ${defaultValue}`);
+    return defaultValue;
+  }
+  return value;
+}
+
+function loadQBittorrentLimits(): QBittorrentLimits {
+  return {
+    maxActiveTorrents: parsePositiveInt('QBITTORRENT_MAX_ACTIVE_TORRENTS', 300),
+    maxActiveDownloads: parsePositiveInt('QBITTORRENT_MAX_ACTIVE_DOWNLOADS', 100),
+    maxActiveUploads: parsePositiveInt('QBITTORRENT_MAX_ACTIVE_UPLOADS', 100),
+    dontCountSlowTorrents: parseBool('QBITTORRENT_DONT_COUNT_SLOW_TORRENTS', true),
+  };
+}
+
 function loadComponents(): BootstrapComponents {
   return {
     sonarr: parseBool('BOOTSTRAP_ENABLE_SONARR', true),
@@ -97,6 +140,7 @@ export function loadConfig(): BootstrapConfig {
   return {
     qbtUsername: process.env.QBITTORRENT_USERNAME?.trim() || 'admin',
     qbtPassword: optionalWhen(components.qbittorrent || components.prowlarr, 'QBITTORRENT_PASSWORD'),
+    qbtLimits: loadQBittorrentLimits(),
     jellyfinAdminUser: optionalWhen(needsJellyfinCreds, 'JELLYFIN_ADMIN_USER', 'admin'),
     jellyfinAdminPassword: optionalWhen(needsJellyfinCreds, 'JELLYFIN_ADMIN_PASSWORD'),
     jellyfinLanguage: process.env.JELLYFIN_LANGUAGE?.trim() || mediaLanguage,

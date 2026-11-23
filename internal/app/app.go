@@ -316,6 +316,10 @@ type Options struct {
 	// ignored for other apps and default to the catalog values when empty.
 	MediaLanguage string
 	QualityCutoff string
+	// QBittorrentLimits are the media stack's qBittorrent connection limits.
+	// Nil means "use the catalog/chart default"; an upgrade that omits them
+	// keeps the values already stored on the release.
+	QBittorrentLimits *ServarrQBittorrentLimits
 	// ExtraLanguages creates optional language variants of the target quality
 	// after the default stack has been installed.
 	ExtraLanguages []string
@@ -936,6 +940,9 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 			if opts.QualityCutoff == "" {
 				opts.QualityCutoff = current.QualityCutoff
 			}
+			if opts.QBittorrentLimits == nil {
+				opts.QBittorrentLimits = current.QBittorrentLimits
+			}
 		} else if bootstrap, ok := values["bootstrap"].(map[string]any); ok {
 			if opts.MediaLanguage == "" {
 				if v, ok := bootstrap["mediaLanguage"].(string); ok {
@@ -947,18 +954,46 @@ func (in *Installer) Install(e catalog.Entry, opts Options) (Result, error) {
 					opts.QualityCutoff = v
 				}
 			}
+			if opts.QBittorrentLimits == nil {
+				if raw, ok := bootstrap["qbittorrentLimits"].(map[string]any); ok {
+					limits := DefaultServarrQBittorrentLimits()
+					if v, ok := numberValue(raw["maxActiveTorrents"]); ok {
+						limits.MaxActiveTorrents = v
+					}
+					if v, ok := numberValue(raw["maxActiveDownloads"]); ok {
+						limits.MaxActiveDownloads = v
+					}
+					if v, ok := numberValue(raw["maxActiveUploads"]); ok {
+						limits.MaxActiveUploads = v
+					}
+					if v, ok := raw["dontCountSlowTorrents"].(bool); ok {
+						limits.DontCountSlowTorrents = v
+					}
+					opts.QBittorrentLimits = &limits
+				}
+			}
 		}
 		settings, err := NormalizeServarrSettings(ServarrSettings{
-			MediaLanguage: opts.MediaLanguage,
-			QualityCutoff: opts.QualityCutoff,
+			MediaLanguage:     opts.MediaLanguage,
+			QualityCutoff:     opts.QualityCutoff,
+			QBittorrentLimits: opts.QBittorrentLimits,
 		})
 		if err != nil {
 			return Result{}, err
 		}
 		opts.MediaLanguage = settings.MediaLanguage
 		opts.QualityCutoff = settings.QualityCutoff
+		opts.QBittorrentLimits = settings.QBittorrentLimits
 		set(values, "bootstrap.mediaLanguage", settings.MediaLanguage)
 		set(values, "bootstrap.qualityCutoff", settings.QualityCutoff)
+		if l := settings.QBittorrentLimits; l != nil {
+			set(values, "bootstrap.qbittorrentLimits", map[string]any{
+				"maxActiveTorrents":     l.MaxActiveTorrents,
+				"maxActiveDownloads":    l.MaxActiveDownloads,
+				"maxActiveUploads":      l.MaxActiveUploads,
+				"dontCountSlowTorrents": l.DontCountSlowTorrents,
+			})
+		}
 	}
 	if e.Auth.LDAP {
 		set(values, "auth.ldap", map[string]any{

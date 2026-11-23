@@ -24,12 +24,12 @@ links:
 
 chart:
   ref: https://github.com/rborso/umkim-charts/tree/main/servarr
-  version: 0.3.7
+  version: 0.3.8
   versions:
-    - version: 0.3.7
+    - version: 0.3.8
       appVersion: 1.0.0
       channel: stable
-    - version: 0.3.6
+    - version: 0.3.7
       appVersion: 1.0.0
       channel: stable
 
@@ -167,6 +167,15 @@ values:
     qualityCutoff: 720p
     seerrAutoApprove: true
     jellyfinLibraryScanMinutes: 15
+    # qBittorrent connection limits. A small active limit lets a few dead
+    # torrents (no seeders) hold every slot, so a new request sits at "queued"
+    # for ever. These are the install-time defaults; the console's Servarr
+    # settings panel edits them afterwards.
+    qbittorrentLimits:
+      maxActiveTorrents: 300
+      maxActiveDownloads: 100
+      maxActiveUploads: 100
+      dontCountSlowTorrents: true
 
 verify:
   playwright: tests/playwright/journeys/servarr.spec.ts
@@ -176,11 +185,12 @@ verify:
     - authenticated_request_reaches_app
     - tenant_ui_servarr
   human:
-    date: "2026-11-19"
-    version: "0.3.7"
+    date: "2026-11-23"
+    version: "0.3.8"
     by: agent
-    targets: [single, ha]
+    targets: [single]
     did:
-      - "loaded each *arr UI and Jellyfin through the portal as the invited tenant, with no authorization loop"
-      - "confirmed each *arr answers its own API with its key, and a root folder can be created on the shared media volume"
-      - "removed from the single-node target afterwards to free memory; the stack lives on HA"
+      - "ran the 0.3.8 bootstrap against the live stack: the qBittorrent limits arrived from QBITTORRENT_MAX_ACTIVE_* and were applied through setPreferences (250/90/80 in the test, then the shipped 300/100/100)"
+      - "before the fix, three approved movies sat at 0 % while five dead torrents (seeds=0) held all five active slots for eleven days; after raising the limits and clearing them, all three started downloading"
+      - "followed one request end to end: qBittorrent 100 % -> Radarr imported hasFile=true -> Jellyfin scan -> Seerr fired MEDIA_AVAILABLE and the request became available"
+      - "earlier 0.3.7 pass covered the *arr UIs, Jellyfin and API keys through the portal as the invited tenant on single and ha"

@@ -1067,6 +1067,16 @@ const MEDIA_QUALITY_OPTIONS = [
   { value: '2160p', label: '2160p (4K)' },
 ];
 
+// Shipped qBittorrent connection limits, matching the chart's
+// bootstrap.qbittorrentLimits defaults. The server sends its own copy for the
+// settings panel; these are the install form's starting values.
+const DEFAULT_QBT_LIMITS = {
+  maxActiveTorrents: 300,
+  maxActiveDownloads: 100,
+  maxActiveUploads: 100,
+  dontCountSlowTorrents: true,
+};
+
 
 function optionMarkup(options, chosen) {
   return options.map(option =>
@@ -1833,7 +1843,21 @@ function openInstall(e) {
       `<div><label>Target resolution</label><select id="install-media-quality">${optionMarkup(MEDIA_QUALITY_OPTIONS, '720p')}</select></div>` +
       `<div><label>Additional languages (optional, same target)</label>` +
       `<select id="install-extra-languages" multiple size="5">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, '')}</select>` +
-      `<span class="hint">Ctrl/Cmd-click to offer additional language profiles. The default stays the default.</span></div>`
+      `<span class="hint">Ctrl/Cmd-click to offer additional language profiles. The default stays the default.</span></div>` +
+      // qBittorrent connection limits. The hint matters: a small active limit is
+      // the classic reason a requested film never starts.
+      `<div><label>qBittorrent max active torrents</label>` +
+      `<input id="install-qbt-torrents" type="number" min="1" max="100000" step="1" value="${DEFAULT_QBT_LIMITS.maxActiveTorrents}" style="width:7rem">` +
+      `<span class="hint">How many torrents may be active at once. Too low and a few dead torrents hold every slot, so new requests sit at "queued".</span></div>` +
+      `<div><label>qBittorrent max active downloads</label>` +
+      `<input id="install-qbt-downloads" type="number" min="1" max="100000" step="1" value="${DEFAULT_QBT_LIMITS.maxActiveDownloads}" style="width:7rem"></div>` +
+      `<div><label>qBittorrent max active uploads</label>` +
+      `<input id="install-qbt-uploads" type="number" min="1" max="100000" step="1" value="${DEFAULT_QBT_LIMITS.maxActiveUploads}" style="width:7rem"></div>` +
+      `<div><label>Skip stalled torrents</label>` +
+      `<select id="install-qbt-slow">` +
+      `<option value="true" selected>Yes — a stalled torrent must not hold a slot</option>` +
+      `<option value="false">No — count every active torrent against the limit</option>` +
+      `</select></div>`
     : e.Name === 'nextcloud'
     ? `<div><label>Default app language</label><select id="install-language">${optionMarkup(MEDIA_LANGUAGE_OPTIONS, 'en')}</select></div>` +
       `<span class="hint">New Nextcloud users default to this language; existing users keep their own choice.</span>`
@@ -2277,6 +2301,15 @@ function installRequestBody(e, panel) {
     body.qualityCutoff = document.getElementById('install-media-quality').value;
     body.extraLanguages = Array.from(document.getElementById('install-extra-languages').selectedOptions)
       .map(option => option.value);
+    const qbtTorrents = document.getElementById('install-qbt-torrents');
+    if (qbtTorrents) {
+      body.qbittorrentLimits = {
+        maxActiveTorrents: Number(document.getElementById('install-qbt-torrents').value),
+        maxActiveDownloads: Number(document.getElementById('install-qbt-downloads').value),
+        maxActiveUploads: Number(document.getElementById('install-qbt-uploads').value),
+        dontCountSlowTorrents: document.getElementById('install-qbt-slow').value === 'true',
+      };
+    }
   }
   if (e.Name === 'nextcloud') body.language = document.getElementById('install-language').value;
   if (e.Name === 'gitea') body.language = document.getElementById('install-gitea-language').value;

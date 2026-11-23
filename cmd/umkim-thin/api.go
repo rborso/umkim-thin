@@ -85,9 +85,13 @@ type installRequest struct {
 	Certificate     map[string]string                 `json:"certificate"`
 	MediaLanguage   string                            `json:"mediaLanguage"`
 	QualityCutoff   string                            `json:"qualityCutoff"`
-	ExtraLanguages  []string                          `json:"extraLanguages"`
-	Language        string                            `json:"language"`
-	OCRLanguage     string                            `json:"ocrLanguage"`
+	// QBittorrentLimits is the media stack's qBittorrent connection limits.
+	// Absent means "use the catalog/chart defaults", so an existing install
+	// form keeps its behaviour.
+	QBittorrentLimits *app.ServarrQBittorrentLimits `json:"qbittorrentLimits"`
+	ExtraLanguages    []string                      `json:"extraLanguages"`
+	Language          string                        `json:"language"`
+	OCRLanguage       string                        `json:"ocrLanguage"`
 	// AISettings is the AI stack's model/context/GPU choice. Absent means the
 	// catalog's values, so an existing install form keeps its behaviour.
 	AISettings *app.AISettings `json:"aiSettings"`
@@ -105,7 +109,8 @@ func (r installRequest) options() app.Options {
 		ChartVersion: r.Version, Exposure: r.Exposure, AllowLocal: r.AllowLocal,
 		Certificate: r.Certificate, MediaLanguage: r.MediaLanguage,
 		QualityCutoff: r.QualityCutoff, ExtraLanguages: r.ExtraLanguages,
-		Language: r.Language, OCRLanguage: r.OCRLanguage,
+		QBittorrentLimits: r.QBittorrentLimits,
+		Language:          r.Language, OCRLanguage: r.OCRLanguage,
 		AISettings: r.AISettings, GPUVRAMBytes: r.GPUVRAMBytes,
 	}
 	if opts.Hosts == nil {
@@ -396,11 +401,19 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		limits := settings.QBittorrentLimits
+		if limits == nil {
+			l := app.DefaultServarrQBittorrentLimits()
+			limits = &l
+		}
 		writeJSON(w, map[string]any{
-			"mediaLanguage": settings.MediaLanguage,
-			"qualityCutoff": settings.QualityCutoff,
-			"languages":     app.ServarrLanguageOptions(),
-			"qualities":     app.ServarrQualityOptions(),
+			"mediaLanguage":     settings.MediaLanguage,
+			"qualityCutoff":     settings.QualityCutoff,
+			"qbittorrentLimits": limits,
+			"languages":         app.ServarrLanguageOptions(),
+			"qualities":         app.ServarrQualityOptions(),
+			// The defaults, so the UI can offer a reset without hardcoding them.
+			"defaultQBittorrentLimits": app.DefaultServarrQBittorrentLimits(),
 		})
 	})
 	servarrTarget := func(w http.ResponseWriter, r *http.Request) (catalog.Entry, string, bool) {
@@ -578,7 +591,12 @@ func serveAPI(catalogDir, addr, homeAddr string) error {
 			return
 		}
 		audit(r, auth, "servarr-defaults", app.ServarrApp,
-			fmt.Sprintf("language=%s quality=%s", settings.MediaLanguage, settings.QualityCutoff))
+			fmt.Sprintf("language=%s quality=%s torrents=%d/%d/%d slow=%t",
+				settings.MediaLanguage, settings.QualityCutoff,
+				settings.QBittorrentLimits.MaxActiveTorrents,
+				settings.QBittorrentLimits.MaxActiveDownloads,
+				settings.QBittorrentLimits.MaxActiveUploads,
+				settings.QBittorrentLimits.DontCountSlowTorrents))
 		writeJSON(w, jobs.start("setup", app.ServarrApp, func(progress func(string)) (any, error) {
 			return installer.SetupServarr(e, settings, progress)
 		}))

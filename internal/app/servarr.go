@@ -33,11 +33,45 @@ const (
 )
 
 // ServarrSettings are the operator-selectable defaults for the media stack.
-// They become chart values (`bootstrap.mediaLanguage`/`bootstrap.qualityCutoff`)
-// and are reconciled by the bootstrap into Sonarr, Radarr, Seerr and Jellyfin.
+// They become chart values (`bootstrap.mediaLanguage`/`bootstrap.qualityCutoff`
+// and `bootstrap.qbittorrentLimits.*`) and are reconciled by the bootstrap into
+// Sonarr, Radarr, Seerr, Jellyfin and qBittorrent.
 type ServarrSettings struct {
 	MediaLanguage string `json:"mediaLanguage"`
 	QualityCutoff string `json:"qualityCutoff"`
+	// QBittorrentLimits controls how many torrents qBittorrent may run at once.
+	// It is a pointer so an upgrade that does not mention it keeps the
+	// operator's stored values instead of silently resetting them.
+	QBittorrentLimits *ServarrQBittorrentLimits `json:"qbittorrentLimits,omitempty"`
+}
+
+// ServarrQBittorrentLimits mirrors the chart's `bootstrap.qbittorrentLimits`
+// values and the bootstrap's QBITTORRENT_MAX_ACTIVE_* environment variables.
+type ServarrQBittorrentLimits struct {
+	MaxActiveTorrents     int  `json:"maxActiveTorrents"`
+	MaxActiveDownloads    int  `json:"maxActiveDownloads"`
+	MaxActiveUploads      int  `json:"maxActiveUploads"`
+	DontCountSlowTorrents bool `json:"dontCountSlowTorrents"`
+}
+
+// Bounds for the qBittorrent limits. The upper bound is well above any home
+// library; it exists so a typo (or a pasted value with a stray digit) cannot
+// turn into a number qBittorrent would refuse or that would make the WebUI
+// unusable.
+const (
+	maxTorrentLimitCeiling = 100000
+	maxTorrentLimitFloor   = 1
+)
+
+// DefaultServarrQBittorrentLimits is the shipped default: generous enough that
+// dead torrents cannot starve the queue.
+func DefaultServarrQBittorrentLimits() ServarrQBittorrentLimits {
+	return ServarrQBittorrentLimits{
+		MaxActiveTorrents:     300,
+		MaxActiveDownloads:    100,
+		MaxActiveUploads:      100,
+		DontCountSlowTorrents: true,
+	}
 }
 
 // SettingOption is one value/label pair for the console's selectors.
@@ -90,7 +124,44 @@ func ServarrQualityOptions() []SettingOption {
 }
 
 func DefaultServarrSettings() ServarrSettings {
-	return ServarrSettings{MediaLanguage: "en", QualityCutoff: "720p"}
+	limits := DefaultServarrQBittorrentLimits()
+	return ServarrSettings{MediaLanguage: "en", QualityCutoff: "720p", QBittorrentLimits: &limits}
+}
+
+// NormalizeServarrQBittorrentLimits validates the connection limits. A limit of
+// zero is rejected rather than coerced: qBittorrent reads 0 as "no torrents
+// active", so accepting it would stop every download silently.
+func NormalizeServarrQBittorrentLimits(l ServarrQBittorrentLimits) (ServarrQBittorrentLimits, error) {
+	check := func(name string, v int) error {
+		if v < maxTorrentLimitFloor || v > maxTorrentLimitCeiling {
+			return fmt.Errorf("%s must be between %d and %d (got %d)",
+				name, maxTorrentLimitFloor, maxTorrentLimitCeiling, v)
+		}
+		return nil
+	}
+	if err := check("maxActiveTorrents", l.MaxActiveTorrents); err != nil {
+		return ServarrQBittorrentLimits{}, err
+	}
+	if err := check("maxActiveDownloads", l.MaxActiveDownloads); err != nil {
+		return ServarrQBittorrentLimits{}, err
+	}
+	if err := check("maxActiveUploads", l.MaxActiveUploads); err != nil {
+		return ServarrQBittorrentLimits{}, err
+	}
+	// qBittorrent applies max_active_downloads/uploads within max_active_torrents,
+	// so a total smaller than either limit makes the per-direction limit
+	// unreachable and the UI misleading.
+	if l.MaxActiveDownloads > l.MaxActiveTorrents {
+		return ServarrQBittorrentLimits{}, fmt.Errorf(
+			"maxActiveDownloads (%d) cannot exceed maxActiveTorrents (%d)",
+			l.MaxActiveDownloads, l.MaxActiveTorrents)
+	}
+	if l.MaxActiveUploads > l.MaxActiveTorrents {
+		return ServarrQBittorrentLimits{}, fmt.Errorf(
+			"maxActiveUploads (%d) cannot exceed maxActiveTorrents (%d)",
+			l.MaxActiveUploads, l.MaxActiveTorrents)
+	}
+	return l, nil
 }
 
 // NormalizeServarrSettings accepts the console's short language code and target
@@ -132,6 +203,18 @@ func NormalizeServarrSettings(s ServarrSettings) (ServarrSettings, error) {
 	if !knownQuality {
 		return ServarrSettings{}, fmt.Errorf("unsupported target quality %q", s.QualityCutoff)
 	}
+
+	// Absent limits mean "keep the shipped default". An explicit zero is a
+	// caller error and is rejected below, so a typo cannot stop every download.
+	limits := DefaultServarrQBittorrentLimits()
+	if s.QBittorrentLimits != nil {
+		limits = *s.QBittorrentLimits
+	}
+	normalized, err := NormalizeServarrQBittorrentLimits(limits)
+	if err != nil {
+		return ServarrSettings{}, err
+	}
+	s.QBittorrentLimits = &normalized
 	return s, nil
 }
 
@@ -155,15 +238,56 @@ func (in *Installer) ServarrSettingsFor(release, namespace string) (ServarrSetti
 	if err := json.Unmarshal([]byte(out), &values); err != nil {
 		return s, fmt.Errorf("reading servarr values: %w", err)
 	}
-	if bootstrap, ok := values["bootstrap"].(map[string]any); ok {
-		if v, ok := bootstrap["mediaLanguage"].(string); ok && v != "" {
-			s.MediaLanguage = v
-		}
-		if v, ok := bootstrap["qualityCutoff"].(string); ok && v != "" {
-			s.QualityCutoff = v
-		}
+	return NormalizeServarrSettings(servarrSettingsFromValues(values))
+}
+
+// servarrSettingsFromValues reads the media defaults out of a Helm release's
+// values. A release installed before a setting existed simply lacks it, and
+// every absent field keeps the shipped default - never zero, which for a
+// connection limit would stop every download.
+func servarrSettingsFromValues(values map[string]any) ServarrSettings {
+	s := DefaultServarrSettings()
+	bootstrap, ok := values["bootstrap"].(map[string]any)
+	if !ok {
+		return s
 	}
-	return NormalizeServarrSettings(s)
+	if v, ok := bootstrap["mediaLanguage"].(string); ok && v != "" {
+		s.MediaLanguage = v
+	}
+	if v, ok := bootstrap["qualityCutoff"].(string); ok && v != "" {
+		s.QualityCutoff = v
+	}
+	if raw, ok := bootstrap["qbittorrentLimits"].(map[string]any); ok {
+		limits := DefaultServarrQBittorrentLimits()
+		if v, ok := numberValue(raw["maxActiveTorrents"]); ok {
+			limits.MaxActiveTorrents = v
+		}
+		if v, ok := numberValue(raw["maxActiveDownloads"]); ok {
+			limits.MaxActiveDownloads = v
+		}
+		if v, ok := numberValue(raw["maxActiveUploads"]); ok {
+			limits.MaxActiveUploads = v
+		}
+		if v, ok := raw["dontCountSlowTorrents"].(bool); ok {
+			limits.DontCountSlowTorrents = v
+		}
+		s.QBittorrentLimits = &limits
+	}
+	return s
+}
+
+// numberValue reads a number from a Helm JSON value. Helm renders values from
+// YAML, so an integer can arrive as float64 (JSON) or int; both are accepted.
+func numberValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	}
+	return 0, false
 }
 
 // EnsureServarrSecret creates/updates the Secret the chart's initContainers and
@@ -627,8 +751,16 @@ func (in *Installer) enableBootstrap(e catalog.Entry, node, tag string, settings
 		"--set", "bootstrap.mediaLanguage=" + settings.MediaLanguage,
 		"--set", "bootstrap.qualityCutoff=" + settings.QualityCutoff,
 		"--set", `bootstrap.nodeSelector.kubernetes\.io/hostname=` + node,
-		"--wait", "--timeout", "30m",
 	}
+	if l := settings.QBittorrentLimits; l != nil {
+		args = append(args,
+			"--set", fmt.Sprintf("bootstrap.qbittorrentLimits.maxActiveTorrents=%d", l.MaxActiveTorrents),
+			"--set", fmt.Sprintf("bootstrap.qbittorrentLimits.maxActiveDownloads=%d", l.MaxActiveDownloads),
+			"--set", fmt.Sprintf("bootstrap.qbittorrentLimits.maxActiveUploads=%d", l.MaxActiveUploads),
+			"--set", fmt.Sprintf("bootstrap.qbittorrentLimits.dontCountSlowTorrents=%t", l.DontCountSlowTorrents),
+		)
+	}
+	args = append(args, "--wait", "--timeout", "30m")
 	out, err := in.runStream(in.cfg.Helm, args, func(line string) { step("%s", line) })
 	if err != nil {
 		return fmt.Errorf("helm upgrade: %w\n%s", err, out)

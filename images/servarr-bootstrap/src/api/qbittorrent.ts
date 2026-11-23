@@ -13,6 +13,7 @@ export async function configureQBittorrent(config: BootstrapConfig): Promise<voi
   );
 
   const savePath = String(prefs.save_path ?? '');
+  const limits = config.qbtLimits;
   const updatedPrefs = {
     ...prefs,
     save_path: '/media/downloads',
@@ -20,9 +21,28 @@ export async function configureQBittorrent(config: BootstrapConfig): Promise<voi
     bypass_local_auth: true,
     bypass_auth_subnet_whitelist_enabled: true,
     bypass_auth_subnet_whitelist: '172.16.0.0/12',
+    // Connection limits. Queueing has to be on for these to mean anything;
+    // with it off every torrent is active and the limits are ignored.
+    queueing_enabled: true,
+    max_active_torrents: limits.maxActiveTorrents,
+    max_active_downloads: limits.maxActiveDownloads,
+    max_active_uploads: limits.maxActiveUploads,
+    dont_count_slow_torrents: limits.dontCountSlowTorrents,
   };
 
-  if (savePath !== '/media/downloads' || !prefs.bypass_local_auth) {
+  // Compare every value this function owns, not just the save path: a stack
+  // installed before the limits existed has the old 5/6/3 defaults written to
+  // its config, and "already configured" would then leave it wedged.
+  const stale =
+    savePath !== '/media/downloads' ||
+    !prefs.bypass_local_auth ||
+    prefs.max_active_torrents !== limits.maxActiveTorrents ||
+    prefs.max_active_downloads !== limits.maxActiveDownloads ||
+    prefs.max_active_uploads !== limits.maxActiveUploads ||
+    prefs.dont_count_slow_torrents !== limits.dontCountSlowTorrents ||
+    prefs.queueing_enabled !== true;
+
+  if (stale) {
     const response = await http('POST', `${base}/api/v2/app/setPreferences`, {
       headers: authHeaders(),
       form: {
@@ -33,7 +53,11 @@ export async function configureQBittorrent(config: BootstrapConfig): Promise<voi
       const body = await response.text();
       throw new Error(`qBittorrent setPreferences failed: HTTP ${response.status} ${body}`);
     }
-    console.log('==> qBittorrent: updated preferences (save path / auth bypass)');
+    console.log(
+      '==> qBittorrent: updated preferences (save path / auth bypass / limits ' +
+        `${limits.maxActiveTorrents} total, ${limits.maxActiveDownloads} down, ` +
+        `${limits.maxActiveUploads} up)`,
+    );
   } else {
     console.log('==> qBittorrent: preferences already configured');
   }

@@ -155,10 +155,112 @@ func TestNormalizeServarrSettings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The limits are a pointer, so compare them separately and require
+			// the shipped default when the input did not carry any.
+			if got.QBittorrentLimits == nil {
+				t.Fatal("normalized settings lost the qBittorrent limits")
+			}
+			wantLimits := DefaultServarrQBittorrentLimits()
+			if *got.QBittorrentLimits != wantLimits {
+				t.Fatalf("limits = %+v, want %+v", *got.QBittorrentLimits, wantLimits)
+			}
+			if got.QBittorrentLimits != nil {
+				got.QBittorrentLimits = nil
+			}
 			if got != tc.want {
 				t.Fatalf("got %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The queue wedge that made a requested film sit at 0 % is a tuning bug, so the
+// limits are validated rather than trusted: 0 stops every download, and a
+// per-direction limit above the total can never be reached.
+func TestNormalizeServarrQBittorrentLimits(t *testing.T) {
+	defaults := DefaultServarrQBittorrentLimits()
+	cases := []struct {
+		name    string
+		mutate  func(*ServarrQBittorrentLimits)
+		wantErr bool
+	}{
+		{name: "shipped defaults are valid"},
+		{
+			name:    "zero torrents is refused, qBittorrent reads it as 'none active'",
+			mutate:  func(l *ServarrQBittorrentLimits) { l.MaxActiveTorrents = 0 },
+			wantErr: true,
+		},
+		{
+			name:    "zero downloads is refused",
+			mutate:  func(l *ServarrQBittorrentLimits) { l.MaxActiveDownloads = 0 },
+			wantErr: true,
+		},
+		{
+			name:    "downloads above the total is refused",
+			mutate:  func(l *ServarrQBittorrentLimits) { l.MaxActiveDownloads = l.MaxActiveTorrents + 1 },
+			wantErr: true,
+		},
+		{
+			name:    "uploads above the total is refused",
+			mutate:  func(l *ServarrQBittorrentLimits) { l.MaxActiveUploads = l.MaxActiveTorrents + 1 },
+			wantErr: true,
+		},
+		{
+			name:    "negative is refused",
+			mutate:  func(l *ServarrQBittorrentLimits) { l.MaxActiveTorrents = -5 },
+			wantErr: true,
+		},
+		{
+			name:   "equal to the total is allowed",
+			mutate: func(l *ServarrQBittorrentLimits) { l.MaxActiveDownloads = l.MaxActiveTorrents },
+		},
+		{
+			name:   "a larger total is allowed",
+			mutate: func(l *ServarrQBittorrentLimits) { l.MaxActiveTorrents = 5000 },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := defaults
+			if tc.mutate != nil {
+				tc.mutate(&l)
+			}
+			got, err := NormalizeServarrQBittorrentLimits(l)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %+v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != l {
+				t.Fatalf("got %+v, want %+v", got, l)
+			}
+		})
+	}
+}
+
+// An explicit limit set by the caller must survive normalization instead of
+// being replaced by the defaults.
+func TestNormalizeServarrSettingsKeepsGivenLimits(t *testing.T) {
+	in := ServarrSettings{
+		MediaLanguage: "en",
+		QualityCutoff: "1080p",
+		QBittorrentLimits: &ServarrQBittorrentLimits{
+			MaxActiveTorrents:     750,
+			MaxActiveDownloads:    250,
+			MaxActiveUploads:      250,
+			DontCountSlowTorrents: false,
+		},
+	}
+	got, err := NormalizeServarrSettings(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.QBittorrentLimits == nil || *got.QBittorrentLimits != *in.QBittorrentLimits {
+		t.Fatalf("limits = %+v, want %+v", got.QBittorrentLimits, in.QBittorrentLimits)
 	}
 }
 
@@ -185,5 +287,76 @@ func TestBootstrapImageTag(t *testing.T) {
 	}
 	if !strings.HasPrefix(tag, "localhost/umkim-thin/servarr-bootstrap:0.2.23-") || len(tag) <= len(want)-len("abc123def456") {
 		t.Fatalf("unexpected fallback tag %q", tag)
+	}
+}
+
+// A release installed before the limits existed must read back as the shipped
+// defaults, never as zero. Zero is what qBittorrent treats as "no torrents
+// active", so a partial read would silently stop every download after an
+// upgrade.
+func TestServarrSettingsFromValues(t *testing.T) {
+	defaults := DefaultServarrQBittorrentLimits()
+	cases := []struct {
+		name  string
+		value map[string]any
+		want  ServarrSettings
+	}{
+		{
+			name:  "no bootstrap block at all",
+			value: map[string]any{},
+			want:  ServarrSettings{MediaLanguage: "en", QualityCutoff: "720p", QBittorrentLimits: &defaults},
+		},
+		{
+			name: "an old release with only language and quality",
+			value: map[string]any{"bootstrap": map[string]any{
+				"mediaLanguage": "hu", "qualityCutoff": "1080p",
+			}},
+			want: ServarrSettings{MediaLanguage: "hu", QualityCutoff: "1080p", QBittorrentLimits: &defaults},
+		},
+		{
+			name: "a full limits block",
+			value: map[string]any{"bootstrap": map[string]any{
+				"mediaLanguage": "en", "qualityCutoff": "720p",
+				"qbittorrentLimits": map[string]any{
+					"maxActiveTorrents": float64(400), "maxActiveDownloads": float64(150),
+					"maxActiveUploads": float64(120), "dontCountSlowTorrents": false,
+				},
+			}},
+			want: ServarrSettings{MediaLanguage: "en", QualityCutoff: "720p",
+				QBittorrentLimits: &ServarrQBittorrentLimits{
+					MaxActiveTorrents: 400, MaxActiveDownloads: 150,
+					MaxActiveUploads: 120, DontCountSlowTorrents: false,
+				}},
+		},
+		{
+			name: "a partial limits block keeps the rest at the defaults",
+			value: map[string]any{"bootstrap": map[string]any{
+				"qbittorrentLimits": map[string]any{"maxActiveTorrents": float64(600)},
+			}},
+			want: ServarrSettings{MediaLanguage: "en", QualityCutoff: "720p",
+				QBittorrentLimits: func() *ServarrQBittorrentLimits {
+					l := defaults
+					l.MaxActiveTorrents = 600
+					return &l
+				}()},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := servarrSettingsFromValues(tc.value)
+			if got.QBittorrentLimits == nil {
+				t.Fatal("no limits produced")
+			}
+			gotLimits := *got.QBittorrentLimits
+			got.QBittorrentLimits = nil
+			wantLimits := *tc.want.QBittorrentLimits
+			tc.want.QBittorrentLimits = nil
+			if got != tc.want {
+				t.Fatalf("settings = %+v, want %+v", got, tc.want)
+			}
+			if gotLimits != wantLimits {
+				t.Fatalf("limits = %+v, want %+v", gotLimits, wantLimits)
+			}
+		})
 	}
 }

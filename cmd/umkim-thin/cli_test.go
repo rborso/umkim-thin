@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rborso/umkim-thin/internal/app"
 	"github.com/rborso/umkim-thin/internal/catalog"
 )
 
@@ -148,4 +149,59 @@ func TestInstallFlagsBuildOptions(t *testing.T) {
 		opts.Exposure[""] != "vpn" {
 		t.Fatalf("options = %+v", opts)
 	}
+}
+
+// The qBittorrent limits are the tuning that decides whether a requested film
+// ever starts, so the flags must build a complete set - and omitting them must
+// stay distinguishable from setting them, or an upgrade would reset an
+// operator's values on every reinstall.
+func TestInstallFlagsQBittorrentLimits(t *testing.T) {
+	entry := catalog.Entry{Name: "servarr", Namespace: "servarr",
+		Route: &catalog.Route{Key: "", Host: "servarr.example.com", Mode: "site"}}
+
+	t.Run("omitted means nil so an upgrade keeps the stored values", func(t *testing.T) {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		f := addInstallFlags(fs)
+		if err := fs.Parse(nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.options(entry).QBittorrentLimits; got != nil {
+			t.Fatalf("limits = %+v, want nil", got)
+		}
+	})
+
+	t.Run("a partial set is completed from the shipped defaults", func(t *testing.T) {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		f := addInstallFlags(fs)
+		if err := fs.Parse([]string{"--qbittorrent-max-torrents", "500"}); err != nil {
+			t.Fatal(err)
+		}
+		got := f.options(entry).QBittorrentLimits
+		want := app.DefaultServarrQBittorrentLimits()
+		want.MaxActiveTorrents = 500
+		if got == nil || *got != want {
+			t.Fatalf("limits = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("all four are parsed", func(t *testing.T) {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		f := addInstallFlags(fs)
+		if err := fs.Parse([]string{
+			"--qbittorrent-max-torrents", "750",
+			"--qbittorrent-max-downloads", "250",
+			"--qbittorrent-max-uploads", "200",
+			"--qbittorrent-dont-count-slow", "false",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got := f.options(entry).QBittorrentLimits
+		want := app.ServarrQBittorrentLimits{
+			MaxActiveTorrents: 750, MaxActiveDownloads: 250,
+			MaxActiveUploads: 200, DontCountSlowTorrents: false,
+		}
+		if got == nil || *got != want {
+			t.Fatalf("limits = %+v, want %+v", got, want)
+		}
+	})
 }

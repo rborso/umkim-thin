@@ -49,6 +49,11 @@ type installFlags struct {
 	mediaLanguage   *string
 	qualityCutoff   *string
 	allowLocal      *bool
+	// qBittorrent connection limits for the media stack.
+	qbtMaxTorrents   *int
+	qbtMaxDownloads  *int
+	qbtMaxUploads    *int
+	qbtDontCountSlow *string
 }
 
 // splitName takes the first non-flag token as the positional name, so a
@@ -73,6 +78,12 @@ func addInstallFlags(fs *flag.FlagSet) *installFlags {
 	f.ocrLanguage = fs.String("ocr-language", "", "Paperless OCR language")
 	f.mediaLanguage = fs.String("media-language", "", "media stack default language")
 	f.qualityCutoff = fs.String("quality-cutoff", "", "media stack quality cutoff (e.g. 720p)")
+	f.qbtMaxTorrents = fs.Int("qbittorrent-max-torrents", 0, "media stack: max active torrents (default 300)")
+	f.qbtMaxDownloads = fs.Int("qbittorrent-max-downloads", 0, "media stack: max active downloads (default 100)")
+	f.qbtMaxUploads = fs.Int("qbittorrent-max-uploads", 0, "media stack: max active uploads (default 100)")
+	// A string flag, not a bool: "unset" and "explicitly false" must be
+	// distinguishable, and an upgrade that omits it keeps the stored value.
+	f.qbtDontCountSlow = fs.String("qbittorrent-dont-count-slow", "", "media stack: do not let stalled torrents hold an active slot (true|false)")
 	f.allowLocal = fs.Bool("allow-local", false, "also allow the site LAN on VPN routes")
 	fs.Var(&f.hosts, "host", "route host; for multi-route apps use key=host (repeatable)")
 	fs.Var(&f.exposures, "exposure", "public|authelia|vpn; multi-route key=value (repeatable)")
@@ -92,10 +103,42 @@ func (f *installFlags) options(e catalog.Entry) app.Options {
 		Exposure: f.exposures.m, Certificate: f.certificates.m,
 		ChartVersion: *f.version, Language: *f.language, OCRLanguage: *f.ocrLanguage,
 		MediaLanguage: *f.mediaLanguage, QualityCutoff: *f.qualityCutoff,
-		ExtraLanguages: f.extraLanguages.values(),
+		ExtraLanguages:    f.extraLanguages.values(),
+		QBittorrentLimits: f.qbtLimits(),
 	}
 	applyAllowLocal(e, &opts, *f.allowLocal)
 	return opts
+}
+
+// qbtLimits builds the qBittorrent limits from the flags. It returns nil when
+// no limit flag was given, which keeps an upgrade's stored values. When only
+// some are given, the rest come from the shipped defaults so the result is
+// always a complete, valid set.
+func (f *installFlags) qbtLimits() *app.ServarrQBittorrentLimits {
+	slowRaw := strings.TrimSpace(*f.qbtDontCountSlow)
+	given := *f.qbtMaxTorrents > 0 || *f.qbtMaxDownloads > 0 || *f.qbtMaxUploads > 0 || slowRaw != ""
+	if !given {
+		return nil
+	}
+	limits := app.DefaultServarrQBittorrentLimits()
+	if *f.qbtMaxTorrents > 0 {
+		limits.MaxActiveTorrents = *f.qbtMaxTorrents
+	}
+	if *f.qbtMaxDownloads > 0 {
+		limits.MaxActiveDownloads = *f.qbtMaxDownloads
+	}
+	if *f.qbtMaxUploads > 0 {
+		limits.MaxActiveUploads = *f.qbtMaxUploads
+	}
+	if slowRaw != "" {
+		switch strings.ToLower(slowRaw) {
+		case "true", "1", "yes", "on":
+			limits.DontCountSlowTorrents = true
+		case "false", "0", "no", "off":
+			limits.DontCountSlowTorrents = false
+		}
+	}
+	return &limits
 }
 
 // pvcFlags parses name=class:size. Either part may be empty, so a size-only or
