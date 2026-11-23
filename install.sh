@@ -1666,7 +1666,15 @@ do_doctor() {
               "nextcloud:nextcloud:nextcloud:/var/www/html" "gitea:gitea:gitea:/data" \
               "immich:immich-server:immich-server:/data" "vaultwarden:vaultwarden:vaultwarden:/data" \
               "homebox:homebox:homebox:/data" "actualbudget:actualbudget:actualbudget:/data"; do
-    local nsp=${spec%%:*} r1=${spec#*:} dep=${r1%%:*} r2=${r1#*:} ctr=${r2%%:*} path=${r2#*:}
+    # One `local` per name: a single `local a=… b=${a…}` declares every name
+    # first, so the second expansion reads an unset variable and `set -u`
+    # aborts the whole doctor run ("r1: unbound variable").
+    local nsp=${spec%%:*}
+    local r1=${spec#*:}
+    local dep=${r1%%:*}
+    local r2=${r1#*:}
+    local ctr=${r2%%:*}
+    local path=${r2#*:}
     kubectl -n "$nsp" get deploy "$dep" >/dev/null 2>&1 || continue
     if kubectl -n "$nsp" exec "deploy/$dep" -c "$ctr" -- sh -c "ls '$path' >/dev/null 2>&1" >/dev/null 2>&1; then
       io_ok=$((io_ok + 1))
