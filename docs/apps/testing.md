@@ -30,7 +30,7 @@ resolves; an entry that names a check nothing carries fails the static gate.
 | mealie | auto-tested | 0.1.7 | 2026-11-19 (agent) |
 | nextcloud | auto-tested | 0.1.22 | 2026-11-19 (agent) |
 | paperless | auto-tested | 0.1.15 | 2026-11-19 (agent) |
-| servarr | auto-tested | 0.3.8 | 2026-11-23 (agent) |
+| servarr | auto-tested | 0.3.9 | 2026-11-23 (agent) |
 | sparkyfitness | auto-tested | 0.1.4 | 2026-11-19 (agent) |
 | vaultwarden | auto-tested | 0.1.3 | - |
 | vikunja | auto-tested | 0.1.3 | 2026-11-20 (agent) |
@@ -173,9 +173,9 @@ Human pass 2026-11-19 by agent on chart 0.1.15 (single, ha):
 - `authenticated_request_reaches_app` - apps.spec.ts
 - `tenant_ui_servarr` - journeys/tenant.spec.ts
 
-Human pass 2026-11-23 by agent on chart 0.3.8 (single):
+Human pass 2026-11-23 by agent on chart 0.3.9 (single):
 
-- ran the 0.3.8 bootstrap against the live stack: the qBittorrent limits arrived from QBITTORRENT_MAX_ACTIVE_* and were applied through setPreferences (250/90/80 in the test, then the shipped 300/100/100)
+- ran the bootstrap above against the live stack: the qBittorrent limits arrived from QBITTORRENT_MAX_ACTIVE_* and were applied through setPreferences (250/90/80 in the test, then the shipped 300/100/100)
 - before the fix, three approved movies sat at 0 % while five dead torrents (seeds=0) held all five active slots for eleven days; after raising the limits and clearing them, all three started downloading
 - followed one request end to end: qBittorrent 100 % -> Radarr imported hasFile=true -> Jellyfin scan -> Seerr fired MEDIA_AVAILABLE and the request became available
 - earlier 0.3.7 pass covered the *arr UIs, Jellyfin and API keys through the portal as the invited tenant on single and ha

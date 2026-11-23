@@ -33,14 +33,29 @@ export async function configureQBittorrent(config: BootstrapConfig): Promise<voi
   // Compare every value this function owns, not just the save path: a stack
   // installed before the limits existed has the old 5/6/3 defaults written to
   // its config, and "already configured" would then leave it wedged.
+  // Number() because qBittorrent has returned these as both numbers and
+  // strings; a strict !== would then re-apply the settings on every run.
+  const differs = (actual: unknown, wanted: unknown): boolean => {
+    if (typeof wanted === 'number') {
+      return Number(actual) !== wanted;
+    }
+    if (typeof wanted === 'boolean') {
+      // qBittorrent serializes booleans as JSON true/false, but an older
+      // build can hand back "true"/"false"; compare on the boolean meaning so
+      // a matching value does not trigger a write on every bootstrap run.
+      const text = typeof actual === 'string' ? actual.trim().toLowerCase() : actual;
+      return (text === 'true' ? true : text === 'false' ? false : text) !== wanted;
+    }
+    return actual !== wanted;
+  };
   const stale =
     savePath !== '/media/downloads' ||
     !prefs.bypass_local_auth ||
-    prefs.max_active_torrents !== limits.maxActiveTorrents ||
-    prefs.max_active_downloads !== limits.maxActiveDownloads ||
-    prefs.max_active_uploads !== limits.maxActiveUploads ||
-    prefs.dont_count_slow_torrents !== limits.dontCountSlowTorrents ||
-    prefs.queueing_enabled !== true;
+    differs(prefs.max_active_torrents, limits.maxActiveTorrents) ||
+    differs(prefs.max_active_downloads, limits.maxActiveDownloads) ||
+    differs(prefs.max_active_uploads, limits.maxActiveUploads) ||
+    differs(prefs.dont_count_slow_torrents, limits.dontCountSlowTorrents) ||
+    differs(prefs.queueing_enabled, true);
 
   if (stale) {
     const response = await http('POST', `${base}/api/v2/app/setPreferences`, {

@@ -271,6 +271,25 @@ grep -q 'fsGroup: 1000' "$servarr_render" || {
 rm -f "$servarr_render"
 echo "   ok"
 
+echo ">> servarr qBittorrent limits reach the bootstrap and keep an explicit false"
+# The limits only work if they arrive as env: the bootstrap reads
+# QBITTORRENT_MAX_ACTIVE_*, and `default true` in the template would turn an
+# operator's explicit `dontCountSlowTorrents: false` back into "true".
+qbt_default=$(mktemp); qbt_false=$(mktemp)
+helm template servarr charts/apps/servarr --set bootstrap.enabled=true >"$qbt_default"
+for k in QBITTORRENT_MAX_ACTIVE_TORRENTS QBITTORRENT_MAX_ACTIVE_DOWNLOADS QBITTORRENT_MAX_ACTIVE_UPLOADS QBITTORRENT_DONT_COUNT_SLOW_TORRENTS; do
+  grep -q "$k:" "$qbt_default" || {
+    echo "servarr: $k is not in the bootstrap ConfigMap, so the limit never reaches qBittorrent" >&2; exit 1;
+  }
+done
+helm template servarr charts/apps/servarr --set bootstrap.enabled=true \
+  --set bootstrap.qbittorrentLimits.dontCountSlowTorrents=false >"$qbt_false"
+grep -q 'QBITTORRENT_DONT_COUNT_SLOW_TORRENTS: "false"' "$qbt_false" || {
+  echo "servarr: qbittorrentLimits.dontCountSlowTorrents=false is rendered as true (sprig default treats false as empty)" >&2; exit 1;
+}
+rm -f "$qbt_default" "$qbt_false"
+echo "   ok"
+
 echo ">> OIDC apps build their own CA bundle"
 paperless_render=$(mktemp)
 helm template paperless charts/apps/paperless \
