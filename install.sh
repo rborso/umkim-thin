@@ -1288,7 +1288,18 @@ RuntimeDirectoryMode=0750
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload >/dev/null 2>&1 || true
-  systemctl enable --now umkim-thin-storage.service >/dev/null 2>&1 || warn "could not start the storage agent"
+  # `enable --now` starts the service the first time, but on an upgrade it is
+  # already running, so --now is a no-op: the process keeps the deleted inode of
+  # the binary that was just replaced by this installer, and the host agent runs
+  # the previous release's code until someone restarts it by hand. Restart
+  # explicitly when the unit is already active.
+  if systemctl is-active --quiet umkim-thin-storage.service; then
+    run systemctl restart umkim-thin-storage.service >/dev/null 2>&1 || \
+      warn "could not restart the storage agent"
+  else
+    run systemctl enable --now umkim-thin-storage.service >/dev/null 2>&1 || \
+      warn "could not start the storage agent"
+  fi
   # The console runs as UID 65532 and needs to traverse the socket directory.
   chown root:65532 /run/umkim-thin 2>/dev/null || true
   chmod 0750 /run/umkim-thin 2>/dev/null || true

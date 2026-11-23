@@ -271,8 +271,7 @@ grep -q 'fsGroup: 1000' "$servarr_render" || {
 rm -f "$servarr_render"
 echo "   ok"
 
-echo ">> servarr qBittorrent limits reach the bootstrap and keep an explicit false"
-# The limits only work if they arrive as env: the bootstrap reads
+echo ">> servarr qBittorrent limits reach the bootstrap and keep an explicit false"# The limits only work if they arrive as env: the bootstrap reads
 # QBITTORRENT_MAX_ACTIVE_*, and `default true` in the template would turn an
 # operator's explicit `dontCountSlowTorrents: false` back into "true".
 qbt_default=$(mktemp); qbt_false=$(mktemp)
@@ -602,6 +601,20 @@ if ! grep -q 'image-gc-high-threshold=70' install.sh; then
 fi
 if ! grep -q 'eviction-hard=' install.sh || ! grep -q 'eviction-hard=' deploy/ansible/roles/k3s/templates/config.yaml.j2; then
   echo "the kubelet eviction thresholds are missing from an install path" >&2; exit 1
+fi
+echo "   ok"
+
+echo ">> an upgraded install restarts the host storage agent"
+# The installer replaces /usr/local/bin/umkim-thin and then `systemctl enable
+# --now`s the agent. On an upgrade the unit is already active, so --now is a
+# no-op and the process keeps the deleted inode: the host agent silently runs
+# the previous release until someone restarts it. An explicit restart is what
+# makes an upgrade actually take effect.
+if ! grep -q 'systemctl is-active --quiet umkim-thin-storage.service' install.sh; then
+  echo "install.sh does not detect an already-running storage agent, so an upgrade leaves it on the old binary" >&2; exit 1
+fi
+if ! grep -q 'systemctl restart umkim-thin-storage.service' install.sh; then
+  echo "install.sh never restarts the storage agent, so a new console image does not reach it" >&2; exit 1
 fi
 echo "   ok"
 
