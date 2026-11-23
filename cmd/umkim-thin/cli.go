@@ -579,6 +579,14 @@ func servarrCmd(dir string, args []string) error {
 		lang := fs.String("media-language", "", "default media language code (e.g. en, hu)")
 		quality := fs.String("quality-cutoff", "", "quality cutoff (e.g. 720p, 1080p)")
 		ns := fs.String("namespace", "", "servarr namespace (default: catalog namespace)")
+		// Same flags as the install form. They are only applied when given, so
+		// a plain `--quality-cutoff` run keeps the stored queue limits.
+		f := &installFlags{
+			qbtMaxTorrents:   fs.Int("qbittorrent-max-torrents", 0, "max active torrents (e.g. 300)"),
+			qbtMaxDownloads:  fs.Int("qbittorrent-max-downloads", 0, "max active downloads (e.g. 100)"),
+			qbtMaxUploads:    fs.Int("qbittorrent-max-uploads", 0, "max active uploads (e.g. 100)"),
+			qbtDontCountSlow: fs.String("qbittorrent-dont-count-slow", "", "do not let stalled torrents hold a slot (true|false)"),
+		}
 		asJSON := fs.Bool("json", false, "print JSON")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -590,14 +598,23 @@ func servarrCmd(dir string, args []string) error {
 		if err != nil {
 			return err
 		}
-		if *lang == "" && *quality == "" {
+		limits := f.qbtLimits()
+		if *lang == "" && *quality == "" && limits == nil {
+			cur := current.QBittorrentLimits
+			if cur == nil {
+				l := app.DefaultServarrQBittorrentLimits()
+				cur = &l
+			}
 			if *asJSON {
 				return json.NewEncoder(os.Stdout).Encode(map[string]any{
 					"mediaLanguage": current.MediaLanguage, "qualityCutoff": current.QualityCutoff,
-					"languages": app.ServarrLanguageOptions(), "qualities": app.ServarrQualityOptions(),
+					"qbittorrentLimits": cur,
+					"languages":         app.ServarrLanguageOptions(), "qualities": app.ServarrQualityOptions(),
 				})
 			}
 			fmt.Printf("media language  %s\nquality cutoff  %s\n", current.MediaLanguage, current.QualityCutoff)
+			fmt.Printf("qbittorrent     %d total, %d down, %d up, skip-stalled=%t\n",
+				cur.MaxActiveTorrents, cur.MaxActiveDownloads, cur.MaxActiveUploads, cur.DontCountSlowTorrents)
 			fmt.Printf("\nlanguages: %s\n", optionValues(app.ServarrLanguageOptions()))
 			fmt.Printf("qualities: %s\n", optionValues(app.ServarrQualityOptions()))
 			return nil
@@ -609,6 +626,9 @@ func servarrCmd(dir string, args []string) error {
 		if *quality != "" {
 			next.QualityCutoff = *quality
 		}
+		if limits != nil {
+			next.QBittorrentLimits = limits
+		}
 		normalized, err := app.NormalizeServarrSettings(next)
 		if err != nil {
 			return err
@@ -617,7 +637,12 @@ func servarrCmd(dir string, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("applied %s/%s to the media stack (%d step(s))\n", normalized.MediaLanguage, normalized.QualityCutoff, len(res))
+		lim := ""
+		if l := normalized.QBittorrentLimits; l != nil {
+			lim = fmt.Sprintf(", queue %d/%d/%d", l.MaxActiveTorrents, l.MaxActiveDownloads, l.MaxActiveUploads)
+		}
+		fmt.Printf("applied %s/%s%s to the media stack (%d step(s))\n",
+			normalized.MediaLanguage, normalized.QualityCutoff, lim, len(res))
 		return nil
 	case "indexers":
 		return servarrIndexersCmd(in, namespace, args[1:])

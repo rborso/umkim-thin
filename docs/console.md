@@ -303,6 +303,15 @@ The **Servarr install form** exposes the media stack's defaults:
 - **Target resolution** (`480p`, `720p`, `1080p`, `2160p`): creates or updates
   the matching Sonarr/Radarr quality profile, blocks qualities above it, and
   selects it as the default profile on the Seerr Sonarr/Radarr servers.
+- **qBittorrent limits** — max active torrents (300), max active downloads
+  (100), max active uploads (100) and **Skip stalled torrents** (on). These are
+  the queue's ceiling, and they are the usual reason a request never starts: a
+  small total lets a handful of dead torrents (no seeders, but still "active")
+  hold every slot, so qBittorrent reports a new request as `queued`, Radarr
+  shows it at 0 bytes, and Seerr keeps it at *Processing* indefinitely. With the
+  switch on, a torrent that is transferring nothing does not hold a slot.
+  Omitting these on an upgrade keeps the stored values; `0` is refused because
+  qBittorrent reads it as "no torrents active".
 
 These fields are install-time defaults, not an Overview card. The install form
 also has an optional **Additional languages** selector; it creates
@@ -480,7 +489,7 @@ and backup code, so a feature cannot exist in only one of them.
 | Applications → Setup (media stack) | `umkim-thin app setup servarr` |
 | Applications → Connect Mealie | `umkim-thin app integrate mealie` |
 | Installed apps → Uninstall | `umkim-thin app uninstall <name> [--purge]` |
-| Media stack settings | `umkim-thin servarr settings [--media-language L] [--quality-cutoff Q]` |
+| Media stack settings | `umkim-thin servarr settings [--media-language L] [--quality-cutoff Q] [--qbittorrent-max-torrents N] [--qbittorrent-max-downloads N] [--qbittorrent-max-uploads N] [--qbittorrent-dont-count-slow true/false]` |
 | AI stack settings | `umkim-thin ai settings [--model M] [--context N] [--parallel N] [--gpu|--no-gpu]`; `umkim-thin ai models` lists the offered models |
 | Media stack indexers | `umkim-thin servarr indexers list\|search <q>\|add --definition D` |
 | Media stack profiles | `umkim-thin servarr profiles list\|add --language L\|delete --profile P` |
